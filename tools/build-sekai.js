@@ -3,7 +3,7 @@
  * 生成 tools/seed-words-sekai.js，再由 build-dict 并进离线词典。
  *
  * 数据来源（记的是官方读音，平假名）：
- *   https://pjsekai.moe/#/music/<id>   （用户给的站点，id 可换）
+ *   https://pjsekai.moe/#/music/<id>   （站点，id 可换）
  *   https://sekai-world.github.io/sekai-master-db-diff/musics.json   （站点用的主数据）
  *   "Forward"      -> ふぉわーど     -> フォワード
  *   "Nostalogic"   -> のすたろじっく -> ノスタロジック

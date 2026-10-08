@@ -21,15 +21,15 @@ module.exports = [
    * `Ave`（拉丁语的"万福"）：アベ。
    *
    * 这条改过一次：一开始定的是 アヴェ（Ave Maria = アヴェ・マリア 是通行写法），
-   * 但用户指出乐队 `Ave Mujica` 的官方读法就是 アベ ムジカ ——
-   * 它是歌名/歌手栏里会反复出现的那一个，按用户的口径定死。
+   * 但乐队 `Ave Mujica` 的官方读法就是 アベ ムジカ ——
+   * 它是歌名/歌手栏里会反复出现的那一个，按官方读法定死。
    * （阿ヴェ・マリア 写成 アベ・マリア 也通行，所以这一步不亏。）
    */
   { en: "ave", kana: "アベ" },
   { en: "mujica", kana: "ムジカ" },
   /*
    * `Georgette`：ジョージェット（人名/织物）。
-   * 用户报的：不在词典时走英文拼写规则，geo / rge 这种拼法规则只能瞎猜，
+   * 不在词典时走英文拼写规则，geo / rge 这种拼法只能瞎猜，
    * 给出 ゲオーゲターテ。英文的软 g / 硬 g 光看拼写定不下来（get 是硬、gem 是软），
    * 所以专有名词只能人工核 —— 织物义另有 ジョーゼット 的写法。
    */
@@ -37,7 +37,7 @@ module.exports = [
   /*
    * `Erika` / `Erik`：エーリカ / エーリク（德语人名，长音）。
    *
-   * 用户截图：德语歌《Erika》里有一行只有 `Erika` 一个词 —— 整行判不出语种，
+   * 德语歌《Erika》里有一行只有 `Erika` 一个词 —— 整行判不出语种，
    * 罗马音层把它当日语罗马字切成 エリカ，而且标成"确定"（蓝色），
    * 大模型那一层永远不会被问到它。德语引擎也兜不住：词首 `er-` 那条规则是给
    * erinnern / Erzählung 这种非重读前缀定的（エア…），套到名字上会读成
@@ -94,7 +94,7 @@ module.exports = [
   /*
    * 被罗马音层读歪的常用英文词（审计出来的一批）。
    *
-   * 怎么发现的：用户问「the pretender up, … shake, shake, shake it up 里
+   * 怎么发现的：「the pretender up, … shake, shake, shake it up 里
    * 为什么只有 the 没被矫正」。查下来 the/up/it 是词典命中（本来就对，
    * 按设计不问模型），而 `shake` 是罗马音层给的 —— `sha-ke` 正好切得干净，
    * 于是读成 シャケ（鮭）。层序是「词典 > 罗马音 > 大模型」，
@@ -205,7 +205,7 @@ module.exports = [
   /*
    * 感叹词 / 拟声词，以及"罗马音层会读歪、但确实不是日语词"的那些英文词。
    *
-   * 用户报的两件事：
+   * 两处典型误读：
    *   1. `Yeah` 读成了 イェア —— 日语里唱的是イェイ，人工钉死；
    *   2. `Shoo` / `Gimme` 被读成 ショオ / ギッメ —— 这两个词词典里根本没有，
    *      于是被罗马音层（它是"能切成音节就收"）抢走了。同类还有下面这些
@@ -239,7 +239,7 @@ module.exports = [
   { en: "muze", kana: "ミューズ" },
   { en: "kinase", kana: "キナーゼ" },
   /*
-   * 常见缩写（用户报的 `Mr.` / `Dr.`）：日语里念的是整个词，不是字母名。
+   * 常见缩写（`Mr.` / `Dr.`）：日语里念的是整个词，不是字母名。
    * 它们会先于规则层命中，所以放在这里就是权威写法。
    * 有歧义的没收：`St.`（セント / ストリート）、`No.`（ナンバー / ノー）。
    */
@@ -757,8 +757,8 @@ module.exports = [
   { en: "wow", kana: "ワウ" },
   { en: "yesterday", kana: "イエスタデイ" },
   /*
-   * 不发音字母的常用英文词 —— 用户问的正是这一类：
-   * "没有歧音的词语能否直接写入词典"。能，而且就该这么办。
+   * 不发音字母的常用英文词 —— 没有歧音的词能不能直接写进词典，这一批正是答案：
+   * 能，而且就该这么办。
    *
    * 背景：规则层是"照拼写猜"，哑音猜不出来（`Knock`→ナオック、`wrist`→ライサト、
    * 词尾 `-mb` 的 b 也照读）。规则层的两条通例已经补上了（词首 kn/wr/gn/ps/pn、
@@ -809,7 +809,7 @@ module.exports = [
   { en: "who", kana: "フー" },
   { en: "whole", kana: "ホール" },
   /*
-   * 用户问「know 的读音是否正确」时顺手把 -ow 这一族核对了一遍。
+   * 核 `know` 的读音时顺手把 -ow 这一族核对了一遍。
    * `know` ノウ 本身是对的（词典给的就对），但下面这几个是错的：
    *   knowing  ノーイング  ✗（要和 know 一致：ノウイング）
    *   know-how ノワアウ    ✗（词典里没有，规则层把 w 当辅音读了：ノウハウ）
@@ -827,7 +827,7 @@ module.exports = [
   { en: "blowing", kana: "ブロウイング" },
   { en: "unforgettable", kana: "アンフォーゲタブル" },
   /*
-   * 用户五张截图（英文歌词行）里被罗马音层抢读的词。
+   * 英文歌词行里被罗马音层抢读的词。
    *
    * 病根：这些词既不在离线词典、也不在英文词表（core/enwords.js）里，于是
    * 罗马音层按日语音节切开（da-ze / ri-me / sho-ne / bo-on / ho-o），
@@ -869,10 +869,10 @@ module.exports = [
   { en: "thaw", kana: "ソー" },
   { en: "anew", kana: "アニュー" },
   { en: "woven", kana: "ウォーヴン" },
-  // bye：用户截图 `Say Good Bye` 里规则层读成 バイェ（该 バイ）
+  // bye：`Say Good Bye` 里规则层读成 バイェ（该 バイ）
   { en: "bye", kana: "バイ" },
   /*
-   * 用户截图 `ゆらゆら (AH!!)`：`AH` 被逐字母读成 エーエイチ ——
+   * `ゆらゆら (AH!!)` 里 `AH` 被逐字母读成 エーエイチ ——
    * `spellOutAcronym` 的"有元音的 2~3 字母缩写"那道闸门只挡词典里有的词，
    * 而 `ah` 不在词典里，于是被当成缩写了。`oh` / `uh` 在词典里，所以 `OH` / `UH` 没事。
    * 这一批把常见的感叹词补齐（规则层给的 アハー / フー 这种都不对）。
@@ -880,13 +880,13 @@ module.exports = [
   { en: "ah", kana: "アー" },
   { en: "ahh", kana: "アー" },
   { en: "huh", kana: "ハァ" },
-  // tofu：用户截图 `my tofu mentality` 被罗马音层读成 トフ（该 トウフ）；ramen 同理（ラメン ✗）
+  // tofu：`my tofu mentality` 被罗马音层读成 トフ（该 トウフ）；ramen 同理（ラメン ✗）
   { en: "tofu", kana: "トウフ" },
   { en: "ramen", kana: "ラーメン" },
-  // mentality：同一张截图里规则层读成 メンタリタイー ✗（该 メンタリティー）
+  // mentality：同一行里规则层读成 メンタリタイー ✗（该 メンタリティー）
   { en: "mentality", kana: "メンタリティー" },
   /*
-   * 用户问「notes 的读音」时核出来的：复数/变形形的读音是大模型词表最容易错的地方。
+   * 核 `notes` 的读音时查出来的：复数/变形形的读音是大模型词表最容易错的地方。
    *   notes  ノート  ✗（那是单数；复数该 ノーツ，同族的 dates デイツ / rates レーツ 都对）
    *   noting ノティン ✗（该 ノーティング）
    *   bites  ビテス ✗（词尾哑 e + s：该 バイツ）—— kites キテス / mates マテス /
@@ -910,10 +910,10 @@ module.exports = [
   /*
    * 音乐术语（意大利语速度/力度/曲式词）。
    *
-   * 用户发的截图：`(Lento, presto, andante larghetto)` 标的是 レント / プレスト /
+   * `(Lento, presto, andante larghetto)` 标的是 レント / プレスト /
    * アンダンテ / ラルゲット —— 四个读音都对，但离线时有两个是错的
    * （presto 规则读成 プレサト、larghetto 读成 ラーーエタト），
-   * 截图里之所以对，是大模型临时给的（等于每听一遍都要花一次请求）。
+   * 这一行之所以对，是大模型临时给的（等于每听一遍都要花一次请求）。
    * 查下来整个音乐术语区在词典里是空的（只有 tempo / opera / symphony 这种通用词），
    * 而这一区的读法唯一（日语音乐术语有固定写法），正是该人工钉死的类型。
    *
@@ -996,11 +996,11 @@ module.exports = [
   { en: "flute", kana: "フルート" },
   { en: "trumpet", kana: "トランペット" },
   /*
-   * 用户第二张截图：`Every night brings a dream but the day, relentlessly, keeps me awake`
+   * 英文歌词行：`Every night brings a dream but the day, relentlessly, keeps me awake`
    * —— 读音都对，但 `relentlessly` / `awake` 当时是大模型临时给的，
    * 离线时分别是 レレントレスライー ✗ / アワケ ✗（罗马音层抢的）。
    *
-   * 顺带把 -ize 那一族（上一张截图的 `memorize`）也收尾：
+   * 顺带把 -ize 那一族（`memorize`）也收尾：
    * 规则层现在认得「辅音 + イズ」（见 reading.js 的 EN_IZE），
    * 剩下的"词干本身读不准"的（idolize イドライズ✗、mesmerize メサメライズ✗、
    * socialize ソスイアライズ✗、sympathize サインパトハイズ✗、energize エナージャイズ✗）
@@ -1032,7 +1032,7 @@ module.exports = [
   { en: "precise", kana: "プリサイス" },
   { en: "surprising", kana: "サプライジング" },
   /*
-   * 用户截图：`KiLLKiSS judy... / jude... / juda...`（Ave Mujica 的歌）。
+   * `KiLLKiSS judy... / jude... / juda...`（Ave Mujica 的歌）。
    * 三个里 `juda` ジュダ 是对的，`jude` 被罗马音层切成 ju-de 读成 ジュデ ✗
    * （规则层已经补了词尾 -ude 那条通例，见 reading.js 的 EN_UDE），
    * `judy` ジュダイー ✗ 与 `KiLLKiSS` キララキス ✗ 规则层猜不出来，人工钉死。
@@ -1048,13 +1048,13 @@ module.exports = [
   { en: "magnitude", kana: "マグニテュード" },
   { en: "interlude", kana: "インタールード" },
   /*
-   * 用户截图：`憧れた DIVA なん だ` 的 DIVA 被逐字母念成 ディーアイブイエー。
+   * `憧れた DIVA なん だ` 的 DIVA 被逐字母念成 ディーアイブイエー。
    * 4 个字母以上、带元音的全大写基本都是词或名字（DIVA / QUIX / KISS），
    * 所以缩写那条判据已经收窄到 2~3 个字母；这个词本身也钉进词表。
    */
   { en: "diva", kana: "ディーヴァ" },
   /*
-   * 法语常用词（用户要"添加对法语的支持"，给了一整首法语歌词当例子）。
+   * 法语常用词（添加法语支持时拿一整首法语歌词当例子核出来的）。
    *
    * 规则层（core/langs.js 的 frenchToKatakana）已经能拼出大意，但那套是近似：
    * 联诵、哑音 e、开闭音节都判不准（je 会拼成 ジェ、et 会拼成 ウ）。
@@ -1202,7 +1202,7 @@ module.exports = [
   { en: "rose", kana: "ローズ" },
   { en: "note", kana: "ノート" },
   /*
-   * 英文拼写规则的两个已知死角（用户用例里正好都碰上了）：
+   * 英文拼写规则的两个已知死角（实际用例里正好都碰上了）：
    *
    *   1. `str-` 开头的连缀：规则层把 s 当独立音节，stronger 读成 サトロンゲー、
    *      stranger 读成 サトランゲー（strong / strange 本身在词典里，所以只漏了变形）；
@@ -1220,7 +1220,7 @@ module.exports = [
   { en: "cages", kana: "ケイジズ" },
   { en: "caged", kana: "ケイジド" },
   /*
-   * 德语 `mit`（用户截图 `Sieh mit deinen Augen`）：词典里原本是 MIT（学院缩写）
+   * 德语 `mit`（`Sieh mit deinen Augen`）：词典里原本是 MIT（学院缩写）
    * 的字母名 エムアイティー，小写的 mit 也被它带歪了。
    * mit 是德语最常用的介词之一、读法唯一（ミット）→ 人工钉死。
    * 缩写那条（逐字母念）排在词典后面，所以全大写的 `MIT` 也吃这条 ——
@@ -1228,7 +1228,7 @@ module.exports = [
    */
   { en: "mit", kana: "ミット" },
   /*
-   * 日语来源的英文词（用户给的 https://www.sljfaq.org/afaq/japanese-in-english.html）。
+   * 日语来源的英文词（参考 https://www.sljfaq.org/afaq/japanese-in-english.html）。
    *
    * 这一类词在日语歌词里写成拉丁字母时，读的是日语原词，不是英文音译：
    * `kudzu` 是 クズ（葛）、`honcho` 是 ハンチョウ（班長）、`rickshaw` 是 ジンリキシャ（人力車）。
@@ -1255,11 +1255,11 @@ module.exports = [
   { en: "zori", kana: "ゾウリ" },
   /*
    * 音乐圈写法：`feat.` 是 featuring 的缩写，日语歌词/署名里读 フィーチャリング
-   * （用户截图 `“feat. きみ”を ねえ` 里被规则层读成了 フェアット）。
+   * （`“feat. きみ”を ねえ` 里被规则层读成了 フェアット）。
    */
   { en: "feat", kana: "フィーチャリング" },
   /*
-   * 掩码词要用到的候选：`UN◯`（用户截图 `UN◯♡。`）里那个 ◯ 是**被涂掉的一个字母**，
+   * 掩码词要用到的候选：`UN◯`（`UN◯♡。`）里那个 ◯ 是**被涂掉的一个字母**，
    * 按通配去词典里找 → `un.` 命中 `uno` → ウノ（掩码这一套见 main.js 的 maskedReading）。
    */
   { en: "uno", kana: "ウノ" },

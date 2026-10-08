@@ -4,7 +4,7 @@
  * 罗马音层的判据是"整串都能切成日语音节"，于是 `shake`（sha-ke）、`open`（o-pe-n）、
  * `again`（a-ga-i-n）这种英文词会被它读成日语罗马字（シャケ / オペン / アガイン），
  * 而层序里罗马音排在大模型前面 —— 一旦它答了，大模型就没机会纠正，这些词就永远读错。
- * 用户报的就是这个：the pretender up, … shake, shake, shake it up, it up 里的 `shake`
+ * 案例就是它：the pretender up, … shake, shake, shake it up, it up 里的 `shake`
  * 成了 シャケ。
  *
  * 做法是拿英文词频表当"这看着像英文词"的判据：一个词既能被罗马音层切开、又在下面这张
