@@ -2,7 +2,7 @@
  * 借词表（**自动生成，勿手改**）：`npm run build:loan`。
  *
  * 数据来源是 sci.lang.japan FAQ 的 "Which Japanese words come from <语言>?"
- * （用户给的测试用例页面：portuguese.html / dutch.html / german.html / russian.html），
+ * （测试用例页面：portuguese.html / dutch.html / german.html / russian.html），
  * 也就是**日语里通行的写法**。它和拼读规则是两回事：
  *   规则层 = 照拼写猜（confident:false，配了 key 会交给大模型改）
  *   这张表 = 日语里就是那么写的（confident:true，等同于人工词条）

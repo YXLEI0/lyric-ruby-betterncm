@@ -83,9 +83,9 @@ function makeClient(ctx, opts) {
 // ============================================================ 回答被截断要抢救
 
 test("回答被截断（JSON 不完整）时：能对上的先收下，批次减半，没抢到的不算永久 miss", async () => {
-  // 用户机器上的轨迹里反复出现「大模型请求失败（响应里没有 JSON），120s 后再试」：
+  // 真机轨迹里反复出现「大模型请求失败（响应里没有 JSON），120s 后再试」：
   // 一批 29~30 个词时回答可能被 max_tokens 截断（尾部没有 `}`），老代码会整批丢掉、
-  // 原样重发同一批、再失败 —— 那些词就永远停在规则层（用户看到的"一直是黄的"）。
+  // 原样重发同一批、再失败 —— 那些词就永远停在规则层（面板上"一直是黄的"）。
   const ctx = loadCore();
   const truncReply = () => '{"1":"イチ","2":"ニ","3":"サン","4":"ヨン"'; // 故意少了结尾的 }
   const c = makeClient(ctx, { reply: truncReply, batchSize: 10 });
@@ -120,7 +120,7 @@ test("完全解析不出 JSON 时：按失败处理（退避重试），并且�
 test("回答被截断时：没抢到的词**立刻回到队列**，下一批马上补问（不等页面重扫）", async () => {
   // 为什么要立刻放回队列：注音层只在注音那一刻 lookup 一次。老代码截断时
   // 只写一句"下一轮 lookup 会重新入队"，可页面不重扫就再没有下一轮了 ——
-  // 那个词就永远是黄的（用户报的正是这句）。
+  // 那个词就永远是黄的（真机上就是这种情形）。
   const ctx = loadCore();
   let n = 0;
   const c = makeClient(ctx, {
@@ -217,7 +217,7 @@ test("retryMisses：把「问过但没收下」的清掉，让它们能再问一
   await c.client.flush();
   assert.strictEqual(c.calls.length, 1, "有 miss 结论时不该重问");
 
-  // 用户点「重试没结果的词」之后：能再问一次，而且这次收下正确答案
+  // 点「重试没结果的词」之后：能再问一次，而且这次收下正确答案
   answer = "ティック";
   assert.strictEqual(c.client.retryMisses(), 1, "应该清掉 1 条");
   assert.strictEqual(c.client.stats().missesCached, 0);
@@ -250,7 +250,7 @@ test("被拒的答案会落盘：重启之后 rejects() 还看得出原因", asy
 // ============================================================ 停摆与恢复
 
 test("退避结束后会自己重试（老版本这里会永远卡住：队列躺着一动不动）", async () => {
-  // 用户截图里的样子：队列 184 个词、本分钟额度还是满的、没有请求在飞。
+  // 症状：队列 184 个词、本分钟额度还是满的、没有请求在飞。
   // 根因是 schedule() 里 `if (!canAsk()) return;` —— 退避期间那次排期什么都不做，
   // 而退避结束时没有任何事件会再来叫我们（页面不动就没有新的 lookup），
   // 于是队列永远躺着。现在会排到退避结束那一刻。
@@ -292,7 +292,7 @@ test("退避有上限：最多 3 分钟（原来是 10 分钟：接口抖一下�
   assert.ok(s.cooldownMs <= s.cooldownMaxMs, "退避不能超过上限");
 });
 
-test("retryNow：把退避清掉、马上重发（用户看到「全都没矫正」时的救命按钮）", async () => {
+test("retryNow：把退避清掉、马上重发（「全都没矫正」时的救命按钮）", async () => {
   const ctx = loadCore();
   let fail = true;
   const c = makeClient(ctx, {
@@ -308,7 +308,7 @@ test("retryNow：把退避清掉、马上重发（用户看到「全都没矫正
   await c.client.flush();
   const before = c.calls.length;
 
-  // 用户点「立刻重试」：退避清掉、马上再发一次，而且这次成功
+  // 点「立刻重试」：退避清掉、马上再发一次，而且这次成功
   fail = false;
   c.client.retryNow();
   await c.client.flush();
@@ -318,7 +318,7 @@ test("retryNow：把退避清掉、马上重发（用户看到「全都没矫正
   assert.strictEqual(c.client.peek("clover"), "クローバー", "重试之后要收下答案");
 });
 
-test("超时：批次减半再试，成功之后恢复（用户截图里的 The user aborted a request.）", async () => {
+test("超时：批次减半再试，成功之后恢复（The user aborted a request.）", async () => {
   // 这条错误是我们自己的超时掐的（20s -> 45s，且现在会自适应减半）。
   // 光退避再原样重发同一大批，很容易一直超时。
   const ctx = loadCore();
@@ -395,7 +395,7 @@ test("key 清洗：真的发出去的 Authorization 里不能有多余字符", a
   assert.strictEqual(calls[0].auth, "Bearer sk-abc123456789012345");
 });
 
-test("402（余额用完）要说清楚是余额，不是让用户去查 key", async () => {
+test("402（余额用完）要说清楚是余额，而不是提示去查 key", async () => {
   const ctx = loadCore();
   const { client, statuses, updates } = makeClient(ctx, {
     // 走 httpError 那条路：响应非 2xx
@@ -432,7 +432,7 @@ test("stats 里带 key 体检信息（长度 / 形状 / 有没有被洗过）", 
 // ============================================================ 失败也要通知上层
 
 test("请求失败必须叫 onUpdate：否则「暂定」标记会一直挂在页面上", async () => {
-  // 用户报的「这句不透明度怎么这么低」：请求还在飞的时候那一轮是暂定的（淡到 45%），
+  // 案例「这句不透明度怎么这么低」：请求还在飞的时候那一轮是暂定的（淡到 45%），
   // 失败后进入退避、isWaiting 变成 false，但如果没人通知注音层重新判定，
   // 那行就一直淡着，直到页面因为别的原因重扫（实测能淡一个完整退避周期）。
   const ctx = loadCore();
@@ -778,7 +778,7 @@ test("stats 返回的是快照，改它不影响内部状态", async () => {
 test("请求里带上整句歌词：同一个词在不同句子里分别问、分别记", async () => {
   const ctx = loadCore();
   const { client, calls } = makeClient(ctx, {
-    // 按下标回答（提示词要求的形状），模拟"看语境判断"
+    // 按下标回答（提示词规定的形状），模拟"看语境判断"
     reply: (words, items) => {
       const out = {};
       items.forEach((it, idx) => {
@@ -845,7 +845,7 @@ test("语境过长会截断，不会把整本歌词塞进提示词", async () =>
 // ============================================================ 非拉丁字母也要问
 
 test("西里尔 / 希腊词也要问模型（缓存键不能把它们削成空串）", async () => {
-  // 用户报的「希腊语和俄语一直是黄的」：keyOf 原来用 `replace(/[^a-z]/g, "")` 折键，
+  // 案例「希腊语和俄语一直是黄的」：keyOf 原来用 `replace(/[^a-z]/g, "")` 折键，
   // 西里尔（Мы）和希腊（βίος）整词被削成空串 → lookup 直接返回 null →
   // 那些词从来没被问过，于是永远停在规则层（黄色）。
   const ctx = loadCore();
@@ -898,7 +898,7 @@ test("isWaiting：等待期间 true；有结论/退避/没配 key 时 false", as
 // ============================================================ 答案校验
 
 test("拦住意译/拟声词：tick 被回成 カチカチ 时按 miss 处理，不再重问", async () => {
-  // 用户报的：tick 注成 カチカチ。光看"纯片假名"拦不住，所以由上层注入校验函数。
+  // 案例：tick 注成 カチカチ。光看"纯片假名"拦不住，所以由上层注入校验函数。
   const ctx = loadCore();
   const V = ctx.WKReading.looksLikeTransliteration;
   const bad = makeClient(ctx, {

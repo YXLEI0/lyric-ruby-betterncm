@@ -115,9 +115,9 @@ test("罗马音：拗音用小的 ャュョ", () => {
   assert.strictEqual(WK.romajiToKatakana("pya"), "ピャ");
 });
 
-// ---- 任务点名的 10 个直接用例
+// ---- 以下 10 个是直接用例
 
-test("罗马音：task 点名的 10 个词", () => {
+test("罗马音：10 个直接用例", () => {
   assert.strictEqual(WK.romajiToKatakana("sekai"), "セカイ");
   assert.strictEqual(WK.romajiToKatakana("watashi"), "ワタシ");
   assert.strictEqual(WK.romajiToKatakana("shinjiteru"), "シンジテル");
@@ -208,7 +208,7 @@ test("罗马音：超长元音串不吐一串 ー，判负交给英文规则", (
 
 // ============================================================ englishToKatakana
 
-test("英文：例外表逐字对上（任务点名的 31 个）", () => {
+test("英文：例外表逐字对上（31 个）", () => {
   assert.strictEqual(WK.englishToKatakana("light").kana, "ライト");
   assert.strictEqual(WK.englishToKatakana("night").kana, "ナイト");
   assert.strictEqual(WK.englishToKatakana("right").kana, "ライト");
@@ -249,7 +249,7 @@ test("英文：例外表一律 confident:true", () => {
   assert.strictEqual(WK.englishToKatakana("girl").confident, true);
 });
 
-test("英文：任务点名的外来语靠规则/小表读对", () => {
+test("英文：外来语靠规则/小表读对", () => {
   assert.strictEqual(WK.englishToKatakana("clover").kana, "クローバー");
   assert.strictEqual(WK.englishToKatakana("diorama").kana, "ジオラマ");
   assert.strictEqual(WK.englishToKatakana("guitar").kana, "ギター");
@@ -321,7 +321,7 @@ test("英文：confident:false 的判定条件", () => {
 // ============================================================ 首音校验
 
 test("首音校验：拦住拟声词/意译，不误伤默字组合", () => {
-  // 用户报的：tick 注成 カチカチ（Google 的 en→ja 会把它当拟声词回）
+  // 案例：tick 注成 カチカチ（Google 的 en→ja 会把它当拟声词回）
   const V = WK.looksLikeTransliteration;
   const rejected = [
     ["tick", "カチカチ"],
@@ -370,7 +370,7 @@ test("首音校验：拦住拟声词/意译，不误伤默字组合", () => {
 // ============================================================ 缩写：词干 + 尾巴
 
 test("缩写：'s / 're / 'll / 'd / 've / 'm / n't 都要读对", () => {
-  // 用户报的：you're / I'll / it's / I'd 注不准。
+  // 案例：you're / I'll / it's / I'd 注不准。
   // 根因是折掉撇号之后撞上别的词条（I'll -> ill、I'd -> id），
   // 所以缩写必须排在词典前面。词典里故意塞了 ill / id 当「陷阱」。
   const r = WK.createReader({
@@ -504,7 +504,7 @@ test("不是记号的连字符词照旧按单词读（x-ray 不能逐字母念�
 // ============================================================ 缩写
 
 test("全大写的无元音缩写逐字母读（LDK / TV / BGM …）", () => {
-  // 用户报的：LDK 被规则拼成 ラダク、TV 拼成 タブ
+  // 案例：LDK 被规则拼成 ラダク、TV 拼成 タブ
   const r = WK.createReader({ dict: { cm: "シーエム" } });
   const cases = [
     ["LDK", "エルディーケー"],
@@ -541,13 +541,13 @@ test("逐字母缩写的判据不能误伤真词（my / sky / why / hmm / Ldk）
   assert.strictEqual(A("SKY", dict, en), null);
   assert.strictEqual(A("WHY", dict, en), null);
   assert.strictEqual(A("FLY", dict, en), null, "英文词表里的也不算缩写");
-  // 有元音的那一支只收 2~3 个字母：4 个以上带元音的基本是词或名字（用户截图的 DIVA）
+  // 有元音的那一支只收 2~3 个字母：4 个以上带元音的基本是词或名字（DIVA 就是这一档）
   const blank = {};
   assert.strictEqual(A("DIVA", blank, blank), null, "DIVA 是词/名字，不能逐字母");
   assert.strictEqual(A("QUIX", blank, blank), null, "QUIX 同理");
   assert.strictEqual(A("KISS", blank, blank), null);
   assert.strictEqual(A("BCDFGH"), "ビーシーディーエフジーエイチ", "无元音的 6 个字母还是缩写");
-  // 有元音、两张表都没有、也切不成罗马音的才是缩写（用户报的 SOS / QTE）
+  // 有元音、两张表都没有、也切不成罗马音的才是缩写（SOS / QTE 这类）
   assert.strictEqual(A("SOS", dict, en), "エスオーエス");
   assert.strictEqual(A("QTE", dict, en), "キューティーイー");
   // 小写感叹词不算缩写（hmm / tsk / shh）
@@ -846,7 +846,7 @@ test("边界：数字、符号、空格混排", () => {
 // ============================================================ 首音校验
 
 test("首音校验：th 的两种读法都放行（the ザ / think シンク），拟声词照样拦", () => {
-  // 用户报的「把模型提到最前面，the 还是セ」：真模型对 the 回的就是 ザ（实测），
+  // 案例：把模型提到最前面，the 还是 セ：真模型对 the 回的就是 ザ（实测），
   // 但校验表里 t 开头只放了サ行（θ 的 think/three），漏了 ð 的 the/this/that/they ——
   // 于是唯一被拒的答案就是 the，回落到规则层的 セ。
   for (const [w, k] of [
@@ -886,7 +886,7 @@ test("首音校验：th 的两种读法都放行（the ザ / think シンク）�
 // ============================================================ -ize / -yze
 
 test("词尾 -ize / -yze：读「辅音 + イズ」，不许被罗马音层抢成 メモリゼ", () => {
-  // 用户截图里的 `memorize` 被标成 メモリゼ —— 那是罗马音层抢答的
+  // 案例：`memorize` 曾被标成 メモリゼ —— 那是罗马音层抢答的
   // （me-mo-ri-ze 切得干净），而日语罗马字里根本没有 -ize 结尾的动词。
   // 现在罗马音层直接拒绝这种形状，交给规则层的 EN_IZE：辅音并入 a，读成「…イズ」。
   const r = WK.createReader({ dict: {}, enWords: null });
@@ -912,7 +912,7 @@ test("词尾 -ize / -yze：读「辅音 + イズ」，不许被罗马音层抢�
 // ============================================================ 缩写与元音串
 
 test("全大写缩写：无元音的照旧，有元音但既不是词、也切不成罗马音的也逐字母", () => {
-  // 用户截图里 `SOS` 被读成 ソス、`QTE` 读成 クテ —— 都错。
+  // 案例：`SOS` 曾被读成 ソス、`QTE` 读成 クテ —— 都错。
   // 新判据放两条进来（都要过两道闸门）：不是词典里的词、罗马音也切不出来。
   const r = WK.createReader({ dict: {} });
   for (const [w, kana] of [
@@ -937,7 +937,7 @@ test("全大写缩写：无元音的照旧，有元音但既不是词、也切�
 });
 
 test("同一个元音重复成串：按那个元音叠出来（AAAAA -> アアアアア）", () => {
-  // 用户截图：`邪魔者は成敗いたAAAAAす！` 里的 AAAAA 一个音都没标。
+  // 案例：`邪魔者は成敗いたAAAAAす！` 里的 AAAAA 曾一个音都没标。
   // 它是喊叫/拖长音，不是词 —— 词典里 `aaa` 是 トリプルエー、规则也会读歪。
   const r = WK.createReader({ dict: { aaa: "トリプルエー" } });
   const cases = [
@@ -957,7 +957,7 @@ test("同一个元音重复成串：按那个元音叠出来（AAAAA -> アア�
 });
 
 test("词尾 -ude：读「辅音 + ウー + ド」，不许被罗马音层切成 ジュデ", () => {
-  // 用户截图（Ave Mujica 的歌）：`KiLLKiSS jude...` 里的 jude 被罗马音层
+  // 案例（Ave Mujica 的歌）：`KiLLKiSS jude...` 里的 jude 曾被罗马音层
   // 切成 ju-de 读成 ジュデ。英语 -ude 的 e 不发音、u 是长音
   // （jude ジュード、rude ルード、gratitude グラティテュード）。
   const r = WK.createReader({ dict: {}, enWords: null });
@@ -982,7 +982,7 @@ test("词尾 -ude：读「辅音 + ウー + ド」，不许被罗马音层切成
 // ============================================================ 不发音字母
 
 test("词首不发音的字母：kn- / wr- / gn- / ps- / pn- 不许读出来", () => {
-  // 用户报的 `Knock knock!` 被规则读成「ナオック」（k 是哑音）。
+  // 案例：`Knock knock!` 曾被规则读成「ナオック」（k 是哑音）。
   // 这几组在英语里从不发音，整组丢掉首字母就对了。
   for (const [w, kana] of [
     ["knock", "ノック"],
@@ -1087,7 +1087,7 @@ test("边界：dict 里塞了空值不会把结果读成空串", () => {
   assert.notStrictEqual(got.source, "dict");
 });
 
-// ============================================================ 层序（用户可调）
+// ============================================================ 层序（面板可调）
 
 test("层序：默认是 dict > romaji > rule", () => {
   const r = WK.createReader({ dict: {} });

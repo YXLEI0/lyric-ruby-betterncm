@@ -120,7 +120,7 @@ test("localStorage 里的脏数据一律忽略，不能把插件搞崩", () => {
 
 test("单字母词条一律不收：载入时清掉老的，之后也不会被沉淀", () => {
   // 单字母的读音取决于语境（冠词 a ア / 字母名 (A, B) エー / 段标 (A: 不标），
-  // 词级词条钉死一个必然出错 —— 用户机器上就攒了 `a → アー`，
+  // 词级词条钉死一个必然出错 —— 机器上就攒了 `a → アー`，
   // 于是拉丁语歌词里的段标一直带着读音。
   const KEY = "western-katakana.learned.v1";
   const storage = fakeStorage({ [KEY]: JSON.stringify({ version: 1, words: { a: { k: "アー", at: 1 }, muse: { k: "ミューズ", at: 2 } }, seen: {} }) });

@@ -197,7 +197,7 @@ test("__ktTextIsOurs 同时接受三家的标记位（__ktOwned / __ltOwned / __
 });
 
 test("装上的是旧版 v1 补丁时：applyPatch 就地升级成 v2（加上 wk- 前缀）", () => {
-  // 真实场景：用户的 jp-furigana 早先被 v1 补丁打过（只认 kt- / lt-），
+  // 真实场景：带上 jp-furigana 的 v1 补丁早先打过（只认 kt- / lt-），
   // 现在插件把 DOM 前缀换成了 wk-，那份 v1 补丁会让我们的注音被判脏 → 一直闪。
   // 所以不能只报"已打补丁"，必须在原地上把类名枚举升级掉。
   const v1 = FIXTURE_PATCHED_V1;
@@ -275,7 +275,7 @@ test("MARK 是补丁的唯一判据，且不会误伤正常源码", () => {
 /*
  * 样本：照抄 JapaneseFonts 1.0.3（MuttonString/Furigana）main.js 的 pronounce()。
  * 它用"整行 innerHTML 里有没有假名"判断这是不是日文歌 —— 我们的片假名注音就在
- * innerHTML 里，于是外语歌也被当成日文歌（用户报的那条）。
+ * innerHTML 里，于是外语歌也被当成日文歌。
  */
 const JF_FIXTURE = [
   "/**",

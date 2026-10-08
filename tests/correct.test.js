@@ -105,7 +105,7 @@ test("isWaiting：排队/请求中为 true，回来或失败后为 false", async
 });
 
 test("拦住意译/拟声词：Google 把 tick 回成 カチカチ 时不许用", async () => {
-  // 用户报的 tick -> カチカチ：Google 的 en→ja 会回拟声词，纯片假名，字符集拦不住
+  // 案例：tick -> カチカチ。Google 的 en→ja 会回拟声词，纯片假名，字符集拦不住
   const ctx = loadCore();
   const V = ctx.WKReading.looksLikeTransliteration;
   const { corrector } = makeCorrector(ctx, { validate: V, reply: () => dictResponse(["カチカチ"]) });
