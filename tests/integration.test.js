@@ -2311,6 +2311,50 @@ test("罗马音节行：短音节按罗马音读（PI→ピ / ME→メ），普�
   assert.strictEqual(en2.get("sea"), "シー");
 });
 
+test("全大写西文行：词典里有它的词不许再当罗马字猜（MORE モア / JUMP ジャンプ）", async () => {
+  // 用户截图 `(MORE MORE MORE MORE JUMP)`：整行一个假名都没有，正好落进 main.js
+  // 「全大写 2~4 个字母、不在英文常用词表里 -> 当罗马字猜」那一支。可 MORE / JUMP
+  // 不是缩写，是词典里明明白白的 モア / ジャンプ，只是没进 3693 条的英文常用词表：
+  //   MORE 被猜成罗马音 モレ（该 モア；真机上看着是对的，是在线层事后改回来的）
+  //   JUMP 罗马音根本切不动结尾的 -mp，猜不出来 -> 整行只有它空着
+  // 修法和 gluedUpperCase 里「别误伤全大写写的真词」同一条：词典命中就不猜。
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>(MORE MORE MORE MORE JUMP)</p></li>
+  <li class="line"><p>MORE MORE JUMP BANG</p></li>
+  <li class="line"><p>Don't I second bet in the KRO NE</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const reading = (p) =>
+    new Map(
+      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+        r.childNodes[0].nodeValue,
+        r.querySelector(".wk-rt").textContent,
+      ])
+    );
+
+  // 截图那一行：5 个词全要注上，MORE 是 モア（不是 モレ），JUMP 不再空着
+  const shot = [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(shot, [
+    ["MORE", "モア"], ["MORE", "モア"], ["MORE", "モア"], ["MORE", "モア"], ["JUMP", "ジャンプ"],
+  ], "全大写西文行要按词典读：" + ps[0].innerHTML);
+  assert.strictEqual(reading(ps[1]).get("BANG"), "バン", "BANG 也是词典里的词：" + ps[1].innerHTML);
+  assert.strictEqual(env.api.read("MORE").kana, "モア");
+  assert.strictEqual(env.api.read("MORE").source, "dict", "词典命中要给 dict 层，别再标成没把握的罗马音猜测");
+
+  // 反面：那一支本身还得活着 —— 词典里没有的 KRO 照旧当罗马字猜（クロ，标成没把握，
+  // 整句留给大模型定），别被"词典命中就不猜"顺手删掉。
+  // 只能从 DOM 里看：WK.read() 直接问 reader，压根不过 localReading（也就没有整行语境）。
+  assert.strictEqual(reading(ps[2]).get("KRO"), "クロ", "KRO 仍走罗马音/兜底那支：" + ps[2].innerHTML);
+});
+
 test("英文行里有 th/ck 这类拼写时，绝不当成罗马字行（`me` 不许读成 メ）", async () => {
   // 用户报的截图：`Knock knock! Let me go in and get the ace` 里的 `me` 被标成 メ。
   // 病因是"数短词"这条判据分不开英文行和罗马字行：这行本来只有 4 个打架的短词，

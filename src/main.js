@@ -1694,7 +1694,18 @@
       if (/^[A-Z]{2,4}$/.test(capsWord) && /[AEIOU]/.test(capsWord) && !EN_TWO_LETTER[capsWord.toLowerCase()]) {
         var capsLow = capsWord.toLowerCase();
         var enTable = typeof WKEnWords !== "undefined" ? WKEnWords.words : null;
-        if (!(enTable && enTable[capsLow])) {
+        /*
+         * **词典里有的就不猜**：`MORE` / `JUMP` / `BANG` 是老老实实的西文词，
+         * 只是没进英文常用词表（WKEnWords 才 3693 条）。判据和 gluedUpperCase 里
+         * "别误伤全大写写的真词"同一条：词典或英文常用词表里有它，就不当缩写/罗马字猜。
+         *
+         * 用户截图 `(MORE MORE MORE MORE JUMP)`（整行没有假名，走的就是这一支）：
+         * MORE 被猜成罗马音 モレ（该 モア），JUMP 连猜都猜不出来（romanji 切不动
+         * 结尾的 -mp），于是**整行只有 JUMP 空着**。词典命中就让下面的词典层照常读。
+         */
+        var capsDict = typeof WKDict !== "undefined" ? WKDict.words : null;
+        var dictKnown = !!(capsDict && capsDict[capsLow] !== undefined);
+        if (!(enTable && enTable[capsLow]) && !dictKnown) {
           var guessRomaji = null;
           if (typeof WKReading !== "undefined" && WKReading.romajiToKatakana) {
             try {
