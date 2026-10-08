@@ -1,5 +1,5 @@
 /*
- * 给 jp-furigana 打「与片假名终结者共存」补丁。
+ * 给 jp-furigana 打「与另一个片假名注音插件共存」补丁。
  *
  * jp-furigana 会把整行内容换成自己的 <span class="fg-line">，并在 isClean() 里用
  *
@@ -43,7 +43,7 @@ const MARK = "/* KT-COEXIST-PATCH v2 */";
  *
  * 为什么要升级：本插件的 DOM 前缀从 lt- 改成了 wk-（latin-katakana →
  * western-katakana），老 v1 补丁认不出 wk-ruby，我们的注音会让那行被判脏并重建 →
- * 一直闪。v2 的判据同时认 kt-（片假名终结者）/ lt-（本插件改名前的节点）/ wk-（现在）。
+ * 一直闪。v2 的判据同时认 kt-（另一个片假名注音插件）/ lt-（本插件改名前的节点）/ wk-（现在）。
  */
 const MARK_V1 = "/* KT-COEXIST-PATCH */";
 
@@ -62,7 +62,7 @@ const HELPER = `
 	// 这类节点不该让 isClean() 判定"行被外人改过"。
 	//
 	// 认三家（前两家和本插件都是同一个作者、可能同时开着）：
-	//   kt-ruby / kt-rt —— 片假名终结者（片假名 -> 英文）
+	//   kt-ruby / kt-rt —— 另一个片假名注音插件（片假名 -> 英文）
 	//   lt-ruby / lt-rt —— 西文字母片假名注音（改名前的 DOM 前缀，老版本装的还是它）
 	//   wk-ruby / wk-rt —— 西文字母片假名注音（现在的 DOM 前缀；插件从
 	//                     latin-katakana 改名 western-katakana 时一起换的）
@@ -129,7 +129,7 @@ const PATCHES = [
     to:
       "\t\t\t// " +
       MARK +
-      " 子节点计数忽略别的插件插的注音（片假名终结者的 kt-ruby），\n" +
+      " 子节点计数忽略别的插件插的注音（另一个片假名注音插件的 kt-ruby），\n" +
       "\t\t\t// 否则它会一直判定「行被外人改过」并重建整行。\n" +
       "\t\t\tif (__ktOwnChildCount(h) !== 1) return false;",
   },
@@ -139,12 +139,12 @@ const PATCHES = [
     to:
       "\t\t\t// " +
       MARK +
-      " wrap 里可能有别的插件（片假名终结者）插的注音节点。\n" +
+      " wrap 里可能有别的插件（另一个片假名注音插件）插的注音节点。\n" +
       "\t\t\t// 必须**暂存到 host 的 expando**，而不是 append 到 host 上：\n" +
       "\t\t\t// 下面那句 `if (!host.hasChildNodes() && host.__fgOrig)` 靠「host 为空」\n" +
       "\t\t\t// 决定是否放回原文字；一旦提前挂了节点，这个条件永远不成立，\n" +
       "\t\t\t// 整行文字就再也放不回来 —— 实测会把歌词行清空。\n" +
-      "\t\t\t// 暂存后由片假名终结者自己接手，挂回我们的原文本节点后面。\n" +
+      "\t\t\t// 暂存后由那个插件自己接手，挂回我们的原文本节点后面。\n" +
       "\t\t\ttry {\n" +
       "\t\t\t\tconst __ktNodes = [...wrap.querySelectorAll('ruby.kt-ruby, .kt-ov-label')];\n" +
       "\t\t\t\tif (__ktNodes.length) host.__ktForeign = __ktNodes;\n" +
@@ -162,7 +162,7 @@ const PATCHES = [
      * restoreLine 先把 wrap 摘掉（我们的注音随之消失）→ 重建 → 我们再插……
      * 这才是"闪烁"的真正来源：不是判定逻辑，而是变更通知把行标脏了。
      */
-    name: "observer: 忽略片假名终结者引起的变更（闪烁的真正来源）",
+    name: "observer: 忽略另一个片假名注音插件引起的变更（闪烁的真正来源）",
     from:
       "\t\t\tfor (const r of records) {\n" +
       "\t\t\t\t// 只关心文字和结构变化\n" +
@@ -174,7 +174,7 @@ const PATCHES = [
       "\t\t\t\tif (r.type !== 'characterData' && r.type !== 'childList') continue;\n" +
       "\t\t\t\t// " +
       MARK +
-      " 片假名终结者插的注音引起的变更不算「行被外人改过」，\n" +
+      " 另一个片假名注音插件插的注音引起的变更不算「行被外人改过」，\n" +
       "\t\t\t\t// 否则它每插一个 <ruby> 我们就把整行标脏、重建一次 → 来回闪。\n" +
       "\t\t\t\tif (__ktRecordIsOurs(r)) continue;\n" +
       "\t\t\t\trelevant = true;",
@@ -220,7 +220,7 @@ const PATCHES = [
   },
   {
     /*
-     * 第五条：重建完这一行之后，叫片假名终结者一声。
+     * 第五条：重建完这一行之后，叫另一个片假名注音插件一声。
      *
      * 为什么需要：真机轨迹里 `changed=1 restored=1` 每秒重复五次、永不停止 ——
      * 对方每 ~200ms 重建一次这一行（新 wrap），我们就补一次注音。
@@ -231,10 +231,10 @@ const PATCHES = [
      * 之后才轮到绘制。而且它自己的 observer 已经会忽略我们的变更（第三条），
      * 所以插完不会反过来再触发它重建，不会自激。
      *
-     * 钩子由片假名终结者注册（window.__ktRepairLine）；它不在的话这一句就是空转，
+     * 钩子由另一个片假名注音插件注册（window.__ktRepairLine）；它不在的话这一句就是空转，
      * 对没装/没开我们的用户没有任何影响。
      */
-    name: "processLine: 重建完这一行后通知片假名终结者同步补注音",
+    name: "processLine: 重建完这一行后通知另一个片假名注音插件同步补注音",
     from:
       "\t\tline.__fgText = text;\n" +
       "\t\tline.__fgHosts = hosts;\n" +
@@ -425,7 +425,7 @@ function main() {
   fs.writeFileSync(file, r.src, "utf8");
   for (const name of r.applied) console.log("已应用：" + name);
   console.log("\n补丁完成：" + file);
-  console.log("重启网易云生效；然后在片假名终结者的设置里打开「与振假名插件共用同一行」。");
+  console.log("重启网易云生效；然后在另一个片假名注音插件的设置里打开「与振假名插件共用同一行」。");
   console.log("提示：jp-furigana 更新后补丁会丢失，重新跑一次本脚本即可。");
 }
 

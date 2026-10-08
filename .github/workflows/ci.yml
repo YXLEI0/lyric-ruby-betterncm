@@ -3,8 +3,16 @@ name: CI
 on:
   push:
     branches: ["**"]
+    # tag 必须写在这里：只定义 branches 时，tag 推送不会触发工作流，
+    # 下面那个 startsWith(github.ref, 'refs/tags/v') 的 release job 就永远是死代码。
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（留空 = v<manifest 里的 version>）"
+        required: false
+        default: ""
 
 jobs:
   test:
@@ -43,9 +51,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    # 打 tag 时自动发 Release，产物可以直接丢进 BetterNCM 插件目录
+    # 打 tag 时自动发 Release，产物可以直接丢进 BetterNCM 插件目录。
+    # 手动跑（Actions → Run workflow）也能发：不给 tag 就用 manifest 里的 version。
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,13 +72,24 @@ jobs:
       - name: 打包
         run: npm run build
 
-      - name: 读取插件版本
+      - name: 定 tag 与版本号
         id: meta
-        run: echo "version=$(node -p "require('./src/manifest.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          version="$(node -p "require('./src/manifest.json').version")"
+          tag=""
+          # tag 推送：用推上来的那个 tag（别拿 manifest 的版本另造一个）
+          case "$GITHUB_REF" in refs/tags/v*) tag="${GITHUB_REF#refs/tags/}";; esac
+          # 手动跑：优先用输入框里的 tag，空着就用 manifest 的版本 -> v<version>
+          if [ -z "$tag" ]; then tag="${{ github.event.inputs.tag }}"; fi
+          if [ -z "$tag" ]; then tag="v$version"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "发布 $tag（版本 $version）"
 
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
           files: builds/*.plugin
           name: ${{ steps.meta.outputs.version }}
           generate_release_notes: true

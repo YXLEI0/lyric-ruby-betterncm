@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 YXLEI0 (Katakana Terminator for BetterNCM)
+Copyright (c) 2026 YXLEI0
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,18 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This project is a port of Katakana Terminator to the BetterNCM plugin system.
-The original work is:
-
-    Katakana Terminator
-    Copyright (c) 2017-2024, Katakana Terminator Contributors
-    https://github.com/Arnie97/katakana-terminator
-    Licensed under the MIT License.
-
-The katakana matching logic in src/core/matcher.js is derived from the
-original userscript (katakana-terminator.user.js) and the overall purpose,
-look and behaviour of the plugin intentionally follow it. The original MIT
-license text is reproduced above; this attribution notice must be retained.

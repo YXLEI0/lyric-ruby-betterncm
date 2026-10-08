@@ -159,8 +159,8 @@ const out = `/*
  * 英文 -> 片假名读音词典（自动生成，勿手改）。
  *
  * 两份数据源，由 tools/build-dict.js 合并（跑 npm run build:dict 重新生成）：
- *   1. tools/seed-words.js      —— 人工核过（其中大部分是从 katakana-terminator 的
- *      离线词典反转来的真实外来语写法，那份本来就是"片假名外来语 -> 英文原词"）；
+ *   1. tools/seed-words.js      —— 人工核过（其中大部分是从一份现成的
+ *      "片假名外来语 -> 英文原词"对照表反转来的真实外来语写法）；
  *   2. tools/seed-words-sekai.js —— 官方歌名读音（Project Sekai 主数据库里单个西文词的歌名）；
  *   3. tools/seed-words-learned.js —— 运行期沉淀；
  *   4. tools/seed-words-llm.js  —— 大模型按英文词频批量生成的读音（${llmAdded} 条），

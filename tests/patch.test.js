@@ -126,7 +126,7 @@ test("五处补丁全部应用，且结果语法正确、锚点不再残留", ()
 /*
  * 下面这一组是本项目独有的回归点：补丁的识别范围必须覆盖「三家」。
  *
- * 同一行上可能同时开着片假名终结者（kt-*）和本插件（改名前 lt-*、现在 wk-*）。
+ * 同一行上可能同时开着另一个片假名注音插件（kt-*）和本插件（改名前 lt-*、现在 wk-*）。
  * 补丁只认其中一家时，另一家的注音会让 jp-furigana 把行判脏并重建，
  * 于是那一家无限闪 —— 而且"只有它一家闪"，从现象几乎查不到原因。
  * 所以这里不只断言"helper 存在"，而是把三家的类名和标记位逐个钉死。
@@ -176,7 +176,7 @@ test("__ktTextIsOurs 同时接受三家的标记位（__ktOwned / __ltOwned / __
   const m = /function __ktTextIsOurs\(n\) \{[\s\S]*?\n\t\}/.exec(src);
   assert.ok(m, "helper 里应该有 __ktTextIsOurs");
   const body = m[0];
-  assert.ok(/n\.__ktOwned/.test(body), "__ktTextIsOurs 必须接受片假名终结者的 __ktOwned 标记");
+  assert.ok(/n\.__ktOwned/.test(body), "__ktTextIsOurs 必须接受另一个片假名注音插件的 __ktOwned 标记");
   assert.ok(/n\.__ltOwned/.test(body), "__ktTextIsOurs 必须接受本插件改名前的 __ltOwned 标记");
   assert.ok(/n\.__wkOwned/.test(body), "__ktTextIsOurs 必须接受本插件现在的 __wkOwned 标记");
   assert.ok(/nodeType === 3/.test(body), "__ktTextIsOurs 只该认同文本节点");
@@ -187,7 +187,7 @@ test("__ktTextIsOurs 同时接受三家的标记位（__ktOwned / __ltOwned / __
     if (expando) n[expando] = true;
     return n;
   };
-  assert.strictEqual(isOurs(text("__ktOwned")), true, "片假名终结者改写的文本节点该算我们的");
+  assert.strictEqual(isOurs(text("__ktOwned")), true, "另一个片假名注音插件改写的文本节点该算我们的");
   assert.strictEqual(isOurs(text("__ltOwned")), true, "本插件改名前的标记位该算我们的");
   assert.strictEqual(isOurs(text("__wkOwned")), true, "本插件现在的标记位该算我们的");
   assert.strictEqual(isOurs(text(null)), false, "没被标记的文本节点不是我们的");
@@ -345,7 +345,7 @@ test("JapaneseFonts：补丁后的判据不再把我们的片假名当成日文�
   // 外语行 + 我们的注音：判据必须看不到假名（否则会被当成日文歌套日文字体）
   assert.strictEqual(hasKana("de"), false, "德文行 + wk-ruby：" + plain(doc.getElementById("de")));
   assert.strictEqual(hasKana("lat"), false, "拉丁文行 + lt-ruby（改名前的前缀）");
-  assert.strictEqual(hasKana("kt"), false, "片假名终结者的 kt-ruby");
+  assert.strictEqual(hasKana("kt"), false, "另一个片假名注音插件的 kt-ruby");
   // 反面：真的日文歌照旧认得出来（对方插件自己的 ruby 没有类名）
   assert.strictEqual(hasKana("jp"), true, "日文行不能被误伤");
   // 而且 innerHTML 里确实还留着假名（证明测的是补丁后的判据，不是"注音没插进去"）

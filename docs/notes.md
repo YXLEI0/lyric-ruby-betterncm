@@ -7,7 +7,7 @@
 
 在日语歌的歌词里, 给西文字母 (拉丁 / 西里尔 / 希腊) 上方标注片假名读音。
 
-这是 [片假名终结者](https://github.com/YXLEI0/katakana-terminator-betterncm) 的反方向: 那个把片假名读成英文, 这个把英文 / 罗马音 / 西文各语种读成片假名
+本插件的方向正好相反: 另一个片假名注音插件把片假名读成英文, 这个把英文 / 罗马音 / 西文各语种读成片假名
 
 ```
 きらめく  light  と  clover、それから Sekai へ
@@ -53,7 +53,7 @@
 | 连字符词 (`e-mail` / `x-ray` / `T-ara`) | 按单词读。有单字母段的连字符是词内的 (`e-mail` イーメール), 保持整词 |
 | 连字符串起来的长词 (`Looser-Krankheit-Was` / `High-de-Siehst` / `well-known`) | 拆成几个词各标一个 ruby, 每一段都 ≥2 个字母就拆。理由: `Looser-Krankheit-` 上面曾压着一整条 `ルーザークランクハイトヴァス`, 比底字还宽、和每个词对不上; 而且大模型那层会把 `looserkrankheitwas` 当成一个词去问 (真机缓存里就有这条键), 每个词各问各的、各自沉淀的机会全没了。几种连字符 (`-` `‐` `‑` `–` `—`) 一个待遇 |
 | 波浪号拉长音 (`feel~ing` / `go~od`) | 当一个词读 (フィーリング / グッド), 波浪号是拉长音的排版写法, 不是词边界。ASCII `~`、全角 `～`、波ダッシュ `〜` 都认; 结尾的那种不算 (`go~` 还是 `go`)。波浪号从不拆词 |
-| 别的注音插件插进来的节点 (片假名终结者的英文注释、jp-furigana 的振假名) | 整棵跳过, 给注解做注解没有意义 |
+| 别的注音插件插进来的节点 (另一个片假名注音插件的英文注释、jp-furigana 的振假名) | 整棵跳过, 给注解做注解没有意义 |
 
 ### 西文各语种 (法语 / 德语 / 拉丁语 / 葡萄牙语 / 荷兰语 / 斯瓦希里语 / 汉语拼音 / 俄语 / 希腊语)
 
@@ -226,7 +226,7 @@
 
 | 来源 | 条数 | 怎么来的 |
 | --- | --- | --- |
-| `tools/seed-words.js` | 986 | 人工核过: 反转 katakana-terminator 的离线词典得到的真实外来语写法 + 手工补的歌词高频词 + "被罗马音读歪的英文词" + 不发音字母 + 音乐术语 + 法语常用词 |
+| `tools/seed-words.js` | 986 | 人工核过: 反转一份现成的「片假名外来语 → 英文原词」对照表得到的真实外来语写法 + 手工补的歌词高频词 + "被罗马音读歪的英文词" + 不发音字母 + 音乐术语 + 法语常用词 |
 | `tools/seed-words-learned.js` | 323 | 运行期沉淀: 面板「导出词库素材」→ `npm run promote:learned` 筛选 (见下) |
 | `tools/seed-words-llm.js` | 5520 | `tools/expand-dict-llm.js` 让大模型按英文词频 (前 6000) 批量生成的读音 |
 
@@ -350,7 +350,7 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 | 插件 | 标什么 |
 | --- | --- |
 | [jp-furigana](https://github.com/Leleawa/jp-furigana) | 汉字 → 振假名 |
-| [片假名终结者](https://github.com/YXLEI0/katakana-terminator-betterncm) | 片假名 → 英文 |
+| 另一个片假名注音插件 | 片假名 → 英文 |
 | [JapaneseFonts](https://github.com/MuttonString/Furigana) | 给日文歌换日文字体 |
 | 本插件 | 西文字母 → 片假名读音 |
 
@@ -365,7 +365,7 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 
 装上的是 v1 时直接重跑 `npm run patch:furigana` 就会就地升级成 v2 (只改类名枚举和标记位), `--check` 会告诉你打的是哪一版
 
-> 片假名终结者那边也要跟着改: 它认识本插件的 `lt-ruby` / `lt-rt` (所以文档里写着要 2.1.1 或更新)。插件的 DOM 前缀改成 `wk-` 之后, 它那一侧也得把 `wk-ruby` / `wk-rt` 加进识别表, 否则我们的注音会被它当成外人改的、把行重建, 症状和我们当年踩的"一直闪"一模一样。那是另一个仓库 ([katakana-terminator-betterncm](https://github.com/YXLEI0/katakana-terminator-betterncm)), 本仓库没有它的代码
+> 另一个片假名注音插件那边也要跟着改: 它认识本插件的 `lt-ruby` / `lt-rt` (所以文档里写着要 2.1.1 或更新)。插件的 DOM 前缀改成 `wk-` 之后, 它那一侧也得把 `wk-ruby` / `wk-rt` 加进识别表, 否则我们的注音会被它当成外人改的、把行重建, 症状和我们当年踩的"一直闪"一模一样。那是另一个仓库, 本仓库没有它的代码
 
 ```bash
 npm run patch:furigana            # 自动找 C:\betterncm\plugins 里的 jp-furigana*.plugin
@@ -383,7 +383,7 @@ npm run patch:furigana -- --force # 以备份为基准重打
 
 补丁打在别人的包上, jp-furigana 一升级就没了; 补丁工具本身也会变。症状是歌词抽搐、或某个词反复闪, 这时用 `--check` 看包里的补丁是不是当前这一版, 不一致就重跑 `npm run patch:furigana -- --force`
 
-反过来, 本插件也认另外两家的注音节点: `isSkippable()` 会整棵跳过 `kt-ruby` / `fg-ruby` 里面。片假名终结者的注音里装的偏偏是英文原词 (`<rt class="kt-rt">dream</rt>`), 正是本插件要标的对象
+反过来, 本插件也认另外两家的注音节点: `isSkippable()` 会整棵跳过 `kt-ruby` / `fg-ruby` 里面。另一个片假名注音插件的注音里装的偏偏是英文原词 (`<rt class="kt-rt">dream</rt>`), 正是本插件要标的对象
 
 ### JapaneseFonts (MuttonString/Furigana) 的额外一处: "这是不是日文歌"
 
@@ -677,7 +677,7 @@ tools/
   seed-words.js       人工种子词表
   seed-words-llm.js   大模型批量生成的词表
   seed-words-learned.js  运行期沉淀的词 (生成物)
-  patch-jp-furigana*.js  jp-furigana 共存补丁 (和片假名终结者仓库里的同一份, 必须保持一致)
+  patch-jp-furigana*.js  jp-furigana 共存补丁 (另一个片假名注音插件仓库里也有同一份, 必须保持一致)
 ```
 
 `src/preview.png` 是真机截图裁出来的歌词区: 从默认歌词页截图里裁出歌词部分, 等比放大到 750×350, 和 [jp-furigana](https://github.com/Leleawa/jp-furigana) 的 `preview.jpg` 同尺寸 (商店里两个插件并排时构图一致)。不是画出来的示意图, 不要用占位图覆盖它
@@ -690,7 +690,6 @@ tools/
 
 ## 致谢
 
-- [Arnie97/katakana-terminator](https://github.com/Arnie97/katakana-terminator) —— 原版扩展; 本插件的 DOM 注入、还原、共存那套机制是从它的网易云移植版 (片假名终结者) 继承来的
 - [Leleawa/jp-furigana](https://github.com/Leleawa/jp-furigana) —— 共存补丁改的就是它
 - [Ben Bullock / sci.lang.japan FAQ](https://www.sljfaq.org/afaq/) —— 英文与西文各语种的音译规则、借词表 (德 / 荷 / 葡 / 俄 / 法) 的依据
 - [BetterNCM](https://github.com/BetterNCM) —— 插件框架

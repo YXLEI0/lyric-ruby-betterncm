@@ -186,7 +186,7 @@ test("RNP 的罗马音层和中文翻译层不标，只标原文层", async () =
 });
 
 // 三个插件同时开着时，一行里会同时有别人的注音节点。
-// 片假名终结者的 <rt class="kt-rt"> 里装的偏偏是英文原词（dream、hello…），
+// 另一个片假名注音插件的 <rt class="kt-rt"> 里装的偏偏是英文原词（dream、hello…），
 // 正是我们要标的对象 —— 如果不把别人的注音节点整棵跳过，
 // 就会在英文注释上面再注一层片假名，等于给注解做注解。
 const COEXIST_HTML = `<!doctype html><html><head></head><body>
@@ -209,7 +209,7 @@ test("已经带别人注音的行：只标底字，绝不往别人的注音里�
   assert.deepStrictEqual(PAIRS(p), [["clover", "クローバー"]]);
   // 别人的注音节点内部一个 wk-ruby 都不能有
   assert.strictEqual(p.querySelectorAll(".kt-rt ruby.wk-ruby, .fg-rt ruby.wk-ruby").length, 0);
-  assert.strictEqual(p.querySelector(".kt-rt").textContent, "dream", "片假名终结者的英文注释不能被改写");
+  assert.strictEqual(p.querySelector(".kt-rt").textContent, "dream", "另一个片假名注音插件的英文注释不能被改写");
   assert.strictEqual(p.querySelector(".fg-rt").textContent, "よつば", "jp-furigana 的振假名不能被改写");
   // 底字不变（别人的 <rt> 不算底字）
   assert.strictEqual(baseText(p), "きらめく ドリーム と 四葉 clover");
@@ -219,7 +219,7 @@ test("已经带别人注音的行：只标底字，绝不往别人的注音里�
  * 上面的用例走的是「人家用真 <ruby>/<rt>」这条路 —— 那条路上 <rt> 标签本身
  * 就在 SKIP_TAGS 里，所以它证明不了我们认识对方的 class。
  * 内核不支持 ruby 时三家都降级成 <span class="xx-rt">，那时只剩 class 可认；
- * 这里就把那条路单独钉住（片假名终结者的降级节点是 span.kt-ruby / span.kt-rt）。
+ * 这里就把那条路单独钉住（另一个片假名注音插件的降级节点是 span.kt-ruby / span.kt-rt）。
  */
 const COEXIST_FALLBACK_HTML = `<!doctype html><html><head></head><body>
 <div id="root">
@@ -1730,7 +1730,7 @@ test("制作信息行：长尾写法（`Strings Arranged & Conducted by` / `Reco
   assert.strictEqual(baseText(ps[5]), "Recorded in the rain", "底字不动");
 });
 
-test("修复钩子：既挂上自己的，也不把别人（片假名终结者）的顶掉", async () => {
+test("修复钩子：既挂上自己的，也不把别人（另一个片假名注音插件）的顶掉", async () => {
   // 真机上两个插件都会插注音。共存补丁重建完一行只调一个全局钩子，
   // 谁后加载谁就得链上去，直接覆盖会让另一个插件立刻开始闪。
   const env = bootPlugin();
@@ -1743,7 +1743,7 @@ test("修复钩子：既挂上自己的，也不把别人（片假名终结者�
   assert.strictEqual(typeof env.window.__ktRepairLine, "function");
   const li = env.document.querySelectorAll("ul.lyric li")[0];
   env.window.__ktRepairLine(li);
-  assert.ok(called.indexOf("prev") >= 0, "前一个钩子必须被调到（否则片假名终结者会闪）");
+  assert.ok(called.indexOf("prev") >= 0, "前一个钩子必须被调到（否则另一个片假名注音插件会闪）");
 });
 
 test("钩子：对方重建完一行直接叫我们时，注音要在同一次调用里补好", async () => {

@@ -1,7 +1,7 @@
 /*
  * DOM 注音（core/annotate.js）的单元测试。
  *
- * 这一层的契约（从 katakana-terminator 那边继承来的，都是真机踩出来的）：
+ * 这一层的契约（从另一个片假名注音插件那边继承来的，都是真机踩出来的）：
  *   - 只改文本节点、底字逐字节保持原文；
  *   - 不改任何既有元素的 class（改别人的 class 会让对方插件判定"行变了"并重建）；
  *   - 还原要干净，不留 class="" 之类的痕迹；
@@ -55,7 +55,7 @@ test("把拉丁词包成 ruby，注音是片假名读音", () => {
 });
 
 test("含汉字的行也照标（本插件不做「按行分工」）", () => {
-  // 这是和 katakana-terminator 最大的不同：那边要把含汉字的行让给 jp-furigana，
+  // 这是和另一个片假名注音插件最大的不同：那边要把含汉字的行让给 jp-furigana，
   // 因为两边抢同一批字。我们标的是拉丁字母，跟振假名不是一回事，让开就是漏标。
   const ctx = newCtx(`<!doctype html><html><body>
 <ul class="lyric"><li class="line"><p>取とり戻もどしたい dream の 中なか</p></li></ul>
@@ -373,7 +373,7 @@ test("还原后逐字节回到原样", () => {
 });
 
 test("别人的注音不算底字：kt-rt / fg-rt 都要排除", () => {
-  // 真机场景：katakana-terminator（kt-rt）和 jp-furigana（fg-rt）可能同时在页面上。
+  // 真机场景：另一个片假名注音插件（kt-rt）和 jp-furigana（fg-rt）可能同时在页面上。
   // 如果 visibleText() 把它们的注音算进"底字"，我们看到的就是一段一直在变的文本，
   // 于是每轮都判定"馊了"→ 还原 → 重注 —— 又是一直闪。
   const ctx = newCtx(`<!doctype html><html><body>
