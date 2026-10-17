@@ -512,6 +512,17 @@ test("葡萄牙语拼读：鼻元音与二合字母", () => {
   assert.strictEqual(read("pt", "não"), "ナン");
   assert.strictEqual(read("pt", "minha"), "ミニャ");
   assert.strictEqual(read("pt", "filho"), "フィリョ");
+  /*
+   * ãe / ães 也是鼻元音：mãe マン、mães マンス。
+   * 这条以前被"辅音 + 元音"那支抢先（把 ã 当普通 a），读成 マウ / マエス；
+   * 词首的 ães 那一支还多步进了一格。
+   */
+  assert.strictEqual(read("pt", "mãe"), "マン");
+  assert.strictEqual(read("pt", "mães"), "マンス");
+  assert.strictEqual(read("pt", "cães"), "カンス");
+  assert.strictEqual(read("pt", "pães"), "パンス");
+  assert.strictEqual(read("pt", "alemães"), "アレマンス");
+  assert.strictEqual(read("pt", "põe"), "ポン");
   // 借词表（sljfaq 葡萄牙语表）
   assert.strictEqual(read("pt", "pao"), "パン");
   assert.strictEqual(read("pt", "tabaco"), "タバコ");

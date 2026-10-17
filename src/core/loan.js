@@ -352,9 +352,13 @@
   return {
     tables: RAW,
     count: COUNT,
-    /** 查一张表；没有这张表返回 null（调用方自己决定怎么退化） */
+    /**
+     * 查一张表；没有这张表返回 null（调用方自己决定怎么退化）。
+     * 只认自己的键：`get("__proto__")` / `get("constructor")` 要返回 null，
+     * 不能把 Object.prototype 当成一张借词表递出去。
+     */
     get: function (lang) {
-      return RAW[lang] || null;
+      return Object.prototype.hasOwnProperty.call(RAW, lang) ? RAW[lang] : null;
     },
   };
 });

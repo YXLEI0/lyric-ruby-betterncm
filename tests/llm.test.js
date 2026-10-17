@@ -82,6 +82,35 @@ function makeClient(ctx, opts) {
 
 // ============================================================ 回答被截断要抢救
 
+test("形状不对（多包了一层）按失败处理，不许把整批词永久记成 miss", async () => {
+  /*
+   * 模型有时回 `{"readings":{"1":"ハロー","2":"ワールド"}}` —— 合法 JSON，但多包了一层。
+   * 老代码取不到任何值，于是这一批每个词都被判成"模型没给"并**永久**记成 miss
+   * （还落盘），只有手动 retryMisses 能救。那是格式违约，不是"模型明确给不出"，
+   * 应该走失败退避重试。
+   */
+  const ctx = loadCore();
+  const c = makeClient(ctx, {
+    reply: () => '{"readings":{"1":"ハロー","2":"ワールド"}}',
+    batchSize: 10,
+    cooldownMs: 1,
+  });
+  c.client.lookup("hello", "line one");
+  c.client.lookup("world", "line one");
+  await c.client.flush();
+
+  assert.strictEqual(c.client.stats().missesCached, 0, "形状问题不许写成永久 miss");
+  assert.ok(c.client.stats().failures >= 1, "要记一次失败（好让上层退避重试）");
+  assert.ok(/形状/.test(c.client.stats().lastError || ""), "错误要说清是形状不对：" + c.client.stats().lastError);
+  assert.strictEqual(c.client.peek("hello"), null, "这一轮当然还没有答案");
+  // 空对象例外：`{}` 是"模型对这批词都给不出"，照旧记 miss（见下一条测试）
+  const c2 = makeClient(loadCore(), { reply: () => "{}", batchSize: 10, cooldownMs: 1 });
+  c2.client.lookup("hello", "line one");
+  await c2.client.flush();
+  assert.strictEqual(c2.client.stats().missesCached, 1, "空对象仍然算「问过、没有」");
+  assert.strictEqual(c2.client.stats().failures, 0, "空对象不算失败");
+});
+
 test("回答被截断（JSON 不完整）时：能对上的先收下，批次减半，没抢到的不算永久 miss", async () => {
   // 真机轨迹里反复出现「大模型请求失败（响应里没有 JSON），120s 后再试」：
   // 一批 29~30 个词时回答可能被 max_tokens 截断（尾部没有 `}`），老代码会整批丢掉、

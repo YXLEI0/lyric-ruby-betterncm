@@ -113,14 +113,25 @@
    */
   var CREDIT_FILL = "[\\u4e00-\\u9fa5A-Za-z&\\/|,\u3001+\u00B7\u30FB\uFF08\uFF09()]{0,8}";
   var CREDIT_LATIN_LABEL = "(?:\\s+[A-Z][A-Za-z.&'\\-]*){0,3}";
-  var CREDIT_TAIL = "\\s*(?::|：|by\\b|-)";
-  var RE_CREDIT = new RegExp(
-    "^\\s*(?:" +
-      "(?:" + CREDIT_CN.join("|") + ")" + CREDIT_FILL + CREDIT_TAIL +
-      "|(?:" + CREDIT_CN.join("|") + ")" + CREDIT_FILL + CREDIT_LATIN_LABEL + CREDIT_TAIL +
-      "|(?:" + CREDIT_EN.join("|") + ")[a-z]*" + CREDIT_FILL + CREDIT_LATIN_LABEL + CREDIT_TAIL +
-      ")",
+  /*
+   * 中文标签那一支照旧大小写不敏感（标签本身是汉字）：`作词 by 某某` 那种写法也认。
+   */
+  var RE_CREDIT_CN = new RegExp(
+    "^\\s*(?:" + CREDIT_CN.join("|") + ")" + CREDIT_FILL + CREDIT_LATIN_LABEL + "\\s*(?::|：|-|by\\s+\\S)",
     "i"
+  );
+  /*
+   * 纯拉丁标签那一支**必须大小写敏感**。
+   *
+   * `[A-Z]` 想表达的是"只吃首字母大写的拉丁标签"，整条套上 /i 之后
+   * `of` / `love` / `the` 也成了标签，于是 `Words of love:`、`Music of the night:`、
+   * `Art of love -` 这种真歌词会整行被当署名跳过。
+   *
+   * `by` 后面还要求跟一个首字母大写的名字：少了这一条，`Music by the lake`
+   * （注释里点名过的真歌词）匹配到 "Music by" 就被判成署名了。
+   */
+  var RE_CREDIT_EN = new RegExp(
+    "^\\s*(?:" + CREDIT_EN.join("|") + ")[a-z]*" + CREDIT_FILL + CREDIT_LATIN_LABEL + "\\s*(?::|：|-|by\\s+[A-Z])"
   );
 
   /*
@@ -156,7 +167,19 @@
   function isCreditText(t) {
     var s = String(t == null ? "" : t);
     if (!s) return false;
-    return RE_CREDIT.test(s) || RE_CREDIT_HARD.test(s) || CREDIT_LONG_EN.test(s);
+    return RE_CREDIT_CN.test(s) || RE_CREDIT_EN.test(s) || RE_CREDIT_HARD.test(s) || CREDIT_LONG_EN.test(s);
+  }
+
+  /** 给测试用的内部钩子（构建期/运行期都不调它） */
+  function creditMatch(s) {
+    var str = String(s == null ? "" : s);
+    return {
+      cn: RE_CREDIT_CN.test(str),
+      en: RE_CREDIT_EN.test(str),
+      hard: RE_CREDIT_HARD.test(str),
+      long: CREDIT_LONG_EN.test(str),
+      isCredit: isCreditText(str),
+    };
   }
 
   // ---------------------------------------------------------------- 注入
@@ -207,6 +230,15 @@
     var censoredRun = typeof options.censoredRun === "function" ? options.censoredRun : null;
 
     var annotateAll = options.annotateAll !== false; // false = 只标歌词
+
+    /*
+     * 时钟。所有和"时间窗"有关的判据（文本在动 / 认输期 / 记录年龄）都走它，
+     * 默认 Date.now。测试要验"窗口过没过"时注入一个假时钟推进时间 ——
+     * 用真实墙钟的话，机器一慢，四次同步 pass 跨过 60ms 窗口，断言就随机红。
+     */
+    var clock = typeof options.now === "function" ? options.now : function () {
+      return Date.now();
+    };
 
     /*
      * 本插件不做"按行分工、让给振假名插件"那件事。
@@ -333,7 +365,7 @@
 
     function churnPrune() {
       if (churnByText.size <= CHURN_MAX_ENTRIES && churnUntil.size <= CHURN_MAX_ENTRIES) return;
-      var now = Date.now();
+      var now = clock();
       churnUntil.forEach(function (until, k) {
         if (now >= until) churnUntil.delete(k);
       });
@@ -353,7 +385,7 @@
       if (!text) return false;
       var until = churnUntil.get(text);
       if (until == null) return false;
-      var now = Date.now();
+      var now = clock();
       if (now < until) return true;
       churnUntil.delete(text); // 退避结束，再试一次
       // 安静够久就把 strikes 也忘掉：下次是新的"事故"，该从头给足机会
@@ -368,7 +400,7 @@
       if (!host) return undefined;
       var at = typeof host.__wkAt === "number" ? host.__wkAt : host.__ltAt;
       if (typeof at !== "number") return undefined;
-      return Date.now() - at;
+      return clock() - at;
     }
 
     /**
@@ -387,7 +419,7 @@
        * （补回来只要一帧，看不见；而认输会让那一句长时间没有英文。）
        */
       if (typeof ageMs === "number" && ageMs >= CHURN_FAST_MS) return;
-      var now = Date.now();
+      var now = clock();
       var c = churnByText.get(text);
       if (!c || now - c.since > CHURN_WINDOW_MS) c = { count: 0, since: now, strikes: (c && c.strikes) || 0 };
       c.count++;
@@ -1114,7 +1146,7 @@
       if (!leadIsRuby) node.__wkOwned = true;
       // 记下注音时刻：出问题时 age 能直接区分"我们的注音活了多久"，
       // 从而分辨"死循环"（几十毫秒就没）和"正常重绘"（活了一两秒）
-      host.__wkAt = Date.now();
+      host.__wkAt = clock();
 
       // 记录：原节点是否还留在 host 里、注音节点清单，以及它原来插在哪个位置
       // （host 的子节点下标）。
@@ -1152,7 +1184,7 @@
        * 那道防抖用的。现在防抖已经统一交给 churn 计数器（按 age 区分真死循环
        * 与正常重绘），那三个字段没有任何地方读了 —— 留着只会让人以为还有第二道闸。
        */
-      decidedByHost.set(host, { at: Date.now() });
+      decidedByHost.set(host, { at: clock() });
 
       if (options.log && records.size <= 40) {
         // 记下区域和宿主的身份。真机排障时最关键的就是这个 host：
@@ -1489,7 +1521,13 @@
             var stillPending = false;
             if (pending) {
               try {
-                stillPending = !!pending(word, visibleText(host), tokenAt(el, word));
+                /*
+                 * 语境必须和注音那一刻（上面的 lookup）一致：两处都走 contextOf(host, word)。
+                 * 用 visibleText(host) 的话，同一个词在"注入时"和"改写时"拿到两个不同的
+                 * 缓存键（host 里还有同 <li> 的翻译层），大模型永远答"这个 key 没问过"，
+                 * wk-pending 就再也摘不掉 —— 读音已经是模型的答案，颜色却一直淡着。
+                 */
+                stillPending = !!pending(word, contextOf(host, word), tokenAt(el, word));
               } catch (e) {
                 stillPending = false;
               }
@@ -1532,7 +1570,14 @@
     function dropDetached() {
       var dead = [];
       records.forEach(function (rec, node) {
-        if (orphaned(rec)) dead.push(node);
+        /*
+         * 除了"宿主整个脱链"，还有一种要一起清：宿主还在、但里面换成了**新的**
+         * 文本节点（React / RNP 复用同一个 <p>，只把文本节点换掉）。
+         * 这种旧记录以旧文本节点为键，永远等不到自己是 candidate，只增不减 ——
+         * 旧节点、旧 ruby、rec.plain 全被强引用着，injectedCount() 也跟着虚高。
+         * 旧节点已经随文本节点一起被丢掉，删记录不会丢原文。
+         */
+        if (orphaned(rec) || (rec.kept && node.parentNode !== rec.host)) dead.push(node);
       });
       for (var i = 0; i < dead.length; i++) {
         var rec = records.get(dead[i]);
@@ -1895,7 +1940,7 @@
           unstable++;
           noteSkip("认输期", node.nodeValue, region);
           var untilChurn = churnUntil.get(node.nodeValue || "");
-          if (untilChurn) noteRetry(untilChurn - Date.now() + 20);
+          if (untilChurn) noteRetry(untilChurn - clock() + 20);
           continue;
         }
 
@@ -1903,7 +1948,7 @@
         // 别再追着重注 —— 追就是抽搐。窗口过了会自动重试（见 MOTION_WINDOW_MS）。
         if (hostEl) {
           var motion = motionByHost.get(hostEl);
-          var nowMs = Date.now();
+          var nowMs = clock();
           if (!motion) {
             // 第一次见：只登记，不算变化（否则我们自己注音造成的可见文本变化
             // 会被记成"在动"，把正常的行也放弃掉）
@@ -1967,7 +2012,7 @@
           noteChurn(
             visibleNow,
             idOf(hostEl),
-            typeof prior.at === "number" ? Date.now() - prior.at : ageOf(hostEl),
+            typeof prior.at === "number" ? clock() - prior.at : ageOf(hostEl),
             enclosingPeerLine(hostEl),
             hostEl
           );
@@ -1992,6 +2037,19 @@
           }
           if (stale && intact) {
             // 底字真的变了：还原（摘掉注音、写回原文）再重注
+            restoreRecord(node, rec);
+            restored++;
+          } else if (stale) {
+            /*
+             * 底字变了、我们的注音又已经被别人摘掉了。
+             *
+             * 这一支以前是直接 records.delete(node) —— 那就把原文一起丢了：
+             * 行首是西文时原节点在注入时被清成空串（见 annotateNode 的
+             * leadIsRuby 那段），文字全在我们插进去的 <ruby> 里，
+             * ruby 被摘掉之后 nodeValue 只剩开头那截甚至空串，restoreAll 也救不回来。
+             * 交给 restoreRecord：它自己的 ours 判据会挡住"这行已经被换成新歌词"
+             * 的情况，只在"值仍是我们写的 head"时才把 rec.plain 写回去。
+             */
             restoreRecord(node, rec);
             restored++;
           } else {
@@ -2236,5 +2294,8 @@
     applyStyles: applyStyles,
     removeStyles: removeStyles,
     hasRubyLayout: hasRubyLayout,
+    /** 署名判据：给测试直接验正则（运行期只走 isCreditText） */
+    isCreditText: isCreditText,
+    creditMatch: creditMatch,
   };
 });

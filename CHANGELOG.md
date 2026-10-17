@@ -4,6 +4,47 @@
 
 首个版本：给日语歌歌词里的西文字母（拉丁 / 西里尔 / 希腊）标注片假名读音。
 
+### 一轮完整审查：读音正确性、DOM 保真与工具链（本次）
+
+审查覆盖 `src/**`（13 个文件）、`tools/**`、13 个测试文件与 CI。改的都是现有测试没覆盖到的路径，每条都补了用例（376 → 385 条）。
+
+读音层（core/reading.js）
+
+- **弯撇号写的缩写查不到整词表**：`RE_CONTRACTION` 认 U+2019，而例外表的键是 ASCII，`don’t` 于是退回"词干 + 尾巴"硬拼成 ドゥーント（`can’t` サント）。查表前统一折成 `'`，两种撇号同音
+- **词尾「元音 + 辅音 + e」的长音从来没补上**：`isLongVowelBeforeE` 的下标多算一格，而且 `ke` / `te` 在 7b 就被 `EN_PAIR` 整块吃掉，9d 根本轮不到（bake バケ、note ノテ）。改成一次收掉「元音 + 辅音 + e」的 magic e：bake ベイク、kite カイト、note ノート、time タイム，词尾辅音按韵尾收；have / love / come 这类短元音小词进 `MAGIC_E_STOP`，不套
+- **词内分隔符被当成噪声删掉**：`x-ray` 变成 `xray` 读成 クスライ、`rock'n'roll` ロックンロラル。改成按分隔符切段：单字母段在词首读字母名（x → エックス）、夹在中间读韵尾（n → ン）
+- **双写 m / n 各补一拍元音**：hammer ハママー、runner ルナナー。补一条"第一个鼻音收 ン、第二个起下一拍"：ハンマー / ルンナー / トゥンネル
+- **缩写挂在词典层里、跟着参与层序**：把「英文音译规则」拖到词典前面就 LDK → ラダク、SOS → ソス。缩写和记号同属"这个词该怎么断"，移到可排序层之前；`CM` / `DJ` 这种词典里有的仍旧以词典为准
+- **查表沿原型链穿透**：`constructor` / `valueOf` / `toString` 这类词会命中 `Object.prototype` 上的函数，注音写成 `function Object() { [native code] }`（还多一个 ー —— `isLongVowelWord` 也命中了原型）。词典、缩写表、打码表、连字符串、借词表、语言判定统一只认对象自己的键
+
+DOM 层（core/annotate.js）
+
+- **只摘掉 `<ruby>`、宿主还在时，底字永久丢失**：行首是西文的那种，原文本节点在注入时被清成空串，`records.delete(node)` 既不还原也不写回 `rec.plain` —— 整行只剩空格，`restoreAll()` 也救不回来。改成 stale 一律走 `restoreRecord()`（它自己的 ours 判据照样挡住"这行已经换成新歌词"）
+- **署名判据整条带 `/i`**：`[A-Z]` 的"只吃大写标签"失效，`of` / `love` / `the` 都成了标签，`Music by the lake`、`Words of love:`、`Art of love -` 被整行当署名跳过。中文标签一支照旧不敏感，纯拉丁一支改大小写敏感、`by` 后面要求跟首字母大写的名字
+- **`relabel()` 判"暂定"用的语境和 `lookup()` 不一致**：一个用 `contextOf`（含同 `<li>` 的翻译层）、一个用 `visibleText`，大模型按「词 + 整句」缓存，于是 `wk-pending` 永远摘不掉 —— 读音已经是模型的答案，颜色一直淡着
+- **宿主复用、只换文本节点时 `records` 只增不减**：旧节点 / 旧 ruby / `rec.plain` 全被强引用，`injectedCount()` 跟着虚高。`dropDetached()` 补一条清扫
+- 时窗判据改用可注入的时钟（`options.now`），顺手把"四次 pass 落在 60ms 窗口内"那条测试改成假时钟 —— 它原来依赖真实墙钟，CI 并行跑会偶发红
+
+语种判定（core/langs.js、src/main.js）
+
+- **含假名的行里，西里尔 / 希腊词一个读音都没有**：`detect()` 的"假名优先"把 `Отчизну を歌う` 判成 null，而这两个字母表在词典层和罗马音层都读不了。读音层按 token 自带的字母表兜（cyrillic → ru、greek → el）
+- **`無限増幅回路（Ω）` 的 Ω 读成 オ**：纯汉字行没有假名，`detect()` 因 Ω 判成希腊语，单字母就走了希腊引擎。整行只有一个希腊字母时一律按字母名 / 单位读（Ω → オーム）
+- **葡语 `mãe` / `mães` 读成 マウ / マエス**：`ãe` 被"辅音 + 元音"那支抢走，词首 `ães` 那支还多步进一格。补 C + ãe(s) 规则：マン / マンス
+
+大模型层与学习层
+
+- **合法 JSON 但形状不对（多包一层 `{"readings":{…}}`）时整批词被永久记成 miss 还落盘**：有键却一个都对不上按失败退避重试；空对象仍然是"模型对这批全给不出"
+- **`note()` 不守 `MAX_SEEN`**：一次会话能把待定表撑到 900 以上。抽出 `trimSeen()`，每记一笔待定顺手收一次
+
+工具链与 CI
+
+- **打包字节不可重复**：zip 条目时间取文件 mtime、按本地时区写，只改 `TZ` 重打 hash 就变。改成 `SOURCE_DATE_EPOCH` → git 提交时间 → 1980-01-01，字段一律 UTC（同一份源码换时区重打，sha256 一致）
+- **`check` 里没有 ES5 门禁**：`vm.Script` 只保证 Node 能编译，`const f = () => 1` 能一路进包。加一条"去掉注释与字符串后扫 ES6+ 记号"，src 只许 ES5
+- **`promote:learned` 空导出会把 340 条沉淀词整份清空、退出码 0**：筛选后 0 条而现有表非空时拒绝写入（要清空走 `--force`）；`check` 加 [4.8] 比对"沉淀表每条都在词典里"
+- **注入顺序两份真相**：build 只比 6 个文件，`install:plugin` 能装出 `check` 会拒绝的包。顺序表抽到 `tools/inject-order.js`，两边共用
+- **没有 lockfile、CI 用 `npm install`**：提交 `package-lock.json`，两个 job 改 `npm ci`
+- 素材 JSON 带 BOM / 不是合法 JSON 时给一句人话再 `exit 1`，不再抛栈
+
 ### Releases：tag 推送不触发工作流（Release job 一直是死代码）+ 手动 dispatch 也能发（本次）
 
 `.github/workflows/ci.yml` 的 `on.push` 只写了 `branches`。GitHub 的规则是：只定义 branches 时

@@ -261,6 +261,40 @@ test("英文：外来语靠规则/小表读对", () => {
   assert.strictEqual(WK.englishToKatakana("story").kana, "ストーリー");
 });
 
+test("英文：词尾「元音 + 辅音 + e」按 magic e 读（bake ベイク、kite カイト）", () => {
+  /*
+   * 词尾那个 e 不发音、前面那个元音读长音 —— 这是英语拼写里最稳的一条。
+   * 老引擎里 `ke` / `te` / `me` 会被 EN_PAIR 整块吃掉，长音一次都没补上
+   * （bake 读成 バケ、note 读成 ノテ），注释里写的 isLongVowelBeforeE 从来没生效。
+   */
+  const cases = [
+    ["bake", "ベイク"],
+    ["cave", "ケイブ"],
+    ["brave", "ブレイブ"],
+    ["grape", "グレイプ"],
+    ["make", "メイク"],
+    ["kite", "カイト"],
+    ["line", "ライン"],
+    ["time", "タイム"], // 词尾辅音按韵尾收（m -> ム），不是 タイメ
+    ["note", "ノート"],
+    ["code", "コード"],
+    ["hope", "ホープ"],
+    ["zone", "ゾーン"],
+  ];
+  for (const [w, want] of cases) {
+    assert.strictEqual(WK.englishToKatakana(w).kana, want, w);
+  }
+  /*
+   * 短元音的小词不能套 magic e：have / love / come 这类词里的元音是短的。
+   * 它们大多在离线词典里，这里守的是"词典漏了、走到规则层"那条路 ——
+   * 套上去会变成 ヘイヴ / ローヴ 这种（有长音），不套就不会出现 ー。
+   */
+  for (const w of ["have", "love", "come", "some", "done", "gone", "move", "prove", "lose"]) {
+    const kana = WK.englishToKatakana(w).kana;
+    assert.strictEqual(kana.indexOf("ー"), -1, w + " 的元音是短音，不该补长音：" + kana);
+  }
+});
+
 test("英文：sh/ch/ck/ng 这些字母组合", () => {
   // she：sh -> シ，词尾 e 是默字，不补长音（参照 sljfaq：词尾 e 不发音）
   assert.strictEqual(WK.englishToKatakana("she").kana, "シ");
@@ -282,6 +316,28 @@ test("英文：l 结尾一律 ル（规则路径也算）", () => {
   // 这两个没进表，走规则；断言的是规则里「词尾 l -> ル」那条
   assert.strictEqual(WK.englishToKatakana("novel").kana.slice(-1), "ル");
   assert.strictEqual(WK.englishToKatakana("hotel").kana.slice(-1), "ル");
+});
+
+test("英文：双写 m / n 只出一拍鼻音（hammer ハンマー、runner ルンナー）", () => {
+  /*
+   * 8b 的 m/n 收 ン 用 `nxt !== ch` 排掉了双写，而促音表里没有 m / n，
+   * 于是两个鼻音各补了一个元音：hammer -> ハママー、runner -> ルナナー。
+   * 正确读法是第一个鼻音收 ン、第二个起下一拍（ハンマー / ランナー / トンネル）。
+   */
+  for (const [w, want] of [
+    ["hammer", "ハンマー"],
+    ["runner", "ルンナー"],
+    ["banner", "バンナー"],
+    ["manner", "マンナー"],
+    ["inner", "インナー"],
+    ["tunnel", "トゥンネル"],
+  ]) {
+    assert.strictEqual(WK.englishToKatakana(w).kana, want, w);
+  }
+  // 单写和词尾的鼻音不受影响
+  assert.strictEqual(WK.englishToKatakana("summer").kana, "サマー");
+  assert.strictEqual(WK.englishToKatakana("dinner").kana, "ディナー");
+  assert.strictEqual(WK.englishToKatakana("man").kana.slice(-1), "ン");
 });
 
 test("英文：永远返回非空片假名", () => {
@@ -459,6 +515,28 @@ test("缩写的拆分与拼接（splitContraction / mergeContraction）", () => 
 
 // ============================================================ 记号逐字母
 
+test("弯撇号写的缩写要折成 ASCII 再查表（don’t 不能读成 ドゥーント）", () => {
+  /*
+   * 歌词里的撇号经常是排版用的 `’`（U+2019），而例外表的键是 ASCII 的 `'`。
+   * 不折的话整词表一条都命中不了，只能"词干 + 尾巴"硬拼：
+   * do + nt -> ドゥーント、ca + nt -> サント。
+   */
+  const r = WK.createReader({ dict: {} });
+  const pairs = [
+    ["don't", "don\u2019t", "ドント"],
+    ["can't", "can\u2019t", "キャント"],
+    ["won't", "won\u2019t", "ウォント"],
+    ["y'all", "y\u2019all", "ヨール"],
+    ["we'll", "we\u2019ll", "ウィル"],
+  ];
+  for (const [ascii, curly, want] of pairs) {
+    assert.strictEqual(r.read(curly).kana, want, curly);
+    assert.strictEqual(r.read(curly).kana, r.read(ascii).kana, "两种撇号必须同音：" + curly);
+  }
+  // 全角撇号（Ｕ＋ＦＦ０７）同理
+  assert.strictEqual(WK.splitContraction("don\uFF07t").fixed, "ドント");
+});
+
 test("记号：逐字母读（字母名），分隔符不发音、& 读 アンド", () => {
   const r = WK.createReader({ dict: {} });
   const cases = [
@@ -494,6 +572,14 @@ test("不是记号的连字符词照旧按单词读（x-ray 不能逐字母念�
   const x = r.read("x-ray");
   assert.notStrictEqual(x.source, "letters", "x-ray 是词不是记号");
   assert.notStrictEqual(x.kana, "エックスアールエーワイ");
+  /*
+   * 分隔符是音节边界，不能当噪声删掉：删掉之后 `xray` 会读成 クスライ。
+   * 单字母那一段在词首按字母名读（x -> エックス），夹在中间的是韵尾（rock'n'roll 的 n -> ン）。
+   */
+  assert.strictEqual(WK.englishToKatakana("x-ray").kana, "エックスライ");
+  assert.strictEqual(WK.englishToKatakana("u-turn").kana, "ユーターン");
+  assert.ok(!/エヌ/.test(WK.englishToKatakana("rock'n'roll").kana), "中间那个 n 是韵尾，不是字母名");
+  assert.ok(/^ロックン/.test(WK.englishToKatakana("rock'n'roll").kana));
   // 字母名表本身也要齐全、边界要挡住
   assert.strictEqual(WK.lettersToKatakana("abc"), "エービーシー");
   assert.strictEqual(WK.lettersToKatakana("a"), null, "单字母不走这条");
@@ -524,6 +610,23 @@ test("全大写的无元音缩写逐字母读（LDK / TV / BGM …）", () => {
   // 词典里已有的缩写仍然走词典（不冲突）
   assert.strictEqual(r.read("CM").source, "dict");
   assert.strictEqual(r.read("CM").kana, "シーエム");
+});
+
+test("缩写不参与层序：把规则拖到词典前面也照样逐字母读", () => {
+  /*
+   * 缩写原来是挂在词典层里的，于是把「英文音译规则」提到词典前面时，
+   * 规则会抢先把它当词拼：LDK -> ラダク、SOS -> ソス。
+   * 现在它和记号 / 缩写尾巴一样是"这个词该怎么断"的形态判定，排在可排序层之前。
+   */
+  const rule = WK.createReader({ dict: {}, order: ["rule", "dict", "romaji"] });
+  assert.strictEqual(rule.read("LDK").kana, "エルディーケー");
+  assert.strictEqual(rule.read("LDK").source, "letters");
+  assert.strictEqual(rule.read("SOS").kana, "エスオーエス");
+  assert.strictEqual(rule.read("QTE").kana, "キューティーイー");
+  // 词典里有的缩写仍旧以词典为准（CM / DJ 这种日语早就定死了写法）
+  const withDict = WK.createReader({ dict: { dj: "ディージェイ" } });
+  assert.strictEqual(withDict.read("DJ").source, "dict");
+  assert.strictEqual(withDict.read("DJ").kana, "ディージェイ");
 });
 
 test("逐字母缩写的判据不能误伤真词（my / sky / why / hmm / Ldk）", () => {
@@ -661,6 +764,28 @@ test("reader：英文词的来源是 rule（不是 romaji）", () => {
   assert.strictEqual(r.read("clover").kana, "クローバー");
   assert.strictEqual(r.read("light").source, "rule");
   assert.strictEqual(r.read("light").kana, "ライト");
+});
+
+test("查表只认对象自己的键：constructor 这类词不能沿原型链取到函数", () => {
+  /*
+   * 词表都是对象字面量，`tbl[key]` 查不到时会顺着原型链往上找。歌词里出现
+   * `constructor` / `valueOf` / `toString` 这种词时，命中的是 Object.prototype
+   * 上的函数，读音就变成了 "function Object() { [native code] }"。
+   */
+  const r = WK.createReader({ dict: {} });
+  for (const w of ["constructor", "valueOf", "toString", "hasOwnProperty", "isPrototypeOf"]) {
+    const got = r.read(w);
+    assert.ok(got, w + " 应该有读音（走规则层）");
+    assert.strictEqual(typeof got.kana, "string", w + " 的读音必须是字符串");
+    assert.strictEqual(got.kana.indexOf("function"), -1, w + " 不能读到原型上的函数：" + got.kana);
+    assert.ok(WK.RE_KATAKANA.test(got.kana), w + " 的读音必须是片假名：" + got.kana);
+  }
+  // 英文规则层同样不能从原型上取到例外表 / 词表里的东西
+  for (const w of ["constructor", "valueOf", "toString"]) {
+    const kana = WK.englishToKatakana(w).kana;
+    assert.strictEqual(kana.indexOf("function"), -1, w);
+    assert.ok(WK.RE_KATAKANA.test(kana), w + " 应该是片假名：" + kana);
+  }
 });
 
 test("reader：空输入 / 纯标点 / 无拉丁字母都返回 null", () => {
@@ -998,10 +1123,28 @@ test("词首不发音的字母：kn- / wr- / gn- / ps- / pn- 不许读出来", (
   ]) {
     assert.strictEqual(WK.englishToKatakana(w).kana, kana, w);
   }
-  // 词首那一格绝不能再出现 kn/wr/gn 的第一个音（ナ/ラ/グ 之类）
-  for (const w of ["knee", "kneel", "knife", "knight", "write", "wrong", "wrist", "gnome"]) {
+  /*
+   * 词首那一格绝不能再出现哑音那一行的音。
+   * 判据按"哪个字母哑"逐条给：wr- 的 r 是要发音的（write ライト、wrong ロン），
+   * 所以不能笼统地禁止 ラ 开头 —— 老写法 `!/^[クラグ]/` 会把正确的ライト也判掉。
+   */
+  const SILENT_ROW = {
+    k: /^[カキクケコ]/,
+    w: /^[ワヰウヱヲ]/,
+    g: /^[ガギグゲゴ]/,
+  };
+  for (const [w, silent] of [
+    ["knee", "k"],
+    ["kneel", "k"],
+    ["knife", "k"],
+    ["knight", "k"],
+    ["write", "w"],
+    ["wrong", "w"],
+    ["wrist", "w"],
+    ["gnome", "g"],
+  ]) {
     const kana = WK.englishToKatakana(w).kana;
-    assert.ok(!/^[クラグ]/.test(kana), w + " 的首字母是哑音，不能读出来：" + kana);
+    assert.ok(!SILENT_ROW[silent].test(kana), w + " 的首字母 " + silent + " 是哑音，不能读出来：" + kana);
   }
 });
 

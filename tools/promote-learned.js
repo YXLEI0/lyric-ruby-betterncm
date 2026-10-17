@@ -38,11 +38,23 @@ const RE_KANA = /^[\u30A0-\u30FF\u30FC]+$/;
 
 function readInput(file) {
   if (!fs.existsSync(file)) return null;
+  let text = fs.readFileSync(file, "utf8");
+  // Windows 记事本 / PowerShell 存出来的 JSON 常带 BOM，JSON.parse 会直接报"非法字符"
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  let data = null;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    data = JSON.parse(text);
   } catch (e) {
-    throw new Error("读不了 " + file + "：" + e.message);
+    console.error("素材不是合法 JSON：" + path.relative(ROOT, file));
+    console.error("  " + e.message);
+    console.error("面板「导出词库素材」粘出来的那段就是 JSON，原样保存即可（别加注释、别改引号）。");
+    process.exit(1);
   }
+  if (!data || typeof data !== "object") {
+    console.error("素材形状不对：" + path.relative(ROOT, file) + " 应该是一个对象");
+    process.exit(1);
+  }
+  return data;
 }
 
 /** 收集素材里所有 (词 -> {读音, 见过几次, 是否一致}) */
@@ -235,8 +247,25 @@ function loadTables() {
   return { hand: toMap(hand), llm: toMap(llm), blocklist, ambiguous, foreign };
 }
 
+/**
+ * 现有的沉淀表有几条。
+ *
+ * 生成物是"从这一份素材提炼出来的那批词"，每次整份重写 —— 所以素材为空
+ * （新机器 / 清过缓存，导出来就是 `{learned:[],llm:[],google:[]}`）时重写
+ * 等于把已经攒下的几百条一起清空。这个数字就是用来拦这件事的。
+ */
+function existingCount() {
+  try {
+    const rows = require(OUT);
+    return Array.isArray(rows) ? rows.length : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 function main() {
-  const file = process.argv[2] || INPUT_DEFAULT;
+  const args = process.argv.slice(2);
+  const file = args.find((a) => !a.startsWith("--")) || INPUT_DEFAULT;
   const input = readInput(file);
   if (!input) {
     console.error("没有素材文件：" + path.relative(ROOT, file));
@@ -246,6 +275,17 @@ function main() {
   }
   const tables = loadTables();
   const { accepted, skipped } = filterPromotions(input, tables);
+  /*
+   * 筛选后一个都不剩、而文件里已经有词：这是"素材不完整"（换机器、清过缓存、
+   * 只导了一小段），不是"这些词都该淘汰"。整份重写会把已有的几百条抹掉，
+   * 而 check/build 都不会报错 —— 必须在这里拦住。真要清空走 --force。
+   */
+  const existing = existingCount();
+  if (!accepted.length && existing > 0 && !args.includes("--force")) {
+    console.error("这次素材筛选后 0 个词，但 " + path.relative(ROOT, OUT) + " 里已有 " + existing + " 条。");
+    console.error("整份重写会把它们清空，已中止（确认要清空就加 --force）。");
+    process.exit(1);
+  }
   writeSeed(accepted);
   console.log("已生成 " + path.relative(ROOT, OUT) + "：" + accepted.length + " 个词（从 " + file + " 筛选）");
   if (accepted.length) {

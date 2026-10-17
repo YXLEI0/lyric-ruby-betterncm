@@ -45,6 +45,15 @@
     return root && root[name] ? root[name] : null;
   }
 
+  /*
+   * 查表只认对象自己的键。
+   * 借词表 / 同形异音表 / 英文常用词表都是对象字面量，`tbl[key]` 查不到时会顺着
+   * 原型链往上找 —— 歌词里出现 `constructor` / `valueOf` 时命中的是原型上的函数。
+   */
+  function own(tbl, key) {
+    return !!tbl && Object.prototype.hasOwnProperty.call(tbl, key);
+  }
+
   // ------------------------------------------------------------ 小工具
 
   /** 小写（变音符号留着，拼读要看它） */
@@ -491,7 +500,8 @@
       var three = w.substr(i, 3);
 
       // 鼻元音（包括 ão / õe 这两个典型词尾）：辅音 + ão 合成 サン / タン，如 coração コラサン
-      if (three === "\u00E3es") { out += "\u30A2\u30F3\u30B9"; i += 4; continue; }
+      // 词首的 ães 只有三个字符，步进别写多（写成 4 会把后面那个字符也吃掉）
+      if (three === "\u00E3es") { out += "\u30A2\u30F3\u30B9"; i += 3; continue; }
       if (two === "\u00E3o" || two === "\u00E3e") {
         if (PT_ROW[c]) { out += pick(PT_ROW[c], "a") + "\u30F3"; i += 3; continue; }
         out += "\u30A2\u30F3";
@@ -563,6 +573,17 @@
       if (PT_ROW[c] && w.charAt(i + 1) === "\u00F5" && w.charAt(i + 2) === "e") {
         out += pick(PT_ROW[c], "o") + "\u30F3";
         i += 3;
+        continue;
+      }
+      /*
+       * 辅音 + ãe / ães：mãe マン、mães マンス、cães カンス、alemães アレマンス。
+       * 这一条必须排在"辅音 + 元音"（下面 570 行那支）前面 —— 那里会把 ã 当普通 a
+       * 处理掉，鼻音就丢了（mãe 读成 マウ、mães 读成 マエス）。
+       */
+      if (PT_ROW[c] && w.charAt(i + 1) === "\u00E3" && w.charAt(i + 2) === "e") {
+        var ptPlural = w.charAt(i + 3) === "s";
+        out += pick(PT_ROW[c], "a") + "\u30F3" + (ptPlural ? "\u30B9" : "");
+        i += ptPlural ? 4 : 3;
         continue;
       }
       // 辅音 + 元音
@@ -1768,15 +1789,16 @@
    */
   function wordScore(id, w) {
     var sig = SIGNALS[id];
-    var own = sig.words[w] ? sig.words[w] : 0;
+    // 只认表自己的键（`constructor` 不能沿原型链命中）
+    var base = own(sig.words, w) ? sig.words[w] : 0;
     /*
      * 英语常用词：只认"这种语言自己的词表"里写没写（拉丁语的 in、德语的 du 都在表里），
      * 而且不给形状分（`you` 也满足"元音收尾"，给了形状分就把英语惩罚抵消了）。
      * 单个字母（只有 `a` / `i` 在英语表里）不算：那是冠词/代词，也是记号的零件
      * （`A-Z` 里的 A、`(A, B)` 里的 A），fits() 早就按同一个口径忽略了 —— 两处要一致。
      */
-    if (w.length > 1 && EN_COMMON[w]) return own;
-    var score = own;
+    if (w.length > 1 && own(EN_COMMON, w)) return base;
+    var score = base;
     for (var j = 0; j < sig.shapes.length; j++) {
       if (sig.shapes[j][0].test(w)) {
         score += sig.shapes[j][1];
@@ -1797,10 +1819,10 @@
     var words = wordsOf(s);
     for (i = 0; i < words.length; i++) {
       var w = words[i];
-      var own = wordScore(id, w);
-      if (own) score += own;
+      var ownScore = wordScore(id, w);
+      if (ownScore) score += ownScore;
       // 单个字母不吃英语惩罚（口径同 wordScore / fits，见那里）
-      else if (w.length > 1 && EN_COMMON[w]) score -= 2;
+      else if (w.length > 1 && own(EN_COMMON, w)) score -= 2;
     }
     return score;
   }
@@ -1830,6 +1852,12 @@
      * 的判断原来在它前面）。`無限増幅回路（Ω）` 暴露的就是顺序问题 ——
      * 日语行里夹一个 `Ω`，整行被判成希腊语，单字母 Ω 走希腊引擎读成 オ，
      * 而正确的读法是单位 オーム。假名优先之后这类行照旧是日语行。
+     *
+     * 判据只能是假名，不能把汉字也算进来：这里拿到的 `line` 常常是
+     * "原文 + 中文翻译"拼起来的整行（同一个 <li> 里两个 <p>），翻译里全是汉字 ——
+     * 算进来的话俄语/斯瓦希里语那几首一个词都不会注音（真机实测过）。
+     * 纯汉字行夹一个希腊字母那种（`無限増幅回路（Ω）`）由读音层的单字母判据兜：
+     * 整行只有一个希腊字母时按字母名 / 单位读，不当成一句希腊语。
      */
     if (/[\u3041-\u3096\u30A1-\u30FA]/.test(s)) return null;
     if (/[\u0400-\u04FF]/.test(s)) return "ru";
@@ -1915,7 +1943,7 @@
     for (var k = 0; k < all.length; k++) {
       // 单个字母的英语常用词（`A shujaa` 里的 A）不算"英语证据"：外语里也有冠词/呼语
       if (all[k].length === 1) continue;
-      if (EN_COMMON[all[k]]) return false;
+      if (own(EN_COMMON, all[k])) return false;
       words.push(all[k]);
     }
     if (!words.length) return false;
@@ -1957,7 +1985,8 @@
     var f = foldAscii(b);
     if (f && f !== b) keys.push(f);
     for (var i = 0; i < keys.length; i++) {
-      if (table[keys[i]]) return table[keys[i]];
+      // 只认表自己的键：`word("de","constructor")` 不能沿原型链取到函数
+      if (own(table, keys[i])) return table[keys[i]];
     }
     return null;
   }
@@ -2004,7 +2033,7 @@
     var t = HOMOGRAPH[id];
     if (!t) return false;
     if (id === "la") return true; // 拉丁语：拼读规则和英语差得太远，整行走规则
-    return t[key] === 1;
+    return own(t, key) && t[key] === 1;
   }
 
   // ============================================================ 对外

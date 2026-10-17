@@ -29,7 +29,7 @@ jobs:
           node-version: "22.22.2"
 
       - name: 安装依赖
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: 打印环境
         run: node -v && npm -v
@@ -67,7 +67,7 @@ jobs:
           node-version: "22.22.2"
 
       - name: 安装依赖
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: 打包
         run: npm run build

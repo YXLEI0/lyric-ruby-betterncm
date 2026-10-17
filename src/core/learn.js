@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 西文字母片假名注音 (western-katakana) —— 「学会的词」：把大模型给过的答案沉淀成离线词条
  *
  * 为什么要有这一份：大模型那层的缓存是按「词 + 所在那一句」存的 ——
@@ -202,7 +202,13 @@
       return n;
     }
 
-    /** 超上限就丢"最久没用过"的（按 at 升序丢，够用且实现简单） */
+    /**
+     * 超上限就丢"最久没用过"的（按 at 升序丢，够用且实现简单）。
+     *
+     * 两个上限分开收拾：words 是"已学会的词"，seen 是"只听过一次的待定词"。
+     * 后者单独一个 trimSeen()：note() 每记一笔都要过一遍，
+     * 不能顺手也去给 words 排序（那是 O(n log n) 的无谓开销）。
+     */
     function trim() {
       var over = countWords() - maxWords;
       if (over > 0) {
@@ -213,15 +219,19 @@
         });
         for (var i = 0; i < over && i < keys.length; i++) delete words[keys[i]];
       }
+      trimSeen();
+    }
+
+    /** 待定表也守上限：一次会话里能听到多少个"只出现一次"的词是没有边界的 */
+    function trimSeen() {
+      if (countSeen() <= MAX_SEEN) return;
       var overSeen = countSeen() - MAX_SEEN;
-      if (overSeen > 0) {
-        var skeys = [];
-        for (var k2 in seen) if (Object.prototype.hasOwnProperty.call(seen, k2)) skeys.push(k2);
-        skeys.sort(function (a, b) {
-          return (seen[a].at || 0) - (seen[b].at || 0);
-        });
-        for (var j = 0; j < overSeen && j < skeys.length; j++) delete seen[skeys[j]];
-      }
+      var skeys = [];
+      for (var k2 in seen) if (Object.prototype.hasOwnProperty.call(seen, k2)) skeys.push(k2);
+      skeys.sort(function (a, b) {
+        return (seen[a].at || 0) - (seen[b].at || 0);
+      });
+      for (var j = 0; j < overSeen && j < skeys.length; j++) delete seen[skeys[j]];
     }
 
     /** 已经学会的读音（没有就 null）。用上了就记一笔"本次省下的请求" */
@@ -294,12 +304,14 @@
       var s = seen[w];
       if (!s) {
         seen[w] = { k: kana, n: 1, l: l, at: nowMs() };
+        trimSeen();
         schedule();
         return "pending";
       }
       if (s.k !== kana) {
         // 两句给了不同读音：靠语境，别学
         seen[w] = { k: kana, n: 1, l: l, at: nowMs() };
+        trimSeen();
         schedule();
         return "pending";
       }

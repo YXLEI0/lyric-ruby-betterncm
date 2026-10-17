@@ -16,7 +16,7 @@
 自己打包:
 
 ```bash
-npm install
+npm ci                   # 依赖按 package-lock.json 装
 npm run build            # 产出 builds/western-katakana.plugin
 npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 ```
@@ -25,7 +25,7 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 
 ## 说明
 
-- 读音按五层顺序取: 离线词典 (6892 条) > 日式罗马音 > 大模型校正 > 免费接口 > 英文音译规则。顺序可以在设置面板里上下调
+- 读音按五层顺序取: 离线词典 (6894 条) > 日式罗马音 > 大模型校正 > 免费接口 > 英文音译规则。顺序可以在设置面板里上下调
 - 推荐填一个大模型 API Key (默认 DeepSeek, 任何 OpenAI 兼容接口都行), 只存在本机 localStorage。留空则这一层不工作, 自动退回免费接口。按「词 + 它所在的那句歌词」缓存, 所以同一个词在不同句子里会分别判断
 - 模型答过两次、读音一致的词会自动沉淀成离线词条, 以后不再问模型; 面板「操作 → 导出词库素材」可以把攒下来的词筛进离线词典 (`npm run promote:learned`)
 - 记号 (`D/N/A` / `R&B` / `X-Y` / `M・I・D・I`) 按字母名逐字母读, 而且一个字母一个注音 (`&` 读 アンド, 分隔符不发音); 紧贴假名的缩写按字母名 (`ATフィールド` → エーティー), 单个希腊字母读字母名 (`Ω` 按单位读 オーム); 颜文字里的字符不标 (`(#^ω^)`); 缩写 (`you're` / `I'll` / `don't`) 拆成"词干 + 尾巴"; 不发音字母也认 (`knock` ノック, `climb` クライム, `subtle` サトル)

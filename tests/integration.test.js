@@ -3650,6 +3650,34 @@ test("俄语歌词（用例 6）：西里尔字母也注音（词典和罗马音
   assert.strictEqual(l1.get("Анастасия"), "アナスタシヤ");
 });
 
+test("日语行里夹的西里尔 / 希腊词也要注音（假名优先不该把这两个字母表一起挡掉）", async () => {
+  /*
+   * `detect()` 的第一条是"有假名就不判外语"（为了 Ω 不把整行读成希腊语）。
+   * 那条把 `Отчизну を歌う` 这种行也挡了：行里有假名 -> 判不出语种 ->
+   * 西里尔/希腊字母在词典层和罗马音层都读不了 -> 那个词一个注音都没有。
+   * 词上带着 script，读音层应当按它兜一下。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>Отчизну を歌う</p></li>
+  <li class="line"><p>Θάλασσα の夜</p></li>
+  <li class="line"><p>無限増幅回路（Ω）</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(400);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+
+  const l0 = linePairs(ps, 0);
+  assert.strictEqual(l0.get("Отчизну"), "オチズヌ", "假名行里的俄语词要有读音：" + JSON.stringify([...l0]));
+  const l1 = linePairs(ps, 1);
+  assert.strictEqual(l1.get("Θάλασσα"), "サラッサ", "假名行里的希腊语词要有读音：" + JSON.stringify([...l1]));
+  // 单字母 Ω 照旧是单位 オーム，不能因为上面这条兜底变成希腊语引擎的 オ
+  const l2 = linePairs(ps, 2);
+  assert.strictEqual(l2.get("Ω"), "オーム", "Ω 仍然按单位读：" + JSON.stringify([...l2]));
+});
+
 test("非日语歌是否注音可以开关（默认注音，关掉只标日语歌）", async () => {
   // 非日语歌可选是否标注。判据看整首：整首歌词里一个假名都没有
   // （纯英文歌 / 法语歌 / 中文歌）才算非日语歌 —— 所以日语歌里的纯英文行不会被误伤。

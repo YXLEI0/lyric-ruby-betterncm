@@ -1,4 +1,4 @@
-﻿/*
+/*
  * 西文字母片假名注音 (western-katakana) —— 读音引擎
  *
  * 把歌词里的拉丁字母转成片假名读音。两条完全不同的路子：
@@ -27,6 +27,17 @@
 
   // 拉丁字母，只有它才算「词」
   var RE_LATIN = /[A-Za-z]/;
+
+  /*
+   * 查表的统一入口：只认对象自己的键。
+   *
+   * 所有词表都是对象字面量，`tbl[key]` 查不到时会顺着原型链往上找 ——
+   * 歌词里出现 `constructor` / `valueOf` / `toString` 这种词时，
+   * `tbl` 命中的是 Object.prototype 上的函数，读音就变成了函数源码。
+   */
+  function own(tbl, key) {
+    return !!tbl && Object.prototype.hasOwnProperty.call(tbl, key);
+  }
 
   // 英文音译里「辅音 + l/r」的连缀折法。第一项是「前面的辅音怎么读」，
   // 第二项是「l/r 那截跟着元音走」。
@@ -886,6 +897,39 @@
     z: "\u30BA", // ズ
   };
 
+  /*
+   * 词尾「元音 + 单辅音 + e」（magic e）：元音读长音，词尾那个 e 不发音。
+   *
+   * 这是英语拼写里最稳的一条：bake / kite / note / cube / grape / time 都靠它
+   * 才能读对。之前只有 isLongVowelBeforeE 一处「补 ー」的意图，而且因为
+   * `ke` 在 7b 就被 EN_PAIR 整块吃掉，那条路一次都没走到过（bake 读成 バケ）。
+   *
+   * vowel 是「前面那一拍配哪一段」，tail 是接在后面的那半拍：
+   *   a_e -> エ段 + イ（ベイク）、i_e -> ア段 + イ（カイト）、
+   *   o_e -> オ段 + ー（ノート）、u_e -> ウ段 + ー（クーブ）。
+   * e_e（these）不在这里处理：那条读法更没规律，留给词典。
+   *
+   * 词尾那个辅音用 EN_FINAL_CONSONANT 收尾（time 的 m -> ム），
+   * 所以 time 走规则层也能得 タイム，不用等词典。
+   */
+  var MAGIC_E = {
+    a: { vowel: "e", tail: "\u30A4" }, // ベイ + ク
+    i: { vowel: "a", tail: "\u30A4" }, // カイ + ト
+    o: { vowel: "o", tail: "\u30FC" }, // ノー + ト
+    u: { vowel: "u", tail: "\u30FC" }, // クー + ブ
+  };
+
+  /*
+   * magic e 不适用的小词：这些词里的元音是短音，补长音会读错
+   * （have ハブ、love ラブ、come カム、lose ルーズ…）。
+   * 它们大多在离线词典里，这里兜的是"词典漏了、走到规则层"那种情况。
+   */
+  var MAGIC_E_STOP = {
+    have: true, give: true, live: true, love: true, dove: true, glove: true, shove: true,
+    come: true, some: true, none: true, done: true, gone: true, one: true, above: true,
+    move: true, prove: true, lose: true, whose: true, shoe: true, canoe: true, there: true,
+  };
+
   /** 单个元音字母的读音。词尾的 e 在调用处先处理掉，不会走到这里。 */
   function enVowel(ch) {
     if (EN_VOWEL[ch] !== undefined) return EN_VOWEL[ch];
@@ -1355,6 +1399,30 @@
         }
       }
 
+      // ---- 7a.5 词尾「元音 + 单辅音 + e」（magic e，见 MAGIC_E）：
+      //          元音读长音、词尾 e 不发音，整个「元音 + 辅音 + e」一次收掉。
+      //          bake -> ベイク、kite -> カイト、note -> ノート、time -> タイム。
+      //          必须排在 7b 前面：`ke` / `me` / `te` 会被 EN_PAIR 整块吃掉，
+      //          再往后就只剩一个没处理的 e 了（老版本 bake 读成 バケ）。
+      if (
+        rest === 4 &&
+        charIsVowel(nxt) &&
+        own(MAGIC_E, nxt) &&
+        word.charAt(i + 3) === "e" &&
+        // 词尾是 -re 的不走这条：r 化元音有自己的一套（care ケア、fire ファイア）
+        word.charAt(i + 2) !== "r" &&
+        !own(MAGIC_E_STOP, word)
+      ) {
+        var magicCoda = EN_FINAL_CONSONANT[word.charAt(i + 2)];
+        // cave 的 c 是硬音 /k/：软音那一行（セ）在这里是错的
+        var magicHead = enConsonantVowel(ch === "c" && "aou".indexOf(nxt) >= 0 ? "k" : ch, MAGIC_E[nxt].vowel);
+        if (magicHead && magicCoda !== undefined) {
+          kana += magicHead + MAGIC_E[nxt].tail + magicCoda;
+          i += 4;
+          continue;
+        }
+      }
+
       // ---- 7b. 辅音 + 元音两字母块（参照 sljfaq 的 Vowels and diphthongs 表）
       if (rest >= 2) {
         pair = word.substr(i, 2);
@@ -1391,6 +1459,16 @@
       ) {
         kana += "\u30C3" + (EN_CONSONANT[ch] || "");
         i += 2;
+        continue;
+      }
+
+      // ---- 8a.5 双写 m / n：只出一拍 ン，第二个 m/n 起下一拍。
+      //          hammer -> ハンマー、runner -> ルンナー、beginner -> ベギンナー。
+      //          8b 用 nxt !== ch 排掉双写，而促音表里又没有 m / n，
+      //          结果两个鼻音各补一个元音（ハママー / ルナナー）。
+      if (rest >= 3 && (ch === "m" || ch === "n") && nxt === ch && charIsVowel(word.charAt(i + 2))) {
+        kana += EN_NASAL;
+        i++;
         continue;
       }
 
@@ -1490,10 +1568,53 @@
    * （不在这里查 dict/online，那是 createReader 的活；这两个函数是纯函数，
    *   方便单独测、也方便上层换词表。）
    */
+  /*
+   * 词内分隔符（连字符 / 撇号）把词切成几段 —— `x-ray`、`rock'n'roll`、`U-turn`。
+   *
+   * 分词层刻意把它们当一个词（见 letters.js 的 splitDashes：有单字母段就不拆），
+   * 读音层不能把分隔符当噪声删掉再拼：那样 `x-ray` 会变成 `xray` 读成 クスライ。
+   * 单字母那一段按字母名读（x -> エックス），其余各段各自走规则再拼起来。
+   * 缩写（don't / we're / I'll）不走这条：那条路由 splitContraction 负责。
+   */
+  var RE_SEGMENT = /[-'\u2019\u02BC\uFF07]/;
+  var RE_CONTRACTION_TAIL_WORD = /['\u2019\u02BC\uFF07](?:t|s|re|ll|ve|d|m)$/i;
+
   function englishToKatakana(s) {
     if (typeof s !== "string") return { kana: "\u30A2", confident: false }; // ア
-    // 只留下拉丁字母：连字符、撇号、数字都当作词内噪声去掉
-    var word = s.toLowerCase().replace(/[^a-z]/g, "");
+    var lowerRaw = s.toLowerCase();
+    if (RE_SEGMENT.test(lowerRaw) && !RE_CONTRACTION_TAIL_WORD.test(lowerRaw)) {
+      var parts = lowerRaw.split(/[-'\u2019\u02BC\uFF07]+/);
+      var segKana = "";
+      var segOk = true;
+      var segAny = false;
+      for (var sp = 0; sp < parts.length; sp++) {
+        var seg = parts[sp];
+        if (!seg) continue;
+        segAny = true;
+        if (seg.length === 1) {
+          /*
+           * 单字母那一段：在词首 / 词尾按字母名读（x-ray 的 x エックス、
+           * U-turn 的 u ユー），夹在中间的是前一拍的韵尾（rock'n'roll 的 n ン）。
+           * 都用字母名会把 `rock'n'roll` 读成 ロックエヌロール。
+           */
+          var oneKana = null;
+          if (sp > 0 && sp < parts.length - 1 && own(EN_FINAL_CONSONANT, seg)) {
+            oneKana = EN_FINAL_CONSONANT[seg];
+          } else if (own(LETTER_KANA, seg)) {
+            oneKana = LETTER_KANA[seg];
+          }
+          if (oneKana) segKana += oneKana;
+          else segOk = false;
+          continue;
+        }
+        var sub = englishToKatakana(seg);
+        segKana += sub.kana;
+        if (!sub.confident) segOk = false;
+      }
+      if (segAny && segKana) return { kana: segKana, confident: segOk };
+    }
+    // 只留下拉丁字母：剩下的（数字等）都当作词内噪声去掉
+    var word = lowerRaw.replace(/[^a-z]/g, "");
     if (!word) return { kana: "\u30A2", confident: false }; // ア
 
     // 超长词（URL、ID 之类混进歌词）先截断，免得规则在几千个字符上空转
@@ -1502,10 +1623,10 @@
     // 双元音连在一起、或超过 4 个辅音连缀：这两类拼写规则最靠不住，先标上
     var confident = !(hasVowelRun(word) || hasLongConsonantRun(word));
 
-    if (ENGLISH_EXCEPTIONS[word] !== undefined) {
+    if (own(ENGLISH_EXCEPTIONS, word)) {
       return { kana: ENGLISH_EXCEPTIONS[word], confident: true };
     }
-    if (ENGLISH_LEXICON[word] !== undefined) {
+    if (own(ENGLISH_LEXICON, word)) {
       return { kana: ENGLISH_LEXICON[word], confident: true };
     }
 
@@ -1647,6 +1768,17 @@
   var RE_CONTRACTION = /^([A-Za-z]+)['\u2019\u02BC\uFF07](s|re|ll|d|ve|m)$/i;
 
   /**
+   * 查表用的键：把弯撇号 / 全角撇号折成 ASCII。
+   *
+   * 表里的键（`don't` / `we'll`）都是 ASCII 那一版，而歌词里的撇号经常是
+   * 排版用的 `’`（U+2019）。不折的话 `don’t` 查不到任何一条，
+   * 只能退回「词干 + 尾巴」硬拼：do + nt -> ドゥーント（该是 ドント）。
+   */
+  function contractionKey(lower) {
+    return String(lower).replace(/[\u2019\u02BC\uFF07]/g, "'");
+  }
+
+  /**
    * 拆一个缩写。不是缩写返回 null，否则返回 { base, suffix, fixed }：
    *   base   词干（拿去走正常读音路径）
    *   suffix 尾巴（s / re / ll / d / ve / m / nt）
@@ -1659,13 +1791,15 @@
       return null;
     }
     var lower = s.toLowerCase();
+    // 查表用折过撇号的键（见 contractionKey）
+    var key = contractionKey(lower);
     // 先把"词干 + 尾巴"拆出来（拆得出来就带上整词表里的例外读音）
     var m = RE_CONTRACTION_NT.exec(s);
-    if (m) return { base: m[1], suffix: "nt", fixed: EN_CONTRACTIONS[lower] || null };
+    if (m) return { base: m[1], suffix: "nt", fixed: own(EN_CONTRACTIONS, key) ? EN_CONTRACTIONS[key] : null };
     m = RE_CONTRACTION.exec(s);
-    if (m) return { base: m[1], suffix: m[2].toLowerCase(), fixed: EN_CONTRACTIONS[lower] || null };
+    if (m) return { base: m[1], suffix: m[2].toLowerCase(), fixed: own(EN_CONTRACTIONS, key) ? EN_CONTRACTIONS[key] : null };
     // 拆不出来的（y'all 这类）只能靠整词表
-    if (EN_CONTRACTIONS[lower]) return { base: null, suffix: null, fixed: EN_CONTRACTIONS[lower] };
+    if (own(EN_CONTRACTIONS, key)) return { base: null, suffix: null, fixed: EN_CONTRACTIONS[key] };
     return null;
   }
 
@@ -1770,7 +1904,17 @@
     var s = raw.trim();
     if (s.length < 2 || s.length > 6) return null;
     if (!/^[A-Z]+$/.test(s)) return null;
-    if (!/[AEIOUY]/.test(s)) return lettersToKatakana(s.toLowerCase());
+    var low = s.toLowerCase();
+    /*
+     * 词典 / 英文常用词表里有的，一律交给那两层：缩写判据宁可漏，不可抢。
+     * 这一判必须在"有没有元音"那条前面 —— 否则 `CM`（词典里是 シーエム）会被
+     * 这条固定阶段先接走，来源从 dict 变成 letters（读音一样，但"谁说了算"
+     * 变了，在线层是否还能覆盖也跟着变）。
+     */
+    if (own(dict, low)) return null;
+    // 英文常用词表里有的（MY / WHY / SKY / FLY…）：真词，不能念字母
+    if (own(enWords, low)) return null;
+    if (!/[AEIOUY]/.test(s)) return lettersToKatakana(low);
     /*
      * 有元音的这一支只收 2~3 个字母：`SOS` / `QTE` / `YY` 是缩写，
      * 而 4 个字母以上、又带元音的（`DIVA` / `QUIX` / `KISS`）基本都是词或名字，
@@ -1778,10 +1922,6 @@
      * ディーアイブイエー，正确是 ディーヴァ。
      */
     if (s.length > 3) return null;
-    var low = s.toLowerCase();
-    if (dict && dict[low] !== undefined) return null;
-    // 英文常用词表里有的（MY / WHY / SKY / FLY…）：真词，不能念字母
-    if (enWords && enWords[low]) return null;
     if (romajiToKatakana(low)) return null;
     return lettersToKatakana(low);
   }
@@ -2024,7 +2164,7 @@
         // 正好命中词典里的 DJ -> ディージェイ（这类怪音）。
         for (i = 0; i < c.keys.length; i++) {
           key = c.keys[i];
-          if (dict[key] !== undefined && dict[key]) {
+          if (own(dict, key) && dict[key]) {
             trace("dict 命中：" + key);
             return { kana: dict[key], source: "dict", confident: true };
           }
@@ -2032,22 +2172,10 @@
         // 联网学到的读音排在词典之后：词典是人工核过的，联网结果可能会漂
         for (i = 0; i < c.keys.length; i++) {
           key = c.keys[i];
-          if (online[key] !== undefined) {
+          if (own(online, key)) {
             trace("online 命中：" + key);
             return { kana: online[key], source: "online", confident: true };
           }
-        }
-        /*
-         * 全大写的缩写（LDK / NHK / CD / TV / BGM / RPG / DVD …，以及 SOS / QTE / YY
-         * 这种有元音但"既不是词、也切不成罗马音"的）：按字母名逐个念。
-         * 挂在词典这一层里（而不是单独一层）：它和词典一样是"查表就有确定答案"，
-         * 而且必须排在规则层前面 —— 规则会把它当词拼（LDK -> ラダク、TV -> タブ）。
-         * 词典里已有的（CM -> シーエム、DJ -> ディージェイ）在上面就返回了，不受影响。
-         */
-        var spelledAcronym = spellOutAcronym(c.raw, dict, enWords);
-        if (spelledAcronym) {
-          trace("letters（缩写）命中：" + c.raw + " -> " + spelledAcronym);
-          return { kana: spelledAcronym, source: "letters", confident: true };
         }
         return null;
       },
@@ -2096,7 +2224,7 @@
          * 会把这个答案当成"垫底的那种"，让在线层来仲裁（结果没回来之前先显示它，
          * 标记成暂定），而不是就此拍板。
          */
-        if (res.confident && enWords && enWords[c.shown]) {
+        if (res.confident && own(enWords, c.shown)) {
           trace("romaji 可疑（英文词表里有）：" + c.shown + " -> " + res.kana);
           res.confident = false;
         }
@@ -2225,6 +2353,23 @@
           trace("romaji（长音符）命中：" + fold.text + " -> " + macronKana);
           return { kana: macronKana, source: "romaji", confident: true };
         }
+      }
+
+      /*
+       * ①.7 全大写的缩写（LDK / NHK / CD / TV / BGM / RPG / DVD，以及 SOS / QTE / YY
+       *      这种有元音但"既不是词、也切不成罗马音"的）：按字母名逐个念。
+       *
+       *      这是"这个词该怎么断"的形态判定，和记号 / 缩写尾巴同一档，所以不参与
+       *      层序 —— 它原来挂在词典层里，把「英文音译规则」拖到词典前面就会被规则
+       *      抢先拼成词（LDK -> ラダク、SOS -> ソス）。
+       *      spellOutAcronym 自己会挡住词典里有的（CM / DJ）、英文常用词表里的
+       *      （MY / WHY / SKY）和能切成罗马音的（SORA / KIMI），所以放在可排序层
+       *      前面不会抢走真词。
+       */
+      var acronym = spellOutAcronym(raw, dict, enWords);
+      if (acronym) {
+        trace("letters（缩写）命中：" + raw + " -> " + acronym);
+        return { kana: acronym, source: "letters", confident: true };
       }
 
       // ② 可排序层：按上层给的顺序逐个试，谁先给得出答案就算谁的

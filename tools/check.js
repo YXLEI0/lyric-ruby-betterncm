@@ -134,6 +134,129 @@ for (const f of jsFiles) {
 }
 if (failures === 0) ok(`${jsFiles.length} 个 JS 文件语法正常`);
 
+/*
+ * src/ 必须能在网易云内置的老 CEF 里跑：只许 ES5（var / function / 不用模板字符串）。
+ * vm.Script 只保证"Node 能编译"，所以这里单独扫一遍 —— 不然 `const f = () => 1`
+ * 会一路通过 check、被打进包，真机上才炸。
+ *
+ * 做法：先把注释和字符串抹掉（保留换行，行号对得上），再看剩下的代码里有没有
+ * ES6+ 的记号。反引号本身就是违规信号，所以扫到就直接记一笔再跳过整段。
+ */
+function es5Violations(src) {
+  const marks = [];
+  let code = "";
+  let i = 0;
+  const n = src.length;
+  let line = 1;
+  while (i < n) {
+    const ch = src.charAt(i);
+    if (ch === "\n") {
+      code += "\n";
+      line++;
+      i++;
+      continue;
+    }
+    if (ch === "/" && src.charAt(i + 1) === "/") {
+      while (i < n && src.charAt(i) !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && src.charAt(i + 1) === "*") {
+      i += 2;
+      while (i < n && !(src.charAt(i) === "*" && src.charAt(i + 1) === "/")) {
+        if (src.charAt(i) === "\n") {
+          code += "\n";
+          line++;
+        }
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      i++;
+      while (i < n) {
+        const c = src.charAt(i);
+        if (c === "\\") {
+          i += 2;
+          continue;
+        }
+        if (c === "\n") {
+          code += "\n";
+          line++;
+          i++;
+          break;
+        }
+        if (c === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      code += " ";
+      continue;
+    }
+    if (ch === "`") {
+      const at = line;
+      i++;
+      while (i < n) {
+        const c = src.charAt(i);
+        if (c === "\\") {
+          i += 2;
+          continue;
+        }
+        if (c === "`") {
+          i++;
+          break;
+        }
+        if (c === "\n") {
+          code += "\n";
+          line++;
+        }
+        i++;
+      }
+      code += " ";
+      yieldMark(at, "模板字符串");
+      continue;
+    }
+    code += ch;
+    i++;
+  }
+  function yieldMark(lineNo, what) {
+    marks.push({ line: lineNo, what: what });
+  }
+  function scan(re, what) {
+    const reG = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m;
+    while ((m = reG.exec(code))) {
+      const lineNo = code.slice(0, m.index).split("\n").length;
+      marks.push({ line: lineNo, what: what + "：" + m[0].trim().slice(0, 40) });
+      if (reG.lastIndex === m.index) reG.lastIndex++;
+    }
+  }
+  scan(/\b(?:const|let)\b/, "ES6 声明");
+  scan(/=>/, "箭头函数");
+  scan(/\bclass\s+[A-Za-z_$]/, "class");
+  scan(/\.\.\./, "展开/剩余参数");
+  scan(/\basync\b|\bawait\b/, "async/await");
+  scan(/function\s*\*/, "生成器");
+  return marks;
+}
+
+const es5Bad = [];
+for (const f of walk(SRC).filter((x) => x.endsWith(".js"))) {
+  const rel = path.relative(ROOT, f);
+  for (const v of es5Violations(fs.readFileSync(f, "utf8"))) {
+    es5Bad.push(`${rel}:${v.line} 用了 ${v.what}`);
+  }
+}
+if (es5Bad.length) {
+  for (const b of es5Bad.slice(0, 12)) fail("src 必须是 ES5（老 CEF 跑不了）：" + b);
+  if (es5Bad.length > 12) fail(`还有 ${es5Bad.length - 12} 处 ES6+ 写法`);
+} else {
+  ok(`${walk(SRC).filter((x) => x.endsWith(".js")).length} 个 src 文件都是 ES5 写法`);
+}
+
 // ---------------------------------------------------------------- 2. manifest
 
 console.log("[2/7] manifest.json");
@@ -163,21 +286,8 @@ if (manifest) {
 // ---------------------------------------------------------------- 3. 注入清单
 
 console.log("[3/7] 注入清单");
-const WANT_ORDER = [
-  "core/letters.js",
-  "core/dict.js",
-  "core/enwords.js",
-  "core/reading.js",
-  "core/loan.js",
-  "core/songs.js",
-  "core/langs.js",
-  "core/correct.js",
-  "core/llm.js",
-  "core/usage.js",
-  "core/learn.js",
-  "core/annotate.js",
-  "main.js",
-];
+// 顺序表和 build 共用一份（tools/inject-order.js），别在这里再抄一遍
+const { WANT_ORDER } = require("./inject-order");
 if (manifest && manifest.injects && manifest.injects.Main) {
   const files = manifest.injects.Main.map((i) => i.file);
   for (const f of files) {
@@ -332,6 +442,40 @@ console.log("[4.7/7] 整首专属读音");
       } else {
         const mod = require(SONGS);
         ok("整首专属读音与手工表 + tools/vendor/sekai/musics.json 一致（" + mod.count + " 条）");
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- 4.8 沉淀表 -> 词典
+//
+// `promote:learned` 重写 tools/seed-words-learned.js、`build:dict` 把它并进词典 ——
+// 两步之间断了（改了素材没重新构建、或者构建失败）不会有人报错，词就那么静默丢了。
+// 这里按"沉淀表里的每一条都应该出现在词典里"对一遍。
+
+console.log("[4.8/7] 沉淀表与词典一致");
+{
+  const SEED = path.join(__dirname, "seed-words-learned.js");
+  if (!fs.existsSync(SEED)) {
+    warn("没有 tools/seed-words-learned.js（还没沉淀过任何词，正常）");
+  } else if (!dict) {
+    warn("词典没加载成功，跳过沉淀表比对");
+  } else {
+    let rows = [];
+    try {
+      rows = require(SEED);
+    } catch (e) {
+      fail("seed-words-learned.js 加载失败：" + e.message);
+    }
+    if (rows.length) {
+      const missingSeed = rows.filter((r) => !r || dict.words[r.en] === undefined);
+      if (missingSeed.length) {
+        fail(
+          `${missingSeed.length} 条沉淀词不在词典里（promote:learned 之后忘了 build:dict？）：` +
+            missingSeed.slice(0, 5).map((m) => (m && m.en) || "?").join(", ")
+        );
+      } else {
+        ok(`沉淀表 ${rows.length} 条都在词典里`);
       }
     }
   }

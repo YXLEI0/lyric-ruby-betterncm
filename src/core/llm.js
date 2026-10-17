@@ -739,6 +739,22 @@
         if (/^\d+$/.test(k)) byIndex[k] = v;
         else byWordKey[k.toLowerCase().replace(/[^a-z]/g, "")] = v;
       }
+      /*
+       * 形状兜底：回的是合法 JSON、但整体多包了一层（`{"readings":{"1":"ハロー"}}`）
+       * 时，上面两张表都建不出来，这一批每个词都会被判成"模型没给"并**永久**记成
+       * miss（还落盘）。那是格式违约，不是"模型明确给不出" —— 当成失败抛出去，
+       * 由外层 fail() 退避重试，别把词永久钉在规则层。
+       */
+      var matchedAny = false;
+      for (var mi = 0; mi < batch.length; mi++) {
+        if (byIndex[String(mi + 1)] !== undefined || byWordKey[batch[mi].word] !== undefined) {
+          matchedAny = true;
+          break;
+        }
+      }
+      // 空对象是"模型对这批所有词都给不出"，照旧记 miss（有测试守着落盘那条）。
+      // 有键却一个都对不上，才是形状不对。
+      if (!matchedAny && Object.keys(obj).length > 0) throw new Error("响应形状异常（既没有条目下标也没有词键）");
       for (var i = 0; i < batch.length; i++) {
         var item = batch[i];
         var v2 = byIndex[String(i + 1)];

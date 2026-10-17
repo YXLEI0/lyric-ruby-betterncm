@@ -14,10 +14,42 @@
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const { execSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, "src");
 const OUT_DIR = path.join(ROOT, "builds");
+
+/*
+ * 打包用的时间戳（可重复构建）。
+ *
+ * zip 的每个条目都要带一个 DOS 时间。以前取的是文件的 mtime —— 那是 checkout
+ * 的时刻，同一份源码在两台机器、两次 clone 上就打出两个不同字节的包，
+ * Release 附件也就没法用 sha256 复核（本仓库真踩过：只改 TZ 重打，hash 就变了）。
+ *
+ * 现在的取法，优先级从高到低：
+ *   1. 环境变量 SOURCE_DATE_EPOCH（秒，可重复构建的通用约定）；
+ *   2. git HEAD 的提交时间 —— CI 和本地 checkout 都能算出一致的值；
+ *   3. 兜底 1980-01-01（zip 能表示的最早时间）。
+ * 换算和写入都走 UTC（见 dosDateTime），所以时区不影响结果。
+ */
+function buildEpoch() {
+  const env = process.env.SOURCE_DATE_EPOCH;
+  if (env && /^\d+$/.test(env)) return Number(env) * 1000;
+  try {
+    const out = execSync("git log -1 --format=%ct", {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (/^\d+$/.test(out)) return Number(out) * 1000;
+  } catch (e) {
+    /* 不是 git checkout（比如从 zip 解出来的源码）：用兜底时间 */
+  }
+  return Date.UTC(1980, 0, 1);
+}
+
+const BUILD_DATE = new Date(buildEpoch());
 
 /*
  * 打进包的文件清单从 manifest.json 推出来，不再手写第二份。
@@ -55,10 +87,11 @@ function crc32(buf) {
 }
 
 function dosDateTime(date) {
-  const year = Math.max(1980, date.getFullYear());
+  // 一律按 UTC 取字段：本地时区会让同一份源码打出不同的包（见 BUILD_DATE 的说明）
+  const year = Math.max(1980, date.getUTCFullYear());
   return {
-    time: (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1),
-    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    time: (date.getUTCHours() << 11) | (date.getUTCMinutes() << 5) | (date.getUTCSeconds() >> 1),
+    date: ((year - 1980) << 9) | ((date.getUTCMonth() + 1) << 5) | date.getUTCDate(),
   };
 }
 
@@ -132,7 +165,7 @@ function collect() {
   const entries = [];
   const add = (fullPath, name) => {
     if (!fs.existsSync(fullPath)) throw new Error(`缺少 src/${name}（先跑 npm run build:dict / build:preview 生成）`);
-    entries.push({ name, data: fs.readFileSync(fullPath), mtime: fs.statSync(fullPath).mtime });
+    entries.push({ name, data: fs.readFileSync(fullPath), mtime: BUILD_DATE });
   };
   for (const f of SRC_FILES) add(path.join(SRC, f), f);
   return entries;
@@ -160,8 +193,7 @@ function selfCheck(entries) {
   if (missingCore.length) throw new Error(`src/core/ 缺少：${missingCore.join(", ")}`);
 
   // 3. manifest 的结构与 injects 顺序
-  const mf = JSON.parse(fs.readFileSync(path.join(SRC, "manifest.json"), "utf8"));
-  if (mf.manifest_version !== 1) throw new Error("manifest_version 必须是 1");
+  const mf = JSON.parse(fs.readFileSync(path.join(SRC, "manifest.json"), "utf8"));  if (mf.manifest_version !== 1) throw new Error("manifest_version 必须是 1");
   for (const field of ["name", "slug", "version", "author"]) {
     if (!mf[field]) throw new Error(`manifest.json 缺 ${field}`);
   }
@@ -176,11 +208,14 @@ function selfCheck(entries) {
     if (!/\.m?js$/.test(f)) throw new Error(`注入文件必须以 .js 结尾：${f}`);
     if (!entries.some((e) => e.name === f)) throw new Error(`manifest 注入的 ${f} 不在包里`);
   }
-  // core 必须按依赖顺序注入：latin -> dict -> reading -> correct -> annotate -> main
-  const wantOrder = ["core/letters.js", "core/dict.js", "core/reading.js", "core/correct.js", "core/annotate.js", "main.js"];
-  const order = injectedFiles.filter((f) => wantOrder.includes(f));
-  if (order.join(",") !== wantOrder.join(","))
-    throw new Error(`injects 顺序不对，应为 ${wantOrder.join(" -> ")}，实际 ${injectedFiles.join(" -> ")}`);
+  /*
+   * 注入顺序：和 check 共用同一份清单（tools/inject-order.js）。
+   * 这里以前只比 6 个文件（letters/dict/reading/correct/annotate/main），
+   * 剩下 7 个放哪都通过 —— 于是 `install:plugin` 能装出 check 会拒绝的包。
+   */
+  const { WANT_ORDER } = require("./inject-order");
+  if (injectedFiles.join(",") !== WANT_ORDER.join(","))
+    throw new Error(`injects 顺序不对，应为 ${WANT_ORDER.join(" -> ")}，实际 ${injectedFiles.join(" -> ")}`);
 
   // 4. 词典非空、且不含明显坏值
   const dictJs = fs.readFileSync(path.join(SRC, "core", "dict.js"), "utf8");

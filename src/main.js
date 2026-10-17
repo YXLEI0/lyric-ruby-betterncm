@@ -43,6 +43,17 @@
 
   // ------------------------------------------------------------ 基础工具
 
+  /*
+   * 查表的统一入口：只认对象自己的键。
+   *
+   * 词表 / 词条都是对象字面量，`tbl[key]` 查不到时会顺着原型链往上找 ——
+   * 歌词里出现 `constructor` / `valueOf` / `toString` 这种词时，命中的是
+   * Object.prototype 上的函数，读出来的就是函数源码。
+   */
+  function own(tbl, key) {
+    return !!tbl && Object.prototype.hasOwnProperty.call(tbl, key);
+  }
+
   function log() {
     var msg = "";
     try {
@@ -104,8 +115,6 @@
     }
   }
 
-  // 改了默认值就 +1：用来把旧版本存下来的设置迁移掉
-  var CONFIG_VERSION = 2;
   var CONFIG_KEY = "western-katakana.config";
 
   var DEFAULTS = {
@@ -284,11 +293,11 @@
         latin++;
         if (/^[a-z]{1,3}$/.test(w0)) short++;
         if (RE_ENGLISH_ONLY.test(w0)) englishOnly = true;
-        if (seen[w0]) continue;
+        if (own(seen, w0)) continue;
         seen[w0] = true;
         var rom = shortRomajiOf(w0);
         if (!rom) continue;
-        var dictKana = dict[w0];
+        var dictKana = own(dict, w0) ? dict[w0] : undefined;
         // 词典里有、而且和罗马音读音不一样 —— 这才是"会读歪"的那种词
         if (dictKana && dictKana !== rom) distinct++;
       }
@@ -354,6 +363,14 @@
     if (state.reader && state.reader.setOrder) state.reader.setOrder(syncLayerOrder());
   }
 
+  /*
+   * 读配置：先把默认值铺一遍，再用存下来的值覆盖同名的键。
+   *
+   * 合并是"按 DEFAULTS 的键白名单"做的，所以不需要版本号也不需要迁移：
+   * 老版本存下来的键只要还在 DEFAULTS 里就继续生效，已经不认识的键自动忽略，
+   * 新加的键（老配置里没有）直接拿默认值。只有一个例外要单独收拾 ——
+   * layerOrder 是数组、还可能被手改坏，见下面 normalizeLayerOrder。
+   */
   function loadConfig() {
     var saved = {};
     try {
@@ -363,10 +380,9 @@
     }
     var cfg = {};
     for (var k in DEFAULTS) cfg[k] = DEFAULTS[k];
-    for (var k2 in saved) if (k2 in DEFAULTS) cfg[k2] = saved[k2];
+    for (var k2 in saved) if (own(DEFAULTS, k2)) cfg[k2] = saved[k2];
     // 层序是数组，且可能被手改坏：当场去重补齐（也顺便复制一份，别改到 DEFAULTS）
     cfg.layerOrder = normalizeLayerOrder(cfg.layerOrder);
-    cfg.configVersion = CONFIG_VERSION;
     return cfg;
   }
 
@@ -594,7 +610,7 @@
       for (var i = 0; i < toks.length; i++) {
         var t = String(toks[i].text);
         if (t.length !== 1) continue;
-        if (!UNIT_SYMBOL[t]) {
+        if (!own(UNIT_SYMBOL, t)) {
           ok = false;
           break;
         }
@@ -1136,7 +1152,7 @@
   /** 这个词是不是"连字符串"里的一节（见 collectLongVowelWords） */
   function isLongVowelWord(word) {
     var w = String(word == null ? "" : word);
-    return !!(state.longWords && state.longWords[w]);
+    return own(state.longWords, w);
   }
 
   /**
@@ -1236,7 +1252,7 @@
     if (new RegExp(esc + tail).test(s)) return true;
     /*
      * 旁边就是打码符号的也算打码（案例 `俺の XXX ! !`）：
-     * `XXX` 后面隔一个空格就是 ``，那一串和 `` 是同一个用法（把脏话抹掉），
+     * `XXX` 后面隔一个空格就是 `****`，那一串和 `****` 是同一个用法（把脏话抹掉），
      * 读成 エックスエックスエックス 反而错 —— 要留白。
      * 判据：这个词后面（可夹空白/引号括号）紧跟两个以上的 `*` / `＊` / `×` / `※`，
      * 或者前面紧挨着这种符号串（`XXX`）。
@@ -1350,7 +1366,7 @@
       var low = w.toLowerCase();
       var dict = typeof WKDict !== "undefined" ? WKDict.words : null;
       var enWords = typeof WKEnWords !== "undefined" ? WKEnWords.words : null;
-      if ((dict && dict[low] !== undefined) || (enWords && enWords[low])) return false;
+      if (own(dict, low) || own(enWords, low)) return false;
     }
     var s = String(line == null ? "" : line);
     if (!s) return false;
@@ -1375,7 +1391,8 @@
      * （第一版就是这么错的）。案例：`半径300mmの体で` 的 `mm` 原来没注音，
      * 那首歌的罗马音行唱的就是 `sa n bya ku mi ri`（ミリ）。
      */
-    var unitWord = UNIT_WORD[String(word).toUpperCase()];
+    var unitKey = String(word).toUpperCase();
+    var unitWord = own(UNIT_WORD, unitKey) ? UNIT_WORD[unitKey] : null;
     if (unitWord && digitBefore(word, line)) {
       return { kana: unitWord, source: "letters", confident: true };
     }
@@ -1405,7 +1422,8 @@
      * `KYO` 是 キョー），连大模型也不该改（来源 `song` 的层序是 -1，在线层不被咨询）。
      */
     if (state.songWords) {
-      var songKana = state.songWords[String(word == null ? "" : word).toLowerCase()];
+      var songKey = String(word == null ? "" : word).toLowerCase();
+      var songKana = own(state.songWords, songKey) ? state.songWords[songKey] : null;
       if (songKana) return { kana: songKana, source: "song", confident: true };
     }
     /*
@@ -1427,7 +1445,7 @@
     ) {
       var emoLow = String(word).toLowerCase();
       var emoKana =
-        EMOTICON_LETTER_KANA[emoLow] ||
+        (own(EMOTICON_LETTER_KANA, emoLow) ? EMOTICON_LETTER_KANA[emoLow] : null) ||
         (typeof WKReading !== "undefined" && WKReading.LETTER_KANA ? WKReading.LETTER_KANA[emoLow] : null);
       if (emoKana) return { kana: emoKana, source: "letters", confident: true };
     }
@@ -1481,7 +1499,7 @@
        * 案例：`VOX AC30W` 里的 `W` 原来一个注音都没有（孤零零一个单字母，
        * 整行又不算"字母串"，就留白了）。
        */
-      if (UNIT_SYMBOL[String(word)] && digitBefore(word, line)) {
+      if (own(UNIT_SYMBOL, String(word)) && digitBefore(word, line)) {
         return { kana: UNIT_SYMBOL[String(word)], source: "letters", confident: true };
       }
       if (line && lineLetterRun(line)) {
@@ -1489,7 +1507,7 @@
          * 整串字母都是单位符号（`（V, W, A）`）→ 读单位名（ボルト・ワット・アンペア）。
          * 要这个；`(A, B)` 那种（串里有非单位字母）仍旧读字母名。
          */
-        if (UNIT_SYMBOL[String(word)] && lineAllUnitSymbols(line)) {
+        if (own(UNIT_SYMBOL, String(word)) && lineAllUnitSymbols(line)) {
           return { kana: UNIT_SYMBOL[String(word)], source: "letters", confident: true };
         }
         var letterKana =
@@ -1541,17 +1559,23 @@
      * `YOU` / `SKY` / `DAY` / `NO` 这些也常写成全大写，那几个要按词读（见 GLUED_ACRONYM 的说明）。
      */
     if (gluedUpperCase(word, line)) {
-      var acr = GLUED_ACRONYM[String(word).toLowerCase()];
+      var acr = own(GLUED_ACRONYM, String(word).toLowerCase()) ? GLUED_ACRONYM[String(word).toLowerCase()] : null;
       if (acr) return { kana: acr, source: "letters", confident: true };
     }
     /*
      * 孤零零一个希腊字母（不在希腊语行上）：读字母名 —— Ω 按日语习惯读 オーム
      * （电阻单位），小写 ω 读 オメガ（见 GREEK_LETTER_KANA 的说明）。
+     *
+     * "在不在希腊语行上"不能只看 lineLang：`無限増幅回路（Ω）` 这种纯汉字行
+     * 一个假名都没有，detect 会判成希腊语（因为有 Ω），于是 Ω 被希腊引擎读成 オ。
+     * 那一行里希腊字母总共就一个，显然不是一句希腊语 —— 整行只有一个希腊字母时，
+     * 一律按字母名 / 单位读。
      */
     var rawLetter = String(word == null ? "" : word);
     if (rawLetter.length === 1 && /[\u0370-\u03FF\u1F00-\u1FFF]/.test(rawLetter)) {
       var letterLang = line ? lineLang(line) : null;
-      if (letterLang !== "el") {
+      var greekCount = line ? (String(line).match(/[\u0370-\u03FF\u1F00-\u1FFF]/g) || []).length : 1;
+      if (letterLang !== "el" || greekCount <= 1) {
         if (rawLetter === "\u03A9" || rawLetter === "\u2126") return { kana: "オーム", source: "letters", confident: true };
         var greekName = GREEK_LETTER_KANA[rawLetter.toLowerCase()];
         if (greekName) return { kana: greekName, source: "letters", confident: true };
@@ -1570,10 +1594,15 @@
      * 缩写里那几个"日语读法不是字母名"的（`LV` レベル）：排在缩写/字母名前。
      * 大小写都收 —— 歌词里 `LV` / `lv` 都是 level。
      */
-    var acronymWord = ACRONYM_WORD[String(word == null ? "" : word).toLowerCase()];
+    var acronymWord = own(ACRONYM_WORD, String(word == null ? "" : word).toLowerCase())
+      ? ACRONYM_WORD[String(word == null ? "" : word).toLowerCase()]
+      : null;
     if (acronymWord) return { kana: acronymWord, source: "dict", confident: true };
     // 打码词（`****ed` → ファックド，按被隐去的原词读）与掩码词（`T○itter` → ツイッター）
-    var maskedKana = CENSORED_WORD_KANA[String(word == null ? "" : word).toLowerCase()] || maskedReading(word);
+    var censoredKana = own(CENSORED_WORD_KANA, String(word == null ? "" : word).toLowerCase())
+      ? CENSORED_WORD_KANA[String(word == null ? "" : word).toLowerCase()]
+      : null;
+    var maskedKana = censoredKana || maskedReading(word);
     if (maskedKana) return { kana: maskedKana, source: "dict", confident: true };
     /*
      * 西里尔全大写缩写逐字母读（`СССР` エスエスエスエル）—— 见 CYRILLIC_LETTER_KANA。
@@ -1611,7 +1640,8 @@
       }
       var cutOff = token.chain === true || DASH_CUT.test(afterCh);
       if (cutOff) {
-        var fragKana = DASH_FRAGMENT_KANA[String(word).toLowerCase()];
+        var fragLow = String(word).toLowerCase();
+        var fragKana = own(DASH_FRAGMENT_KANA, fragLow) ? DASH_FRAGMENT_KANA[fragLow] : null;
         if (fragKana) return { kana: fragKana, source: "dict", confident: true };
       }
     }
@@ -1623,7 +1653,7 @@
      * 判据三条：这个词在表里、行里有个词以同样的字母结尾（deny）、而且它在行里出现了
      * 两次以上（重复片段）。表外的碎片一律不动，免得把正常的短词读歪。
      */
-    if (ECHO_FRAGMENT_KANA[String(word == null ? "" : word)]) {
+    if (own(ECHO_FRAGMENT_KANA, String(word == null ? "" : word))) {
       if (echoFragment(word, line)) return { kana: ECHO_FRAGMENT_KANA[String(word)], source: "dict", confident: true };
     }
     /*
@@ -1691,7 +1721,7 @@
      */
     if ((!line || !RE_KANA_ANY.test(String(line))) && !(line && lineLooksRomaji(line))) {
       var capsWord = String(word == null ? "" : word);
-      if (/^[A-Z]{2,4}$/.test(capsWord) && /[AEIOU]/.test(capsWord) && !EN_TWO_LETTER[capsWord.toLowerCase()]) {
+      if (/^[A-Z]{2,4}$/.test(capsWord) && /[AEIOU]/.test(capsWord) && !own(EN_TWO_LETTER, capsWord.toLowerCase())) {
         var capsLow = capsWord.toLowerCase();
         var enTable = typeof WKEnWords !== "undefined" ? WKEnWords.words : null;
         /*
@@ -1721,7 +1751,8 @@
            * 罗马音也读不出来（`KRO`）：先用表里的**本地兜底**顶着（クロ，标成没把握，
            * 大模型仍可改）；表里也没有才空着、只把这个词记进大模型的待问队列。
            */
-          var fallbackKana = UNCERTAIN_FALLBACK[capsWord.toLowerCase()];
+          var capsKey = capsWord.toLowerCase();
+          var fallbackKana = own(UNCERTAIN_FALLBACK, capsKey) ? UNCERTAIN_FALLBACK[capsKey] : null;
           if (fallbackKana) return { kana: fallbackKana, source: "rule", confident: false };
           if (state.llm && state.llm.want) {
             try {
@@ -1764,6 +1795,19 @@
      * 规则层的结果一律 confident:false —— 拼写近似，配了 key 交给大模型按整句定。
      */
     var lang = line ? lineLang(line) : null;
+    /*
+     * 日语行里夹着的俄语 / 希腊语词：按 token 自带的字母表兜一下。
+     *
+     * `detect()` 的第一条是"有假名就不判外语"，那是为了别让 `無限増幅回路（Ω）`
+     * 整行变成希腊语（Ω 该读单位 オーム）。但那条也把 `Отчизну を歌う`、
+     * `Θάλασσα の夜` 这种行一起挡了 —— 西里尔/希腊字母在词典层和罗马音层都读不了，
+     * 于是那个词一个注音都没有。这两个字母表本身是自明的（词上带着 script），
+     * 所以这里只补"判不出语种、但这个词明明是西里尔/希腊字母"这一档。
+     * 单字母不经过这里：Ω / Я 在上面已经按字母名 / 单位读掉了。
+     */
+    if (!lang && token && (token.script === "cyrillic" || token.script === "greek")) {
+      lang = token.script === "cyrillic" ? "ru" : "el";
+    }
     if (lang && typeof WKLangs !== "undefined" && WKLangs.toKatakana) {
       var loan = WKLangs.word(lang, word);
       if (loan) return { kana: loan, source: "dict", confident: true };
@@ -2533,11 +2577,6 @@
       }
     }
 
-    function refreshStatus() {
-      // 原来的开发模式"状态转储"已经删掉: 面板上不该有这种东西, 需要数字时用控制台 WK.stats()
-      return;
-    }
-
     /**
      * 大模型这一层的当前状态（不用开 dev 模式也能看到的告警）。
      *
@@ -2638,7 +2677,6 @@
       refreshUsage();
       refreshLearned();
       refreshLlmState();
-      refreshStatus();
     }
 
     /*
@@ -2894,7 +2932,6 @@
   plugin.onLoad(function () {
     trace("boot", "onLoad 开始 off=" + emergencyOff() + " enabled=" + config.enabled +
       " scope=" + config.scope + " annotateAll=" + config.annotateAll +
-      " cfgVer=" + config.configVersion +
       " 模块 matcher=" + typeof WKMatcher + " reading=" + typeof WKReading +
       " dict=" + typeof WKDict + " annotate=" + typeof WKAnnotate);
 

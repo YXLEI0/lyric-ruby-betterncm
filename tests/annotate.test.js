@@ -132,13 +132,17 @@ test("换歌：同一个元素被快速复用很多次，跳过只是暂时的�
   // motion 计数器老版本只加不减，同一个元素被复用超过 3 次就永久不再注音
   // （连上一首残留的旧注音都没人清）。现在按滑动窗口计数：窗口内变太快才跳过，
   // 窗口一过自动重试。
+  //
+  // 时间用假时钟推进：这里要验的是"四次 pass 都落在 60ms 窗口内"，
+  // 用真实墙钟的话机器一慢（CI 上跑十几个测试文件并行时就会）就跨过窗口，断言随机红。
   const ctx = newCtx(`<!doctype html><html><body>
 <ul class="lyric"><li class="line"><p>きらめく light と clover</p></li></ul>
 </body></html>`);
   forceRubyLayout(ctx, true);
   const skips = [];
+  let clockMs = 1000;
   const ann = makeAnnotator(ctx, {
-    annotator: { motionWindowMs: 60 },
+    annotator: { motionWindowMs: 60, now: () => clockMs },
     log: (m) => skips.push(String(m)),
   });
   const p = ctx.document.querySelector("p");
@@ -151,7 +155,8 @@ test("换歌：同一个元素被快速复用很多次，跳过只是暂时的�
   const texts = ["新しい歌の light", "そして clover", "遠くの dream", "最後の sky"];
   for (const t of texts) {
     setText(t);
-    ann.pass(); // 四次都挤在一个窗口里，第 3、4 次会被判成"文本在动"
+    ann.pass(); // 四次都挤在一个 60ms 窗口里，第 3、4 次会被判成"文本在动"
+    clockMs += 10;
   }
   assert.strictEqual(
     p.querySelectorAll("ruby.wk-ruby").length,
@@ -164,7 +169,7 @@ test("换歌：同一个元素被快速复用很多次，跳过只是暂时的�
   );
 
   // 窗口一过：同样的那一行必须能注回来（老版本这里就永远回不来了）
-  await new Promise((r) => setTimeout(r, 80));
+  clockMs += 200;
   ann.pass();
   const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
@@ -372,6 +377,33 @@ test("还原后逐字节回到原样", () => {
   assert.strictEqual(ctx.document.querySelector("ul.lyric").innerHTML, before, "必须一字不差地还原");
 });
 
+test("注音被别人摘掉（宿主还在）时，底字要写回来，不能连歌词一起丢", () => {
+  /*
+   * 注入时原文本节点会被"切短"：行首是西文的那种（leadIsRuby）更是直接清成空串，
+   * 文字全在我们插进去的 <ruby> 里。如果宿主还在、只有 <ruby> 被摘掉，
+   * 老代码走的是 records.delete(node) —— 既不还原也不写回 rec.plain，
+   * 于是整行只剩空格，连 restoreAll() 都救不回来。
+   */
+  const ctx = newCtx(`<!doctype html><html><body>
+<ul class="lyric"><li class="line"><p>hello world</p></li></ul>
+</body></html>`);
+  const ann = makeAnnotator(ctx);
+  ann.pass();
+  const p = ctx.document.querySelector("p");
+  assert.strictEqual(baseText(p), "hello world", "先确认注音后底字没变");
+
+  // 只摘掉 ruby，宿主（<p>）和文本节点都留着 —— RNP / 别的插件重写内容时就是这样
+  p.querySelectorAll("ruby.wk-ruby").forEach((r) => r.remove());
+
+  const r = ann.pass();
+  assert.ok(r.restored >= 1, "这一轮必须走还原这条路");
+  assert.strictEqual(baseText(p), "hello world", "底字必须写回来：" + p.innerHTML);
+  assert.ok(p.querySelectorAll("ruby.wk-ruby").length > 0, "然后照常重注");
+
+  ann.restoreAll();
+  assert.strictEqual(p.textContent, "hello world", "还原之后一字不差");
+});
+
 test("别人的注音不算底字：kt-rt / fg-rt 都要排除", () => {
   // 真机场景：另一个片假名注音插件（kt-rt）和 jp-furigana（fg-rt）可能同时在页面上。
   // 如果 visibleText() 把它们的注音算进"底字"，我们看到的就是一段一直在变的文本，
@@ -560,4 +592,49 @@ test("歌词行里带「Music」之类词头但不带分隔符的，照标", () 
     ["Music", "light"],
     "「Music」后面没有分隔符，是歌词不是制作信息"
   );
+});
+
+test("署名判据不能靠大小写不敏感的 /i：Music by the lake / Words of love: 都是歌词", () => {
+  /*
+   * 老正则整条带 /i，`[A-Z]` 那个"只吃大写标签"的约束就失效了：
+   * of / love / the 全成了标签，配上 `by\b` 之后
+   * `Music by the lake`、`Words of love:`、`Art of love -` 都被整行当署名跳过。
+   */
+  const A = require("../src/core/annotate.js");
+  const lyrics = [
+    "Music by the lake",
+    "Words of love:",
+    "Music of the night:",
+    "Art of love -",
+    "Bass of the sea:",
+    "Music is my life:",
+    "Music と light の 中で",
+  ];
+  for (const line of lyrics) assert.strictEqual(A.isCreditText(line), false, "这是歌词，不该当署名：" + line);
+  // 真正的署名行照旧认（中文标签 / 纯拉丁标签 / 长尾写法 / copyright 那一类）
+  const credits = [
+    "作词：张三",
+    "混音&母带处理：宫奇",
+    "尺八 Shakuhachi：某某",
+    "Mastering Engineer：某人",
+    "Lyricist：某人",
+    "PV: 羽生まゐご",
+    "Arranged by Kenji",
+    "Lyrics by Yuki",
+    "Strings Arranged & Conducted by 陈珀",
+    "Copyright MGMT :Fann",
+  ];
+  for (const line of credits) assert.strictEqual(A.isCreditText(line), true, "署名行要认出来：" + line);
+  // 一整行真歌词带署名式词头也要照标
+  const ctx = newCtx(`<!doctype html><html><body>
+<ul class="lyric">
+  <li class="line"><p>Music by the lake</p></li>
+  <li class="line"><p>Words of love:</p></li>
+</ul>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  makeAnnotator(ctx).pass();
+  const ps = ctx.document.querySelectorAll("ul.lyric li p");
+  assert.strictEqual(ps[0].querySelectorAll("ruby.wk-ruby").length, 4, "Music / by / the / lake 都该标：" + ps[0].innerHTML);
+  assert.strictEqual(ps[1].querySelectorAll("ruby.wk-ruby").length, 3, "Words / of / love 都该标：" + ps[1].innerHTML);
 });
