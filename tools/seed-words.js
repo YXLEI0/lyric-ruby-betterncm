@@ -516,6 +516,12 @@ module.exports = [
   { en: "radio", kana: "ラジオ" },
   { en: "rain", kana: "レイン" },
   { en: "rainbow", kana: "レインボー" },
+  /*
+   * `Rainie`（杨丞琳的英文名，也是歌名 `Rainie Love` 里的那个词）：レイニー。
+   * 罗马音层会把它切成 ra-i-ni-e 读成 ライニエ（`ai` 在罗马音里是 アイ），
+   * 英语里这一串是 /ˈreɪni/，和词典里的 `rainy` レイニー 同音 —— 按名字定死。
+   */
+  { en: "rainie", kana: "レイニー" },
   { en: "ranking", kana: "ランキング" },
   { en: "reason", kana: "リーズン" },
   { en: "report", kana: "レポート" },

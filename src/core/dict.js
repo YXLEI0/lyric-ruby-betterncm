@@ -4976,6 +4976,7 @@
     "railway": "レイルウェイ",
     "rain": "レイン",
     "rainbow": "レインボー",
+    "rainie": "レイニー",
     "rainy": "レイニー",
     "raise": "レイズ",
     "raised": "レイズド",
@@ -6918,6 +6919,6 @@
 
   return {
     words: words,
-    count: 6894,
+    count: 6895,
   };
 });

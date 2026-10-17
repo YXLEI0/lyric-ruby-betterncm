@@ -2311,6 +2311,62 @@ test("罗马音节行：短音节按罗马音读（PI→ピ / ME→メ），普�
   assert.strictEqual(en2.get("sea"), "シー");
 });
 
+test("词典里的名字不许被罗马音层抢走（Rainie Love：レイニー ラブ）", async () => {
+  /*
+   * `Rainie Love`（杨丞琳的英文名）：`rainie` 在罗马音层能被干净切成 ra-i-ni-e，
+   * 于是整行拿到的读音是 ライニエ。英语里这一串是 /ˈreɪni/，和词典里的 `rainy`
+   * レイニー 同音 —— 名字进了人工词表（レイニー）之后，层序上词典就该赢。
+   * 中文歌词行（一个假名都没有）也走这条路，所以顺带守住"中文歌里的西文词"。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>我爱上给我勇气的 Rainie Love</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(300);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["Rainie", "レイニー"], ["Love", "ラブ"]], "别读成 ライニエ：" + p.innerHTML);
+  assert.strictEqual(env.api.read("Rainie").source, "dict");
+});
+
+test("冠词 a 不许被行里别处的「a 贴着汉字」带成 エイ（Tell me a story）", async () => {
+  /*
+   * 真机形态：一个 <li> 里同时有原文、罗马音层、中文翻译层，整行的语境把它们拼在一起。
+   * 罗马音行以 `…na ra` 结尾，紧接着的中文翻译以 `为` 开头 —— `ra为` 里的 `a` + 汉字
+   * 在"整行搜索"的判据下命中了「小写 a 紧贴日文 = 字母名 エイ」，于是这一行**每个**
+   * a 都读成 エイ：`Tell me a story` 的冠词 a 变成了 エイ。
+   * 现在按 token 自己在 DOM 上的左右邻字判（还要求中间没空格），冠词回到 ア。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>Tell me a story</p><p>tell me a story 叶うなら</p><p>Tell me a story tell me a story ka na u na ra</p><p>为我讲述吧 为我讲述吧 若能实现</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(400);
+  // 一个 <li> 里几块文字，注音落在哪一块取决于"哪块像歌词原文"，所以按整行取注音
+  const li = env.document.querySelector("ul.lyric li");
+  const pairs = [...li.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  const aPairs = pairs.filter((p) => p[0].toLowerCase() === "a");
+  assert.ok(aPairs.length > 0, "冠词 a 应该有注音：" + li.innerHTML);
+  for (const p of aPairs) assert.strictEqual(p[1], "ア", "冠词 a 是 ア，不是 エイ：" + li.innerHTML);
+  // 一行里所有注音都不许是 エイ（这一行没有需要读字母名的 a）
+  assert.ok(
+    pairs.every((p) => p[1] !== "エイ"),
+    "整行不该出现 エイ：" + pairs.map((p) => p[0] + "=" + p[1]).join(" ")
+  );
+});
+
 test("全大写西文行：词典里有它的词不许再当罗马字猜（MORE モア / JUMP ジャンプ）", async () => {
   // `(MORE MORE MORE MORE JUMP)`：整行一个假名都没有，正好落进 main.js
   // 「全大写 2~4 个字母、不在英文常用词表里 -> 当罗马字猜」那一支。可 MORE / JUMP
@@ -3297,9 +3353,17 @@ test("说话人段标 `M:` 留白，同一行里 `匿名M` 的 M 照读 エム",
   const rtText = rubies0.map((r) => r.querySelector(".wk-rt").textContent).join("");
   assert.strictEqual(ps[0].textContent.replace(rtText, ""), "M: 匿名Mです。", "原文一个字都不能改：" + ps[0].innerHTML);
 
-  // 第二行没有冒号，行首的 M 就不是段标（照字母名读）
+  /*
+   * 第二行没有冒号：行首那个 M 前面什么都没有、后面跟着空格，是行里孤零零的一个大写字母 ——
+   * 按"孤零零一个单字母留白"那条走（和 `X が導く` 里的 X 同一个口径），
+   * 而 `匿名M` 里的 M 贴在汉字上，照旧读 エム。
+   *
+   * （这一条原来断言行首 M 也读 エム，靠的是"整行里有没有 M 贴着日文"那种全行搜索 ——
+   *  行里另一个 M 贴着汉字，于是行首那个也一起读字母名。全行搜索已经在别处踩过：
+   *  罗马音行结尾的 `…na ra` 直接接中文翻译时，`a` 会被判成"贴着日文"读成 エイ。）
+   */
   const l1 = [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
-  assert.deepStrictEqual(l1, [["M", "エム"], ["M", "エム"]], "没有冒号时行首 M 不是段标：" + ps[1].innerHTML);
+  assert.deepStrictEqual(l1, [["M", "エム"]], "名字里的 M 照读 エム，行首孤立的 M 留白：" + ps[1].innerHTML);
 });
 
 test("外语行不做首音校验：拉丁语 vacuum 的 ワクーム 也会被收下（英文行仍然卡）", async () => {

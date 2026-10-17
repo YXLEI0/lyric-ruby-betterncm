@@ -6,7 +6,7 @@
  * 两个可以同时开：一行里既有片假名又有英文时，两种注音一起出现。
  *
  * 读音来源（层序在 core/reading.js 里定，面板里可调）：
- *   1. 离线词典（core/dict.js，6892 条）：人工词条、官方歌名读音、运行期沉淀、大模型批量
+ *   1. 离线词典（core/dict.js，6895 条）：人工词条、官方歌名读音、运行期沉淀、大模型批量
  *   2. 日式罗马音切分（sekai -> セカイ，歌词里官方写的罗马音）
  *   3. 西文各语种的拼读（core/langs.js：法 / 德 / 拉 / 葡 / 荷 / 斯瓦希里 / 拼音 / 俄 / 希）
  *      以及各语言的借词表（core/loan.js）
@@ -648,11 +648,35 @@
     return new RegExp("(?:" + D + "\\s*" + esc + "|" + esc + "\\s*" + D + ")").test(s);
   }
 
-  /** 字母紧贴着日文（`T氏` / `B面` / `X線`：字母前后直接是汉字 / 假名，中间没空格） */
-  function gluedToJapanese(word, line) {
-    var s = String(line == null ? "" : line);
+  /** 一个日文字（假名 / 汉字）—— `gluedToJapanese`、`gluedUpperCase` 共用 */
+  var CJK_CHAR = /[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]/;
+
+  /**
+   * 字母紧贴着日文（`T氏` / `B面` / `X線`：字母前后直接是汉字 / 假名，中间没空格）。
+   *
+   * 注音层把 token 传进来时，按**这个词自己在 DOM 上的左右邻字**判。
+   * 不能只拿整行做正则搜索：那个"贴着"可能来自行里另一个词 ——
+   * RNP 的行元素里，罗马音层结尾的 `…na ra` 会和中文翻译 `为我讲述吧` 直接拼在一起，
+   * `ra为` 里的 `a` + 汉字就命中了，于是这一行**每个** `a` 都读成 エイ
+   * （`Tell me a story` 的冠词 a 变成了 エイ）。
+   * 没有 token 的调用方（控制台 WK.read 之类）仍旧退回整行搜索。
+   */
+  function gluedToJapanese(word, line, token) {
     var w = String(word == null ? "" : word);
-    if (!s || !w) return false;
+    if (!w) return false;
+    if (token) {
+      /*
+       * 还要看中间有没有空格：`X が導く` 里的 X 是独立的词（留白），
+       * `X線` 才是贴着日文（エックス線）。token.afterSpaced / beforeSpaced
+       * 就是注音层跨节点取到的"中间夹没夹空格"。
+       */
+      var around = letterAround(line, token);
+      var afterGlued = !!around.after && !around.afterSpaced && CJK_CHAR.test(around.after);
+      var beforeGlued = !!around.before && !around.beforeSpaced && CJK_CHAR.test(around.before);
+      return afterGlued || beforeGlued;
+    }
+    var s = String(line == null ? "" : line);
+    if (!s) return false;
     var esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     var CJK = "[\\u3041-\\u3096\\u30A1-\\u30FA\\u4E00-\\u9FFF]";
     return new RegExp("(?:" + CJK + esc + "|" + esc + CJK + ")").test(s);
@@ -1483,7 +1507,7 @@
      * 小写单字母 `a` 紧贴日文（`aとaが混ざり合って、`）：那是**字母 A 的名字**，
      * 这里读 エイ —— 不是英文冠词的 ア，也不是字母名表里的 エー。
      */
-    if (String(word) === "a" && line && gluedToJapanese(word, line)) {
+    if (String(word) === "a" && line && gluedToJapanese(word, line, token)) {
       return { kana: "\u30A8\u30A4", source: "letters", confident: true };
     }
     if (/^[A-Z]$/.test(String(word == null ? "" : word))) {
@@ -1529,7 +1553,7 @@
        * 案例：`T氏にすべてを捧げましょう` 和 `T Is My Everything` 里的 T
        * 一个注音都没有。`A` / `I` 在 ② 里仍旧按冠词 / 代词读（`A story` 的 A 是 ア）。
        */
-      if (line && (gluedToJapanese(word, line) || (String(word) !== "A" && String(word) !== "I" && lineHasOtherWord(word, line)))) {
+      if (line && (gluedToJapanese(word, line, token) || (String(word) !== "A" && String(word) !== "I" && lineHasOtherWord(word, line)))) {
         var loneKana =
           typeof WKReading !== "undefined" && WKReading.LETTER_KANA ? WKReading.LETTER_KANA[String(word).toLowerCase()] : null;
         if (loneKana) return { kana: loneKana, source: "letters", confident: true };
