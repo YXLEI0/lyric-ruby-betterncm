@@ -1,8 +1,6 @@
 # 更新记录
 
-## 0.1.0
-
-首个版本：给日语歌歌词里的西文字母（拉丁 / 西里尔 / 希腊）标注片假名读音。
+## 0.1.1
 
 ### 一轮完整审查：读音正确性、DOM 保真与工具链（本次）
 
@@ -44,6 +42,10 @@ DOM 层（core/annotate.js）
 - **注入顺序两份真相**：build 只比 6 个文件，`install:plugin` 能装出 `check` 会拒绝的包。顺序表抽到 `tools/inject-order.js`，两边共用
 - **没有 lockfile、CI 用 `npm install`**：提交 `package-lock.json`，两个 job 改 `npm ci`
 - 素材 JSON 带 BOM / 不是合法 JSON 时给一句人话再 `exit 1`，不再抛栈
+
+## 0.1.0
+
+首个版本：给日语歌歌词里的西文字母（拉丁 / 西里尔 / 希腊）标注片假名读音。
 
 ### Releases：tag 推送不触发工作流（Release job 一直是死代码）+ 手动 dispatch 也能发（本次）
 

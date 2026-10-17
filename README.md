@@ -21,7 +21,7 @@ npm run build            # 产出 builds/western-katakana.plugin
 npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 ```
 
-发版: 推一个 `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) 会触发 CI —— 跑完 `npm run check` 与全套测试后打包, 把 `western-katakana.plugin` 挂到 [Releases](../../releases); 也可以在 Actions 页面手动 Run workflow 发一版 (tag 留空就用 `src/manifest.json` 里的版本号)。
+发版: 推一个 `v*` tag (`git tag v0.1.1 && git push origin v0.1.1`) 会触发 CI —— 跑完 `npm run check` 与全套测试后打包, 把 `western-katakana.plugin` 挂到 [Releases](../../releases); 也可以在 Actions 页面手动 Run workflow 发一版 (tag 留空就用 `src/manifest.json` 里的版本号)。
 
 ## 说明
 
