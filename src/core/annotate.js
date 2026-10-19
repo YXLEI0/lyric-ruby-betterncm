@@ -2235,6 +2235,14 @@
       churnedCount: churnedCount,
       repairLine: repairLine,
       cleanup: cleanup,
+      /*
+       * 一个元素的可见原文（不含任何注音）。上层判"这首歌是不是日语歌"、
+       * 判整首语种、匹配整首专属读音都要用它 —— 直接用 textContent 会把我们
+       * 自己刚注上去的片假名算成底字。
+       */
+      textOf: function (el) {
+        return visibleText(el);
+      },
     };
   }
 
@@ -2336,6 +2344,30 @@
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 
+  /**
+   * 一个元素的「可见原文」：把所有注音（自家 wk-rt / 别家的 kt-rt / fg-rt）都排除掉。
+   *
+   * 上层（main.js 判"这首歌是不是日语歌"、判整首语种、匹配整首专属读音）必须用它，
+   * 不能直接用 textContent —— 注音之后 textContent 里全是片假名，会被当成"这行有假名"，
+   * 于是**第一行注完之后整首歌就被判成日语歌**，后面几行全不注音（中文/朝鲜语那档
+   * 就是这么只标了当前一句的）。
+   */
+  function visibleTextOf(doc, el) {
+    if (!el) return "";
+    var out = "";
+    var walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    var n;
+    while ((n = walker.nextNode())) {
+      var p = n.parentNode;
+      if (p && p.nodeType === 1) {
+        if (p.tagName === "RT" || p.tagName === "RP") continue;
+        if (ANNOTATION_CLASS.test(String(p.className || ""))) continue;
+      }
+      out += n.nodeValue || "";
+    }
+    return out;
+  }
+
   return {
     createAnnotator: createAnnotator,
     applyStyles: applyStyles,
@@ -2344,5 +2376,7 @@
     /** 署名判据：给测试直接验正则（运行期只走 isCreditText） */
     isCreditText: isCreditText,
     creditMatch: creditMatch,
+    /** 元素可见原文（不含注音）：上层判语种 / 匹配整首读音时用 */
+    visibleTextOf: visibleTextOf,
   };
 });

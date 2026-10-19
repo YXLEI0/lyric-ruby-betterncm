@@ -3404,6 +3404,20 @@ test("中文歌词：开了「汉字标普通话读音」才注音，默认不�
     "汉字要按普通话读音注：" + ps[0].innerHTML
   );
   assert.ok(pairs.some((p) => p[0] === "Rainie" && p[1] === "レイニー"), "西文和汉字要同时标：" + ps[0].innerHTML);
+  /*
+   * 第二行也要标。这一条是防"只标了当前一句"那个 bug：
+   * 判"整首是不是日语歌"如果读 textContent，第一行注完之后 textContent 里
+   * 全是片假名，整首立刻被判成日语歌，后面几行就再也不注音了。
+   */
+  const second = [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    second.slice(0, 3),
+    [["窗", "チュアン"], ["外", "ワイ"], ["的", "デ"]],
+    "后面几行也要标：" + ps[1].innerHTML
+  );
   // 原文一个字都不许改
   const clone = ps[0].cloneNode(true);
   clone.querySelectorAll(".wk-rt").forEach((el) => el.remove());

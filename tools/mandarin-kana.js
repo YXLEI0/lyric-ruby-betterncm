@@ -165,6 +165,8 @@ function syllableToKatakana(syllable) {
   if (!row) return null;
   // 舌尖元音
   if (fin === "i" && BUZZ_I[ini]) return row[I] + "ー";
+  // j / q / x 后面的 i 是实打实的 /i/，日语里都写长音（气 チー、西 シー、机 ジー）
+  if (fin === "i" && "jqx".indexOf(ini) >= 0) return row[I] + "ー";
   // j / q / x 后面写的 u 其实是 ü（ju = jü -> ジュ，jue = jüe -> ジュエ）
   if ("jqx".indexOf(ini) >= 0) {
     if (fin === "u") return row[U];

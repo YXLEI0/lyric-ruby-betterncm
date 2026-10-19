@@ -529,13 +529,7 @@
     }
     if (!regions || !regions.length) return null;
     var texts = [];
-    for (var i = 0; i < regions.length; i++) {
-      try {
-        texts.push(regions[i].textContent || "");
-      } catch (e2) {
-        texts.push("");
-      }
-    }
+    for (var i = 0; i < regions.length; i++) texts.push(regionText(regions[i]));
     var key = texts.join("\n").slice(0, 4000);
     if (songLangCache.key === key) return songLangCache.value;
     var counts = {};
@@ -1212,14 +1206,14 @@
     var lyrics = "";
     try {
       var ts = state.annotator.findRegions("titles");
-      if (ts && ts.length) title = ts[0].textContent || "";
+      if (ts && ts.length) title = regionText(ts[0]);
     } catch (e) {
       title = "";
     }
     try {
       var ls = state.annotator.findRegions("lyrics");
       var buf = [];
-      for (var i = 0; i < (ls ? ls.length : 0); i++) buf.push(ls[i].textContent || "");
+      for (var i = 0; i < (ls ? ls.length : 0); i++) buf.push(regionText(ls[i]));
       lyrics = buf.join("\n");
     } catch (e2) {
       lyrics = "";
@@ -2053,6 +2047,23 @@
   var japaneseSongCache = { key: "", value: true };
   /** 整首专属读音（见 SONG_READINGS）的缓存：同一首歌不必每轮重算 */
   var songScopeCache = { key: null, words: null };
+  /**
+   * 一个区域的"可见原文"（不含任何注音）。
+   *
+   * 判"这首歌是不是日语歌"、判整首语种、匹配整首专属读音都必须用它，不能直接用
+   * textContent —— 注音之后 textContent 里全是片假名，会被当成"这行有假名"：
+   * 第一行注完之后整首就被判成日语歌，后面几行不再注音（中文 / 朝鲜语那档
+   * 在真机上就只标了当前一句）。
+   */
+  function regionText(region) {
+    try {
+      if (region && state.annotator && state.annotator.textOf) return state.annotator.textOf(region) || "";
+      return region ? region.textContent || "" : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
   function songLooksJapanese() {
     if (!state.annotator || !state.annotator.findRegions) return true;
     var regions = [];
@@ -2065,12 +2076,7 @@
     var texts = [];
     var kanaLines = 0;
     for (var i = 0; i < regions.length; i++) {
-      var t = "";
-      try {
-        t = regions[i].textContent || "";
-      } catch (e2) {
-        t = "";
-      }
+      var t = regionText(regions[i]);
       texts.push(t);
       if (RE_KANA_ANY.test(t)) kanaLines++;
     }
