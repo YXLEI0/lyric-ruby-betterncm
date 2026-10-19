@@ -3,7 +3,7 @@
 	"manifest_version": 1,
 	"name": "西文字母片假名注音",
 	"slug": "western-katakana",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"author": "YXLEI0",
 	"author_link": "https://github.com/YXLEI0",
 	"description": "在日语歌歌词的拉丁字母 / 西里尔字母 / 希腊字母上方标注片假名读音（英文外来语、官方罗马音、法语 / 德语 / 拉丁语 / 俄语等西文语种都支持）",
@@ -14,19 +14,54 @@
 	"requirements": [],
 	"injects": {
 		"Main": [
-			{ "file": "core/letters.js" },
-			{ "file": "core/dict.js" },
-			{ "file": "core/enwords.js" },
-			{ "file": "core/reading.js" },
-			{ "file": "core/loan.js" },
-			{ "file": "core/songs.js" },
-			{ "file": "core/langs.js" },
-			{ "file": "core/correct.js" },
-			{ "file": "core/llm.js" },
-			{ "file": "core/usage.js" },
-			{ "file": "core/learn.js" },
-			{ "file": "core/annotate.js" },
-			{ "file": "main.js" }
+			{
+				"file": "core/letters.js"
+			},
+			{
+				"file": "core/dict.js"
+			},
+			{
+				"file": "core/enwords.js"
+			},
+			{
+				"file": "core/hanzi.js"
+			},
+			{
+				"file": "core/hangul.js"
+			},
+			{
+				"file": "core/cjk.js"
+			},
+			{
+				"file": "core/reading.js"
+			},
+			{
+				"file": "core/loan.js"
+			},
+			{
+				"file": "core/songs.js"
+			},
+			{
+				"file": "core/langs.js"
+			},
+			{
+				"file": "core/correct.js"
+			},
+			{
+				"file": "core/llm.js"
+			},
+			{
+				"file": "core/usage.js"
+			},
+			{
+				"file": "core/learn.js"
+			},
+			{
+				"file": "core/annotate.js"
+			},
+			{
+				"file": "main.js"
+			}
 		]
 	}
 }

@@ -228,6 +228,14 @@
      * 都不成立"，看着像漏标了。
      */
     var censoredRun = typeof options.censoredRun === "function" ? options.censoredRun : null;
+    /*
+     * 可选：extraTokens(text) -> [{ text, start, end, kana, kind }]。
+     *
+     * 西文字母之外的注音走这条路（汉字 / 谚文）：读音在切的时候就定了，
+     * 注音层只负责按 start/end 把它们包成 ruby。返回空数组或不返回就是"这行不标"。
+     * 汉字那一档要由上层判"这行是不是日语行"——日语歌里的汉字不能用普通话音去读。
+     */
+    var extraTokens = typeof options.extraTokens === "function" ? options.extraTokens : null;
 
     var annotateAll = options.annotateAll !== false; // false = 只标歌词
 
@@ -926,14 +934,48 @@
     /** 被连字符切断的判据要认的那几种横线（含全角减号那种排版写法） */
     var DASH_CHAR = /[-\u2010-\u2011\u2013\u2014\u2212\uFF0D\u30FC]/;
 
+    /**
+     * 把两批 token 按位置合起来（西文 / 汉字与谚文）。两批字符集不重叠，
+     * 所以只需要按 start 归并；万一有重叠，先到的那个赢，后面的跳过。
+     */
+    function mergeTokens(base, extra) {
+      var out = [];
+      var i = 0;
+      var j = 0;
+      var lastEnd = 0;
+      while (i < base.length || j < extra.length) {
+        var takeBase = j >= extra.length || (i < base.length && base[i].start <= extra[j].start);
+        var tk = takeBase ? base[i++] : extra[j++];
+        if (tk.start < lastEnd) continue;
+        out.push(tk);
+        lastEnd = tk.end;
+      }
+      return out;
+    }
+
     function annotateNode(node, region) {
       var text = node.nodeValue;
       // 长度 1 的文本节点也要看：逐字歌词/别的插件拆行时，单个字母就是它自己的节点
       // （`T氏` 的 T），按"太短就跳过"会把它整段漏掉。
       if (!text) return false;
-      if (!matcher.hasReadable(text)) return false;
+      /*
+       * 两批词：西文字母由 matcher 切，汉字 / 谚文由上层给的 extraTokens 切
+       * （core/cjk.js：一个汉字一个词、一个谚文音节一个词）。两批字符集不重叠，
+       * 按位置合起来就行。extraTokens 只在"非日语歌、且这行没有假名"时才会返回东西。
+       */
+      var extras = null;
+      if (typeof extraTokens === "function") {
+        try {
+          extras = extraTokens(text);
+        } catch (e) {
+          extras = null;
+        }
+      }
+      var hasExtras = !!(extras && extras.length);
+      if (!hasExtras && !matcher.hasReadable(text)) return false;
 
       var tokens = matcher.scan(text);
+      if (hasExtras) tokens = mergeTokens(tokens, extras);
       if (!tokens.length) {
         noteSkip("切不出词", text, region);
         return false;
@@ -964,7 +1006,7 @@
          * （真机形态 `Vindicia (A: Vanitatum sentio)` 的 A、B 被注上了 ア / ビー）。
          * 这里跨节点往后瞟一眼（跳过空白），是冒号就补上 label 标记。
          */
-        if (tokens[i].text.length === 1 && tokens[i].label !== true) {
+        if (tokens[i].text.length === 1 && tokens[i].label !== true && !tokens[i].kana) {
           if (charAfterToken(node, tokens[i].end) === ":" || charAfterToken(node, tokens[i].end) === "\uFF1A") {
             tokens[i].label = true;
           }
@@ -979,7 +1021,7 @@
          * `<span>`，读音层拿到的 `line`（整行文本）+ 偏移量根本对不上，只能由这里
          * 跨节点现取（真机形态：逐字歌词那几行一个注音都没有）。
          */
-        if (tokens[i].text.length <= 3) {
+        if (tokens[i].text.length <= 3 && !tokens[i].kana) {
           var afterRaw = rawAfterText(node, tokens[i].end);
           var beforeRaw = rawBeforeText(node, tokens[i].start);
           tokens[i].after = firstVisible(afterRaw);
@@ -987,7 +1029,11 @@
           tokens[i].before = lastVisible(beforeRaw);
           tokens[i].beforeSpaced = /\s$/.test(beforeRaw);
         }
-        if (matcher.looksReadable(tokens[i])) {
+        if (tokens[i].kana) {
+          // 汉字 / 谚文：读音是切的时候就定好的，不问读音层、也不进"暂定"队列
+          g = tokens[i].kana;
+          src = "cjk";
+        } else if (matcher.looksReadable(tokens[i])) {
           /*
            * 传原始写法（tk.text）而不是 tk.norm：
            * 折过的形式会把连字符吃掉，于是 `D/N/A`（记号，逐字母读）和
@@ -1055,7 +1101,8 @@
           pieces.push({ text: tk.text });
         } else {
           var isPending = false;
-          if (pending) {
+          // 汉字 / 谚文的读音是查表来的，没有"在线层还在问"这回事
+          if (pending && !tk.kana) {
             try {
               isPending = !!pending(tk.text, context, tk);
             } catch (e) {

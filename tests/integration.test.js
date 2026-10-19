@@ -3366,6 +3366,88 @@ test("说话人段标 `M:` 留白，同一行里 `匿名M` 的 M 照读 エム",
   assert.deepStrictEqual(l1, [["M", "エム"]], "名字里的 M 照读 エム，行首孤立的 M 留白：" + ps[1].innerHTML);
 });
 
+test("中文歌词：开了「汉字标普通话读音」才注音，默认不动", async () => {
+  /*
+   * 汉字按普通话读音注片假名（core/hanzi.js 一个字一条），默认是关的 ——
+   * 一屏汉字全铺上注音，观感变化很大，要的人在面板里自己开。
+   * 只标"非日语歌、且这一行没有假名"的行：日语歌里的汉字必须留日语读音。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>我爱上给我勇气的 Rainie Love</p></li>
+  <li class="line"><p>窗外的雨滴 一滴滴累积</p></li>
+</ul></div></div>
+</body></html>`;
+
+  // 默认（annotateHanzi 缺省 false）：汉字一个都不标，西文照旧
+  const off = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await off.runLoad();
+  await sleep(300);
+  const offPs = off.document.querySelectorAll("ul.lyric li p");
+  const offHan = [...offPs[0].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
+  assert.strictEqual(offHan.length, 0, "默认不标汉字：" + offPs[0].innerHTML);
+  assert.ok(offPs[0].querySelectorAll("ruby.wk-ruby").length > 0, "西文照旧要标");
+
+  // 打开之后：逐字注音
+  const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  await on.runLoad();
+  await sleep(400);
+  const ps = on.document.querySelectorAll("ul.lyric li p");
+  const pairs = [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  const han = pairs.filter((p) => /[\u4E00-\u9FFF]/.test(p[0]));
+  assert.deepStrictEqual(
+    han.slice(0, 6),
+    [["我", "ウォ"], ["爱", "アイ"], ["上", "シャン"], ["给", "ゲイ"], ["我", "ウォ"], ["勇", "ヨン"]],
+    "汉字要按普通话读音注：" + ps[0].innerHTML
+  );
+  assert.ok(pairs.some((p) => p[0] === "Rainie" && p[1] === "レイニー"), "西文和汉字要同时标：" + ps[0].innerHTML);
+  // 原文一个字都不许改
+  const clone = ps[0].cloneNode(true);
+  clone.querySelectorAll(".wk-rt").forEach((el) => el.remove());
+  assert.strictEqual(clone.textContent, "我爱上给我勇气的 Rainie Love");
+});
+
+test("日语歌里的汉字不标普通话读音（开了开关也不标）", async () => {
+  // 整首是日语歌（有假名），所以那些"纯汉字行"也不能拿普通话音去读：
+  // 東京 是 トウキョウ，不是 ドンジン。
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>きらめく光の中で</p></li>
+  <li class="line"><p>東京</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  await env.runLoad();
+  await sleep(400);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const han = [...ps[1].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
+  assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
+});
+
+test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>안녕 내 사랑</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHangul: true } });
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    pairs,
+    [["안", "アン"], ["녕", "ニョン"], ["내", "ネ"], ["사", "サ"], ["랑", "ラン"]],
+    "谚文一个音节一个注音：" + p.innerHTML
+  );
+});
+
 test("外语行不做首音校验：拉丁语 vacuum 的 ワクーム 也会被收下（英文行仍然卡）", async () => {
   // 「Vacuum 的读音一直是黄的」：黄的 = 规则层（暂定），说明模型答案没被收下。
   // 根因是首音校验 —— 那套判据按英语拼写定的（v → バ行/ヴ），拉丁语的

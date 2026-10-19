@@ -89,6 +89,7 @@ console.log("[0/7] 运行时版本");
     "tests/reading.test.js",
     "tests/langs.test.js",
     "tests/sljfaq-words.test.js",
+    "tests/cjk.test.js",
     "tests/dict.test.js",
     "tests/annotate.test.js",
     "tests/correct.test.js",
@@ -476,6 +477,37 @@ console.log("[4.8/7] 沉淀表与词典一致");
         );
       } else {
         ok(`沉淀表 ${rows.length} 条都在词典里`);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- 4.9 汉字读音表
+//
+// 汉字表是生成物（tools/build-hanzi.js 从 pinyin-pro 生成）。这里重新生成一遍对一遍：
+// 生成器和产物不同步时立刻能看出来（和 dict / loan / songs 那几节同一个口径）。
+
+console.log("[4.9/7] 汉字读音表");
+{
+  const HANZI = path.join(SRC, "core", "hanzi.js");
+  if (!fs.existsSync(HANZI)) {
+    fail("缺少 src/core/hanzi.js（跑 npm run build:hanzi）");
+  } else {
+    let want = null;
+    try {
+      const gen = require("./build-hanzi.js");
+      want = gen.content(gen.generate());
+    } catch (e) {
+      warn("生成不了汉字表（pinyin-pro 没装？）：" + e.message);
+    }
+    if (want !== null) {
+      if (want !== fs.readFileSync(HANZI, "utf8")) {
+        fail("src/core/hanzi.js 与 tools/build-hanzi.js 的生成结果不一致（跑 npm run build:hanzi）");
+      } else {
+        const mod = require(HANZI);
+        const bad = Object.keys(mod.kana).filter((k) => !/^[\u30A1-\u30F6\u30FC]+$/.test(mod.kana[k]));
+        if (bad.length) fail(`${bad.length} 个汉字的读音不是纯片假名：` + bad.slice(0, 5).join(", "));
+        else ok(`汉字表 ${mod.count} 条，与生成器一致`);
       }
     }
   }

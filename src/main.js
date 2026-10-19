@@ -142,6 +142,14 @@
      * 不会被误伤。
      */
     annotateNonJapanese: true,
+    /*
+     * 汉字（普通话读音）与谚文（朝鲜语读音）也注片假名。默认关：这两种字铺满整行，
+     * 观感变化很大 —— 想要的人在面板里自己打开。
+     * 只对"非日语歌、且这一行没有假名"的行生效：日语歌里的汉字绝不能用普通话音去读
+     * （`東京` 是 トウキョウ，不是 ドンジン）。
+     */
+    annotateHanzi: false,
+    annotateHangul: false,
     scope: "all", // titles | lyrics | all | custom
     customSelector: "",
     rtSize: 55, // 注音字号（相对底字百分比）
@@ -1916,6 +1924,12 @@
 
   function resolveReading(word, line, token) {
     if (!state.reader) return null;
+    /*
+     * 汉字 / 谚文的读音不走这一套：它们由 core/cjk.js 直接查表（写回 ruby 时就用那个读音）。
+     * 这里返回 null 有两个作用：注音层不会给它们跑西文那几层（会把 `漢` 拼成乱七八糟的音），
+     * relabel() 也不会拿"重新查一遍"的结果去覆盖已经写好的中文 / 朝鲜语读音。
+     */
+    if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) return null;
     // 全角字母折半角（`ＮＯ` -> `NO`）：查表 / 模型键 / 层序都得用同一个形式
     word = foldFullwidthLetters(word);
     if (line != null) line = foldFullwidthLetters(line);
@@ -2012,6 +2026,30 @@
    * 非日语歌（纯英语/法语/中文）一行假名都没有，所以整首判定很稳。
    * 结论按歌词文本缓存：同一首歌每轮扫描都要问一次，没必要每次重算。
    */
+  /**
+   * 汉字 / 谚文的注音 token（core/cjk.js 扫出来，读音已经定好）。
+   *
+   * 两道闸门，缺一不可：
+   *   1. 这一行有假名 -> 是日语行，一个字都不碰（`東京` 要读 トウキョウ，不是 ドンジン）；
+   *   2. 整首是日语歌 -> 同理，歌里夹的纯汉字行也不碰。
+   * 非日语歌整首跳过那一档（annotateNonJapanese = false）在 pass() 里就返回了，到不了这里。
+   */
+  function cjkTokens(text) {
+    var han = config.annotateHanzi === true;
+    var hangul = config.annotateHangul === true;
+    if (!han && !hangul) return null;
+    if (typeof WKCJK === "undefined") return null;
+    var s = String(text == null ? "" : text);
+    if (!s) return null;
+    var hasHan = han && WKCJK.hasHan(s);
+    var hasHangul = hangul && WKCJK.hasHangul(s);
+    if (!hasHan && !hasHangul) return null;
+    if (RE_KANA_ANY.test(s)) return null;
+    if (songLooksJapanese()) return null;
+    var out = WKCJK.scan(s, { han: hasHan, hangul: hasHangul });
+    return out && out.length ? out : null;
+  }
+
   var japaneseSongCache = { key: "", value: true };
   /** 整首专属读音（见 SONG_READINGS）的缓存：同一首歌不必每轮重算 */
   var songScopeCache = { key: null, words: null };
@@ -2262,6 +2300,9 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="enabled"> 启用注音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="online"> 规则没把握时联网校正 (免费接口)</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateAll"> 也标播放栏的歌名 / 歌手</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 也给汉字标普通话读音 (片假名)</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 也给谚文标朝鲜语读音</label></div>' +
+      '<div class="wk-hint">汉字 / 谚文只标非日语歌里的行, 日语歌里的汉字不动 (那要用日语读音)</div>' +
       "<h3>大模型校正</h3>" +
       '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
       '<div class="wk-row"><label>API Key <input type="password" data-k="llmKey" placeholder="sk-..."></label> ' +
@@ -2721,7 +2762,7 @@
       refreshLearned();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
 
     var inputs = root.querySelectorAll("[data-k]");
@@ -3120,6 +3161,10 @@
         // 排障用：这段文字里有没有被判成"打码"的重复字母串
         censoredRun: function (text) {
           return looksCensoredRun(text);
+        },
+        // 汉字 / 谚文：读音在切的时候就定了，注音层只负责包成 ruby（见 cjkTokens）
+        extraTokens: function (text) {
+          return cjkTokens(text);
         },
         annotateAll: config.annotateAll !== false,
         log: function () {
