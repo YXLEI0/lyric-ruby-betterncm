@@ -96,8 +96,20 @@
    */
   function promptFor(items) {
     var rows = [];
+    var hasOpts = false;
     for (var i = 0; i < items.length; i++) {
-      rows.push({ i: items[i].i, w: items[i].w, line: items[i].line || items[i].w });
+      var row = { i: items[i].i, w: items[i].w, line: items[i].line || items[i].w };
+      /*
+       * 带 opts 的条目是**中文歌词里的多音字**：候选读音是构建期就算好的那几种
+       * （同一个字的不同读法），模型只负责"按这一句挑一个"，不自己造读音 ——
+       * 这样它挑出来的读音和离线表是同一套写法，不会出现风格漂移。
+       */
+      if (items[i].opts && items[i].opts.length) {
+        row.opts = items[i].opts;
+        row.kind = "han";
+        hasOpts = true;
+      }
+      rows.push(row);
     }
     return (
       "你是日语歌词注音助手。下面是日语歌里出现的西文词（拉丁字母 / 西里尔字母 / 希腊字母），" +
@@ -123,6 +135,12 @@
       "汉语拼音（zh ジ、x シ、q チ、liú リュウ）、俄语（Отчизну オチズヌ、Виват ヴィヴァト、" +
       "Анастасия アナスタシヤ）、希腊语（Θάλασσα サラッサ、ουρανός ウラノス）；\n" +
       "8. 严格输出一个 JSON 对象，**键是 i 字段的值**（数字，写成字符串也行），值是片假名，不要多余字段。\n" +
+      (hasOpts
+        ? "9. 条目里带 kind=\"han\" 的是**中文歌词里的多音字**（w 是一个汉字）：opts 是它允许的读音，" +
+          "请从 opts 里挑一个最符合这一句语境的，**原样返回那个字符串**；都不合适就返回空字符串 \"\"。\n" +
+          "   例：w=\"行\"、line=\"银行\"、opts=[\"ハン\",\"シン\"] → 返回 \"ハン\"；" +
+          "line=\"行走\" 时返回 \"シン\"。\n"
+        : "") +
       "条目：" +
       JSON.stringify(rows)
     );
@@ -503,15 +521,17 @@
         /* 引擎不支持就往下走兜底 */
       }
       /*
-       * 只留西文字母：拉丁（含 NFD 折过之后剩下的）、西里尔、希腊。
+       * 只留"要注音的字"：拉丁（含 NFD 折过之后剩下的）、西里尔、希腊，
+       * 以及汉字（中文多音字要按整句问）和谚文。
        *
        * `[^a-z]` 那一版会把西里尔和希腊的整词削成空串 —— keyOf 返回 ""、
        * cacheKeyOf 返回 ""，lookup 直接 return null，俄语和希腊语的词从来没被问过，
        * 于是永远停在规则层（症状是"希腊语和俄语一直是黄的"）。
+       * 汉字同理：不加进来，多音字的候选就永远排不进队列。
        */
       var w = raw
         .replace(/[\u00C0-\u024F\u1E00-\u1EFF]/g, "")
-        .replace(/[^a-z\u0370-\u03FF\u0400-\u04FF\u1F00-\u1FFF]/g, "");
+        .replace(/[^a-z\u0370-\u03FF\u0400-\u04FF\u1F00-\u1FFF\u4E00-\u9FFF\uAC00-\uD7A3]/g, "");
       if (!w || w.length > MAX_WORD_LEN) return "";
       return w;
     }
@@ -611,7 +631,7 @@
       // 提示词里的条目：下标 i 用来对齐响应（同一个词在两句里不会互相覆盖）
       var items = [];
       for (var j = 0; j < batch.length; j++) {
-        items.push({ i: j + 1, w: batch[j].word, line: batch[j].context });
+        items.push({ i: j + 1, w: batch[j].word, line: batch[j].context, opts: batch[j].opts });
       }
 
       inflight = true;
@@ -772,6 +792,11 @@
         if (!said) why = "模型没给";
         else if (!RE_KATAKANA.test(said)) why = "不是纯片假名";
         else if (said.length > 14) why = "太长了（>14）";
+        /*
+         * 多音字那一档只收"候选里的那个"：候选是构建期算出来的，模型自己造的读音
+         * 再像也不能用 —— 那会和离线表两套写法混着出现。
+         */
+        else if (item.opts && item.opts.length && item.opts.indexOf(said) < 0) why = "不在候选读音里";
         // 第三个参数是这个词所在的整句（队列条目里叫 context，提示词里叫 line）
         else if (validate && !validate(item.word, said, item.context || item.line)) why = "没通过首音校验";
         if (!why) {
@@ -941,7 +966,7 @@
      *                        （read リード/レッド、人名地名、D/N/A 这类记号）。
      *                        不传就退化成"只看这个词"，行为与以前一致。
      */
-    function lookup(word, line) {
+    function lookup(word, line, opts) {
       var key = cacheKeyOf(word, line);
       if (!key) return null;
       var rec = mem.get(key);
@@ -955,7 +980,7 @@
        * （没配 key / 退避中 / 配置还没读进来），而"这个词要过"是长期的。
        * 有了它，sweep() 才有机会把"注音那一刻没问上"的词补回来。
        */
-      remember(word, key, contextKey(line));
+      remember(word, key, contextKey(line), opts);
       if (!canAsk()) {
         /*
          * 这一层暂时不可用。退避到期要排一次补问 —— 不然那些词要等页面重扫
@@ -970,11 +995,11 @@
     }
 
     /** 记一条 wanted（同一个 key 只记一次）；表太长时先瘦身 */
-    function remember(word, key, context) {
+    function remember(word, key, context, opts) {
       var have = wanted.get(key);
       if (have) return have;
       if (wanted.size >= WANT_MAX) pruneWanted();
-      var item = { key: key, word: keyOf(word), context: context, tries: 0, lastAt: 0 };
+      var item = { key: key, word: keyOf(word), context: context, opts: opts || null, tries: 0, lastAt: 0 };
       wanted.set(key, item);
       return item;
     }
@@ -1007,7 +1032,7 @@
       item.tries++;
       item.lastAt = Date.now();
       queued.add(item.key);
-      queue.push({ key: item.key, word: item.word, context: item.context });
+      queue.push({ key: item.key, word: item.word, context: item.context, opts: item.opts });
       schedule(queue.length >= cfg.batchSize ? 0 : FLUSH_DELAY_MS);
       return true;
     }
@@ -1190,10 +1215,10 @@
        * 但等它可用时（配置里补了 key / 退避结束）我们应该主动补问，
        * 而不是等页面重扫 —— 页面不重扫就再也没人问它了，那个词会一直停在规则层。
        */
-      want: function (word, line) {
+      want: function (word, line, opts) {
         var key = cacheKeyOf(word, line);
         if (!key || mem.has(key)) return false;
-        remember(word, key, contextKey(line));
+        remember(word, key, contextKey(line), opts);
         return true;
       },
       flush: flush,

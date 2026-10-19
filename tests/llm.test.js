@@ -23,8 +23,12 @@ function makeClient(ctx, opts) {
   const calls = [];
   ctx.window.fetch = function (url, init) {
     const body = JSON.parse(init.body);
-    // 现在提示词里的条目是 [{i, w, line}]：w 是要注音的词，line 是它所在的整句歌词
-    const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
+    const content = body.messages[0].content;
+    /*
+     * 条目从最后一个「条目：」之后取：提示词里带 opts 时正文也会出现 `[...]`
+     * 的例子（`opts=["ハン","シン"]`），用 indexOf("[") 会切到例子上去。
+     */
+    const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
     const words = items.map((it) => (it && typeof it === "object" ? it.w : it));
     calls.push({
       url: url,
@@ -109,6 +113,46 @@ test("形状不对（多包了一层）按失败处理，不许把整批词永�
   await c2.client.flush();
   assert.strictEqual(c2.client.stats().missesCached, 1, "空对象仍然算「问过、没有」");
   assert.strictEqual(c2.client.stats().failures, 0, "空对象不算失败");
+});
+
+test("多音字：提示词带候选 opts，只收候选里的那一个", async () => {
+  /*
+   * 中文多音字（行 ハン / シン）按整句问模型：候选读音是构建期算好的，
+   * 提示词把 opts 一起给过去，模型只负责挑一个 —— 这样它挑出来的写法和离线表一致，
+   * 不会出现 ハング / ハン 这种两套写法。候选之外的答案一律拒绝。
+   */
+  const ctx = loadCore();
+  const asked = [];
+  const c = makeClient(ctx, {
+    reply: (words, items) => {
+      asked.push(items);
+      const out = {};
+      items.forEach((it, i) => {
+        out[String(i + 1)] = "ハン";
+      });
+      return out;
+    },
+    batchSize: 10,
+    cooldownMs: 1,
+  });
+
+  c.client.lookup("行", "我把钱存在银行", ["シン", "ハン"]);
+  await c.client.flush();
+
+  assert.deepStrictEqual(asked[0][0].opts, ["シン", "ハン"], "提示词要带候选：" + JSON.stringify(asked[0][0]));
+  assert.strictEqual(asked[0][0].kind, "han", "要标成汉字条目：" + JSON.stringify(asked[0][0]));
+  assert.strictEqual(c.client.peek("行"), "ハン", "候选里的答案要收下");
+
+  // 候选之外的读音：不收，记一条原因
+  const c2 = makeClient(ctx, { reply: () => ({ 1: "ハング" }), batchSize: 10, cooldownMs: 1 });
+  c2.client.lookup("行", "我们一起去行走", ["シン", "ハン"]);
+  await c2.client.flush();
+  assert.strictEqual(c2.client.peek("行"), null, "候选外的读音不许收");
+  const rejects = c2.client.rejects();
+  assert.ok(
+    rejects.some((r) => r.why === "不在候选读音里"),
+    "要记一条「不在候选读音里」：" + JSON.stringify(rejects)
+  );
 });
 
 test("回答被截断（JSON 不完整）时：能对上的先收下，批次减半，没抢到的不算永久 miss", async () => {

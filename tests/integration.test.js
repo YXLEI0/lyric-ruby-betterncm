@@ -3441,6 +3441,73 @@ test("日语歌里的汉字不标普通话读音（开了开关也不标）", as
   assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
 });
 
+test("多音字：大模型按整句挑读音（银行 ハン / 行走 シン），没开大模型就用离线那档", async () => {
+  /*
+   * 离线表一个字只有一个读音（行 -> シン，pinyin-pro 单字默认）。多音字要按句子定，
+   * 所以开着大模型时把这一句连同「候选读音」一起问过去，让模型从候选里挑一个。
+   *
+   * 两条边界：
+   *   - 模型给的必须是候选里的（ハング 这种自己造的不收，见 tests/llm.test.js）
+   *   - 大模型没开 / 没配 key：什么都不问，用离线读音（不会因为"等答案"而空着）
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>我把钱存在银行</p></li>
+  <li class="line"><p>我们一起去行走</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: {
+      annotateHanzi: true,
+      online: false,
+      llmEnabled: true,
+      llmKey: "sk-test",
+      llmEndpoint: "https://api.example.com/v1/chat/completions",
+    },
+    fetch: function (url, init) {
+      const content = JSON.parse(init.body).messages[0].content;
+      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
+      asked.push(items.map((it) => it.w + "@" + it.line + " " + JSON.stringify(it.opts)));
+      const out = {};
+      items.forEach((it, i) => {
+        // 按语境挑：银行 -> ハン；行走 -> シン
+        out[String(i + 1)] = it.line.indexOf("银行") >= 0 ? "ハン" : "シン";
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  await env.runLoad();
+  await sleep(1500);
+
+  assert.ok(asked.length >= 1, "多音字要问模型：" + JSON.stringify(asked));
+  assert.ok(asked[0].some((s) => s.indexOf("行@") === 0 && s.indexOf("ハン") > 0), "提示词要带候选：" + JSON.stringify(asked[0]));
+
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const reading = (p, ch) => {
+    const r = [...p.querySelectorAll("ruby.wk-ruby")].filter((x) => x.childNodes[0].nodeValue === ch)[0];
+    return r ? r.querySelector(".wk-rt").textContent : null;
+  };
+  assert.strictEqual(reading(ps[0], "行"), "ハン", "银行里的行读 ハン：" + ps[0].innerHTML);
+  assert.strictEqual(reading(ps[1], "行"), "シン", "行走里的行读 シン：" + ps[1].innerHTML);
+  // 汉字不沉淀成词条（读音按句变，钉死必然读错）
+  assert.strictEqual(env.api.learn.list().filter((x) => x.word === "行").length, 0, "多音字不该被学会");
+
+  // 没开大模型：不问、用离线读音，而且不能留成"暂定"
+  const off = bootPlugin(HTML, { config: { annotateHanzi: true, online: false, llmEnabled: false } });
+  await off.runLoad();
+  await sleep(400);
+  const offPs = off.document.querySelectorAll("ul.lyric li p");
+  const offRow = [...offPs[0].querySelectorAll("ruby.wk-ruby")].filter((x) => x.childNodes[0].nodeValue === "行")[0];
+  assert.strictEqual(offRow.querySelector(".wk-rt").textContent, "シン", "离线读音：" + offPs[0].innerHTML);
+  assert.strictEqual(offRow.classList.contains("wk-pending"), false, "没开大模型就不是暂定");
+});
+
 test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">

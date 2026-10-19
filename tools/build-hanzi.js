@@ -34,6 +34,7 @@ const END = 0x9fff;
 
 function generate() {
   const table = [];
+  const vary = [];
   for (let cp = START; cp <= END; cp++) {
     const ch = String.fromCharCode(cp);
     let py = "";
@@ -47,11 +48,30 @@ function generate() {
     const kana = syllableToKatakana(py);
     if (!kana) continue;
     table.push([ch, kana, py]);
+    /*
+     * 多音字：记下它**所有**读法的片假名，给大模型挑。
+     * 这些候选是构建期算好的，运行期只让模型"选一个"，不让它自己造 ——
+     * 否则模型给的读音和离线表会是两套写法（ハン / ハング 这种）。
+     */
+    let list = [];
+    try {
+      list = pinyin(ch, { multiple: true, toneType: "none", type: "array" }) || [];
+    } catch (e) {
+      list = [];
+    }
+    const kanaSet = [];
+    for (const alt of list) {
+      const k = syllableToKatakana(alt);
+      if (k && kanaSet.indexOf(k) < 0) kanaSet.push(k);
+    }
+    if (kanaSet.length > 1) vary.push([ch, kanaSet]);
   }
-  return table;
+  return { table, vary };
 }
 
-function content(rows) {
+function content(gen) {
+  const rows = gen.table;
+  const vary = gen.vary || [];
   const lines = [];
   lines.push("/*");
   lines.push(" * 汉字 -> 片假名读音（生成物，勿手改）。");
@@ -60,9 +80,10 @@ function content(rows) {
   lines.push(" * 由 tools/build-hanzi.js 生成（npm run build:hanzi）。");
   lines.push(" *");
   lines.push(" * 只做「一个字一个音节」：查不到就返回 undefined，调用方按「不注音」处理。");
-  lines.push(" * 多音字取歌词里最常见的那一档（见构建脚本里的 OVERRIDE）。");
+  lines.push(" * 多音字取歌词里最常见的那一档（见构建脚本里的 OVERRIDE）；");
+  lines.push(" * 另外给出 vary：多音字 -> 它所有读法的片假名候选，给大模型按整句挑（model 只选，不造）。");
   lines.push(" *");
-  lines.push(" * 本表条数：" + rows.length);
+  lines.push(" * 本表条数：" + rows.length + "（其中多音字 " + vary.length + " 个）");
   lines.push(" */");
   lines.push("(function (root, factory) {");
   lines.push('  if (typeof module === "object" && module.exports) module.exports = factory();');
@@ -82,8 +103,21 @@ function content(rows) {
   if (buf.length) lines.push("    " + buf.join(", ") + ",");
   lines.push("  };");
   lines.push("");
+  lines.push("  var vary = {");
+  let vbuf = [];
+  for (const [ch, list] of vary) {
+    vbuf.push(JSON.stringify(ch) + ": " + JSON.stringify(list));
+    if (vbuf.length === 6) {
+      lines.push("    " + vbuf.join(", ") + ",");
+      vbuf = [];
+    }
+  }
+  if (vbuf.length) lines.push("    " + vbuf.join(", ") + ",");
+  lines.push("  };");
+  lines.push("");
   lines.push("  return {");
   lines.push("    kana: kana,");
+  lines.push("    vary: vary,");
   lines.push("    count: " + rows.length + ",");
   lines.push("  };");
   lines.push("});");
@@ -92,10 +126,11 @@ function content(rows) {
 }
 
 function main() {
-  const rows = generate();
-  fs.writeFileSync(OUT, content(rows));
+  const gen = generate();
+  const rows = gen.table;
+  fs.writeFileSync(OUT, content(gen));
   const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
-  console.log("已生成 " + path.relative(ROOT, OUT) + "：" + rows.length + " 个字，" + kb + " KB");
+  console.log("已生成 " + path.relative(ROOT, OUT) + "：" + rows.length + " 个字（多音字 " + gen.vary.length + " 个），" + kb + " KB");
   // 抽查几个字，出问题一眼能看出来
   const pick = ["我", "爱", "雨", "你", "是", "的", "了", "天", "球", "一", "想", "声", "笑", "泪"];
   console.log(

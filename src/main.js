@@ -1912,6 +1912,8 @@
    */
   function validateAnswer(word, kana, line) {
     if (typeof WKReading === "undefined") return true;
+    // 汉字的读音是"从候选里挑一个"，不适用英语首音校验（那套按拉丁拼写定的）
+    if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) return true;
     if (line && lineLang(line)) return true;
     return WKReading.looksLikeTransliteration(word, kana);
   }
@@ -1919,11 +1921,14 @@
   function resolveReading(word, line, token) {
     if (!state.reader) return null;
     /*
-     * 汉字 / 谚文的读音不走这一套：它们由 core/cjk.js 直接查表（写回 ruby 时就用那个读音）。
-     * 这里返回 null 有两个作用：注音层不会给它们跑西文那几层（会把 `漢` 拼成乱七八糟的音），
-     * relabel() 也不会拿"重新查一遍"的结果去覆盖已经写好的中文 / 朝鲜语读音。
+     * 汉字 / 谚文的读音不走西文那几层（会把 `漢` 拼成乱七八糟的音），由 core/cjk.js 查表。
+     * 但多音字要留一条"大模型按整句挑读音"的路：
+     *   - 有答案就返回它 —— relabel() 会用这个结果改写已经写上的 ruby；
+     *   - 没答案就返回 null —— relabel() 保持原样（离线读音），不会把中文擦掉。
+     * 谚文是拼写即读音，没有多音字问题，一直返回 null。
      */
-    if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) return null;
+    if (typeof WKCJK !== "undefined" && WKCJK.hasHan(word)) return hanziFromLLM(word, line);
+    if (typeof WKCJK !== "undefined" && WKCJK.hasHangul(word)) return null;
     // 全角字母折半角（`ＮＯ` -> `NO`）：查表 / 模型键 / 层序都得用同一个形式
     word = foldFullwidthLetters(word);
     if (line != null) line = foldFullwidthLetters(line);
@@ -1987,6 +1992,18 @@
    */
   function isProvisional(word, line, token) {
     if (!word || !state.reader) return false;
+    /*
+     * 汉字里的多音字：离线读音先顶着，同时这句已经进了大模型的队列 ——
+     * 答案没回来之前算"暂定"，回来了 relabel() 会改写并摘掉 wk-pending。
+     */
+    if (typeof WKCJK !== "undefined" && WKCJK.hasHan(word)) {
+      if (!polyOptions(word) || !llmAvailable() || !state.llm) return false;
+      try {
+        return !!(state.llm.isWaiting && state.llm.isWaiting(word, line));
+      } catch (e) {
+        return false;
+      }
+    }
     word = foldFullwidthLetters(word);
     if (line != null) line = foldFullwidthLetters(line);
     var r = localReading(word, line, token);
@@ -2028,7 +2045,7 @@
    *   2. 整首是日语歌 -> 同理，歌里夹的纯汉字行也不碰。
    * 非日语歌整首跳过那一档（annotateNonJapanese = false）在 pass() 里就返回了，到不了这里。
    */
-  function cjkTokens(text) {
+  function cjkTokens(text, context) {
     var han = config.annotateHanzi === true;
     var hangul = config.annotateHangul === true;
     if (!han && !hangul) return null;
@@ -2041,7 +2058,59 @@
     if (RE_KANA_ANY.test(s)) return null;
     if (songLooksJapanese()) return null;
     var out = WKCJK.scan(s, { han: hasHan, hangul: hasHangul });
-    return out && out.length ? out : null;
+    if (!out || !out.length) return null;
+    /*
+     * 多音字：离线表只给"最常见的那一档"，所以再问一次大模型，由它按这一句挑候选读音。
+     *
+     *   - 已经有答案：直接用（source 记 llm，"按来源着色"能看出来）
+     *   - 还没问过：先用离线读音顶着、标成暂定（wk-pending），同时把这句记进队列；
+     *     答案回来后 relabel() 会走 resolveReading 拿到它并改写
+     *   - 这一层没开 / 没配 key：什么都不做，就用离线读音
+     */
+    var line = context || s;
+    for (var i = 0; i < out.length; i++) {
+      var tk = out[i];
+      if (tk.kind !== "han") continue;
+      var opts = polyOptions(tk.text);
+      if (!opts) continue;
+      var fixed = hanziFromLLM(tk.text, line);
+      if (fixed) {
+        tk.kana = fixed.kana;
+        tk.source = "llm";
+      } else if (llmAvailable() && state.llm) {
+        try {
+          state.llm.want(tk.text, line, opts);
+        } catch (e) {
+          /* 记不上不影响注音 */
+        }
+      }
+    }
+    return out;
+  }
+
+  /** 这个汉字是不是多音字；是就返回它构建期算好的候选读音 */
+  function polyOptions(ch) {
+    if (typeof WKHanzi === "undefined" || !WKHanzi.vary) return null;
+    if (!Object.prototype.hasOwnProperty.call(WKHanzi.vary, ch)) return null;
+    var list = WKHanzi.vary[ch];
+    return list && list.length > 1 ? list : null;
+  }
+
+  /** 大模型对这个多音字在这句里的答案（没有 / 不在候选里都返回 null） */
+  function hanziFromLLM(ch, line) {
+    if (!llmAvailable() || !state.llm) return null;
+    var opts = polyOptions(ch);
+    if (!opts) return null;
+    var got = null;
+    try {
+      got = state.llm.lookup(ch, line, opts);
+    } catch (e) {
+      got = null;
+    }
+    if (!got || typeof got !== "string") return null;
+    // 只认候选里的那一个（模型自己造的读音不用，理由见 core/llm.js 的提示词）
+    if (opts.indexOf(got) < 0) return null;
+    return { kana: got, source: "llm" };
   }
 
   var japaneseSongCache = { key: "", value: true };
@@ -3114,6 +3183,11 @@
              * 结果拉丁语歌词里的段标一直带着 アー。和"两可短音节不收"同一个道理。
              */
             if (/^[A-Za-z]$/.test(word)) return;
+            /*
+             * 汉字 / 谚文也不沉淀：多音字的读音取决于那一句（行 ハン / シン），
+             * 钉成词级词条之后别的句子一定会读错。它们本来就是"每句问一次"。
+             */
+            if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) return;
             var local = state.reader ? state.reader.read(word) : null;
             if (!local || !local.kana) return;
             if (isTwoWayShort(word, local.kana)) return;

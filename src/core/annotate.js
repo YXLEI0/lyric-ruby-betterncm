@@ -957,30 +957,6 @@
       var text = node.nodeValue;
       // 长度 1 的文本节点也要看：逐字歌词/别的插件拆行时，单个字母就是它自己的节点
       // （`T氏` 的 T），按"太短就跳过"会把它整段漏掉。
-      if (!text) return false;
-      /*
-       * 两批词：西文字母由 matcher 切，汉字 / 谚文由上层给的 extraTokens 切
-       * （core/cjk.js：一个汉字一个词、一个谚文音节一个词）。两批字符集不重叠，
-       * 按位置合起来就行。extraTokens 只在"非日语歌、且这行没有假名"时才会返回东西。
-       */
-      var extras = null;
-      if (typeof extraTokens === "function") {
-        try {
-          extras = extraTokens(text);
-        } catch (e) {
-          extras = null;
-        }
-      }
-      var hasExtras = !!(extras && extras.length);
-      if (!hasExtras && !matcher.hasReadable(text)) return false;
-
-      var tokens = matcher.scan(text);
-      if (hasExtras) tokens = mergeTokens(tokens, extras);
-      if (!tokens.length) {
-        noteSkip("切不出词", text, region);
-        return false;
-      }
-
       var hostMaybe = node.parentNode;
       var glosses = [];
       // 每个词的来源（dict / romaji / rule / llm / google / letters），给"按来源着色"用
@@ -997,6 +973,29 @@
        * 而且对模型来说信息更全（整行而不是半截）。
        */
       var context = contextOf(hostMaybe, text);
+      /*
+       * 两批词：西文字母由 matcher 切，汉字 / 谚文由上层给的 extraTokens 切
+       * （core/cjk.js：一个汉字一个词、一个谚文音节一个词）。两批字符集不重叠，
+       * 按位置合起来就行。extraTokens 只在"非日语歌、且这行没有假名"时才会返回东西；
+       * 第二个参数是整句语境 —— 中文多音字要靠它去问大模型。
+       */
+      var extras = null;
+      if (typeof extraTokens === "function") {
+        try {
+          extras = extraTokens(text, context);
+        } catch (e) {
+          extras = null;
+        }
+      }
+      var hasExtras = !!(extras && extras.length);
+      if (!hasExtras && !matcher.hasReadable(text)) return false;
+
+      var tokens = matcher.scan(text);
+      if (hasExtras) tokens = mergeTokens(tokens, extras);
+      if (!tokens.length) {
+        noteSkip("切不出词", text, region);
+        return false;
+      }
       for (var i = 0; i < tokens.length; i++) {
         var g = null;
         var src = null;
@@ -1101,8 +1100,12 @@
           pieces.push({ text: tk.text });
         } else {
           var isPending = false;
-          // 汉字 / 谚文的读音是查表来的，没有"在线层还在问"这回事
-          if (pending && !tk.kana) {
+          /*
+           * 汉字也可以"暂定"：多音字先按离线表读，同时把这句去问大模型，
+           * 答案回来之前 mark 成 wk-pending（淡一点），回来之后由 relabel 改写并去掉。
+           * 是不是暂定由上一层（pending 回调）判，这里不猜。
+           */
+          if (pending) {
             try {
               isPending = !!pending(tk.text, context, tk);
             } catch (e) {
