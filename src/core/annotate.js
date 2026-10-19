@@ -163,11 +163,35 @@
     "i"
   );
 
-  /** 这一行是不是制作信息 / 署名 / 版权编号（三种写法都认） */
+  /**
+   * 版权 / 出版那一类行：它们不一定以标签开头。
+   *
+   * 真机形态（中文歌的版权块）：
+   *   `词版权管理方：北京梦织音传媒有限公司`
+   *   `曲版权管理方：索尼音乐版权代理（北京）有限公司`
+   *   `录音作品及MV版权：FAS MUSIC LTD`
+   * 这些行里没有任何"作词 / 编曲"式标签，所以上面那几条都以行首起算的正则接不住，
+   * 整块版权信息会被当成歌词、逐字注上普通话音。
+   *
+   * 判据是"整行里出现这几个词"。它们在歌词里基本不出现（版权 / 著作权 / 有限公司），
+   * 代价很低；英文那一侧同理只收 LTD / LLC / PUBLISHING / COPYRIGHT 这种公司字眼，
+   * 刻意不收 Music / Records / Art —— 那些在歌词里太常见。
+   */
+  var RE_CREDIT_CN_SOFT = /(版权|版權|著作权|著作權|有限责任公司|有限公司)/;
+  var RE_CREDIT_EN_SOFT = /\b(?:LTD|LLC|PUBLISHING|COPYRIGHT)\b|ALL RIGHTS RESERVED/i;
+
+  /** 这一行是不是制作信息 / 署名 / 版权编号（几种写法都认） */
   function isCreditText(t) {
     var s = String(t == null ? "" : t);
     if (!s) return false;
-    return RE_CREDIT_CN.test(s) || RE_CREDIT_EN.test(s) || RE_CREDIT_HARD.test(s) || CREDIT_LONG_EN.test(s);
+    return (
+      RE_CREDIT_CN.test(s) ||
+      RE_CREDIT_EN.test(s) ||
+      RE_CREDIT_HARD.test(s) ||
+      CREDIT_LONG_EN.test(s) ||
+      RE_CREDIT_CN_SOFT.test(s) ||
+      RE_CREDIT_EN_SOFT.test(s)
+    );
   }
 
   /** 给测试用的内部钩子（构建期/运行期都不调它） */

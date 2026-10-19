@@ -3,7 +3,7 @@
 	"manifest_version": 1,
 	"name": "西文字母片假名注音",
 	"slug": "western-katakana",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"author": "YXLEI0",
 	"author_link": "https://github.com/YXLEI0",
 	"description": "在日语歌歌词的拉丁字母 / 西里尔字母 / 希腊字母上方标注片假名读音（英文外来语、官方罗马音、法语 / 德语 / 拉丁语 / 俄语等西文语种都支持）",

@@ -623,6 +623,19 @@ test("署名判据不能靠大小写不敏感的 /i：Music by the lake / Words 
     "Lyrics by Yuki",
     "Strings Arranged & Conducted by 陈珀",
     "Copyright MGMT :Fann",
+    /*
+     * 中文歌的版权块（真机形态）：这些行没有"作词 / 编曲"式标签，靠的是整行里出现
+     * 版权 / 著作权 / 有限公司（英文那侧是 LTD / PUBLISHING）。不收的话，整块版权信息
+     * 会被当成歌词、逐字注上普通话音。
+     */
+    "词版权管理方：",
+    "词版权管理方：北京梦织音传媒有限公司",
+    "北京梦织音传媒有限公司",
+    "曲版权管理方：索尼音乐版权代理（北京）有限公司",
+    "(北京) 有限公司",
+    "录音作品及MV版权：FAS MUSIC LTD",
+    "FAS MUSIC LTD",
+    "版权所有 翻版必究",
   ];
   for (const line of credits) assert.strictEqual(A.isCreditText(line), true, "署名行要认出来：" + line);
   // 一整行真歌词带署名式词头也要照标

@@ -3441,6 +3441,36 @@ test("日语歌里的汉字不标普通话读音（开了开关也不标）", as
   assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
 });
 
+test("中文歌的版权块不注音（词版权管理方：… 有限公司）", async () => {
+  /*
+   * 真机形态：中文歌的歌词列表末尾挂着一整块版权信息，而且没有"作词 / 编曲"式标签 ——
+   * `词版权管理方：` `北京梦织音传媒有限公司` `(北京) 有限公司` `录音作品及MV版权：FAS MUSIC LTD`。
+   * 打开汉字注音之后，这些行会被逐字注上普通话音（一屏乱七八糟的注音）。
+   * 判据补成"整行里出现 版权 / 著作权 / 有限公司（英文字眼 LTD / PUBLISHING 同理）"。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>爱你孤身走暗巷</p></li>
+  <li class="line"><p>词版权管理方：</p></li>
+  <li class="line"><p>北京梦织音传媒有限公司</p></li>
+  <li class="line"><p>曲版权管理方：索尼音乐版权代理（北京）有限公司</p></li>
+  <li class="line"><p>(北京) 有限公司</p></li>
+  <li class="line"><p>录音作品及MV版权：FAS MUSIC LTD</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  await env.runLoad();
+  await sleep(400);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  // 歌词行照标（汉字）
+  assert.ok(ps[0].querySelectorAll("ruby.wk-ruby").length > 3, "歌词行要逐字注音：" + ps[0].innerHTML);
+  // 版权块一行都不许标
+  for (let i = 1; i < ps.length; i++) {
+    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "版权行不许注音：" + ps[i].textContent);
+    assert.strictEqual(ps[i].textContent, ps[i].textContent.trim(), "原文一个字都不动");
+  }
+});
+
 test("多音字：大模型按整句挑读音（银行 ハン / 行走 シン），没开大模型就用离线那档", async () => {
   /*
    * 离线表一个字只有一个读音（行 -> シン，pinyin-pro 单字默认）。多音字要按句子定，
