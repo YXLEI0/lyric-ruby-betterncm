@@ -67,6 +67,44 @@ test("生成词表和词典同步：忘了跑 build:dict 会在这里露馅", ()
   );
 });
 
+test("英语复数按英语读音走：-s 不许丢（rules ルールズ / games ゲームズ / lists リスツ）", () => {
+  /*
+   * 那份"片假名外来语 -> 英文原词"的表里，复数和单数常指向同一个写法，
+   * 反转之后就变成"复数丢了词尾"（rules ルール）。构建期按英语读音补上：
+   *   - 一般 +ズ（rules ルールズ、games ゲームズ）
+   *   - 词尾 ト/ド 换成 ツ/ズ（lists リスツ、points ポインツ）
+   * 法语词条 / 地名 / 日语词（fleurs フルール、pants ズボン）不在这一档，不许动。
+   */
+  assert.strictEqual(DICT.rules, "ルールズ");
+  assert.strictEqual(DICT.games, "ゲームズ");
+  assert.strictEqual(DICT.lists, "リスツ");
+  assert.strictEqual(DICT.points, "ポインツ");
+  assert.strictEqual(DICT.sites, "サイツ");
+  // 本来就是对的别动
+  assert.strictEqual(DICT.cats, "キャッツ");
+  assert.strictEqual(DICT.dogs, "ドッグス");
+  assert.strictEqual(DICT.eyes, "アイズ");
+  // 不是英语复数，别补 -s
+  assert.strictEqual(DICT.fleurs, "フルール");
+  assert.strictEqual(DICT.larmes, "ラルム");
+  assert.strictEqual(DICT.vous, "ヴー");
+  assert.strictEqual(DICT.pants, "ズボン");
+  // 不变式：英语复数的读音不许和它的单数一模一样
+  // （法语词条 / 地名 / 日语词不在这条不变式里，见 tools/en-plurals.js 的排除表）
+  const { NOT_ENGLISH_PLURAL } = require("../tools/en-plurals.js");
+  const lost = [];
+  for (const k of Object.keys(DICT)) {
+    if (NOT_ENGLISH_PLURAL[k]) continue;
+    if (!/[a-z]s$/.test(k)) continue;
+    const sing = k.slice(0, -1);
+    if (DICT[sing] === undefined) continue;
+    if (DICT[sing] !== DICT[k]) continue;
+    if (/[\u30BA\u30B9\u30C4\u30C1\u30B8]$/.test(DICT[k])) continue;
+    lost.push(k);
+  }
+  assert.deepStrictEqual(lost, [], "这些复数的读音和单数一样（-s 丢了）：" + lost.join(", "));
+});
+
 test("常见歌词词都能「确定地」读出纯片假名（不许掉进猜的规则里）", () => {
   // 词典 / 罗马音 / reading.js 里人工核过的例外表与外来语小表都算"确定"，
   // 只有拼写规则那一层是猜的（confident:false 或者结果明显是拼出来的）。

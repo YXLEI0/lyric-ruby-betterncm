@@ -151,6 +151,17 @@ if (fs.existsSync(LEARNED_SEED)) {
   }
 }
 
+const { pluralize } = require("./en-plurals.js");
+
+let pluralFixed = 0;
+for (const k of Object.keys(words)) {
+  const fixed = pluralize(k, words[k], words);
+  if (fixed && fixed !== words[k]) {
+    words[k] = fixed;
+    pluralFixed++;
+  }
+}
+
 const keys = Object.keys(words).sort();const body = keys
   .map((k) => "    " + JSON.stringify(k) + ": " + JSON.stringify(words[k]) + ",")
   .join("\n");
