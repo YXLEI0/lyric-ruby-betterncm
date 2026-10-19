@@ -1555,7 +1555,17 @@
        * 案例：`T氏にすべてを捧げましょう` 和 `T Is My Everything` 里的 T
        * 一个注音都没有。`A` / `I` 在 ② 里仍旧按冠词 / 代词读（`A story` 的 A 是 ア）。
        */
-      if (line && (gluedToJapanese(word, line, token) || (String(word) !== "A" && String(word) !== "I" && lineHasOtherWord(word, line)))) {
+      /*
+       * 外语行里不套"字母名"：西班牙语的 `Y me cansé` 里那个 Y 是连词（读 イ），
+       * 不是字母 Y（ワイ）。这一行的语种已经认出来了，交给引擎按那门语言读。
+       */
+      var loneLineLang = line ? lineLang(line) : null;
+      if (
+        line &&
+        !loneLineLang &&
+        (gluedToJapanese(word, line, token) ||
+          (String(word) !== "A" && String(word) !== "I" && lineHasOtherWord(word, line)))
+      ) {
         var loneKana =
           typeof WKReading !== "undefined" && WKReading.LETTER_KANA ? WKReading.LETTER_KANA[String(word).toLowerCase()] : null;
         if (loneKana) return { kana: loneKana, source: "letters", confident: true };
@@ -1570,7 +1580,11 @@
           typeof WKReading !== "undefined" && WKReading.LETTER_KANA ? WKReading.LETTER_KANA[String(word).toLowerCase()] : null;
         if (numKana) return { kana: numKana, source: "letters", confident: true };
       }
-      if (String(word) !== "A" && String(word) !== "I") return null;
+      /*
+       * 外语行里别在这里收口：西班牙语的 `Y` 是连词（イ），法语 / 德语的单字母
+       * 也可能有词义。语种认出来了就往下走，让那一层的引擎读；没认出来才留白。
+       */
+      if (String(word) !== "A" && String(word) !== "I" && !loneLineLang) return null;
     }
     /*
      * 记号里的 `&`（`R&B` / `A&B`）：读 アンド。它是唯一有读音的分隔符，

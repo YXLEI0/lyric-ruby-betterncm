@@ -29,7 +29,7 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 - 推荐填一个大模型 API Key (默认 DeepSeek, 任何 OpenAI 兼容接口都行), 只存在本机 localStorage。留空则这一层不工作, 自动退回免费接口。按「词 + 它所在的那句歌词」缓存, 所以同一个词在不同句子里会分别判断
 - 模型答过两次、读音一致的词会自动沉淀成离线词条, 以后不再问模型; 面板「操作 → 导出词库素材」可以把攒下来的词筛进离线词典 (`npm run promote:learned`)
 - 记号 (`D/N/A` / `R&B` / `X-Y` / `M・I・D・I`) 按字母名逐字母读, 而且一个字母一个注音 (`&` 读 アンド, 分隔符不发音); 紧贴假名的缩写按字母名 (`ATフィールド` → エーティー), 单个希腊字母读字母名 (`Ω` 按单位读 オーム); 颜文字里的字符不标 (`(#^ω^)`); 缩写 (`you're` / `I'll` / `don't`) 拆成"词干 + 尾巴"; 不发音字母也认 (`knock` ノック, `climb` クライム, `subtle` サトル)
-- 西文各语种另有各自的拼读: 德语 / 拉丁语 / 葡萄牙语 / 荷兰语 / 斯瓦希里语 / 汉语拼音 / 法语 / 俄语(西里尔) / 希腊语。按整行判定语种, 所以同一首歌里的英文行照旧按英语读 —— `die Ruinenstadt` ディー・ルイーネンスタト, `Novum mundum` ノヴム・ムンドゥム, `Shambulia` シャンブリア, `Виват Анастасия` ヴィヴァト・アナスタシヤ
+- 西文各语种另有各自的拼读: 德语 / 拉丁语 / 葡萄牙语 / 西班牙语 / 荷兰语 / 斯瓦希里语 / 汉语拼音 / 法语 / 俄语(西里尔) / 希腊语。按整行判定语种, 所以同一首歌里的英文行照旧按英语读 —— `die Ruinenstadt` ディー・ルイーネンスタト, `Novum mundum` ノヴム・ムンドゥム, `Shambulia` シャンブリア, `Виват Анастасия` ヴィヴァト・アナスタシヤ; 西语 `En mi propio camino seguiré lejos de ti` エン・ミ・プロピオ・カミノ・セギレ・レホス・デ・ティ, `Y me cansé` イ・メ・カンセ
 - 另有 [sljfaq](https://www.sljfaq.org/afaq/gairaigo.html) 的法语 / 德语 / 荷兰语 / 葡萄牙语 / 俄语借词表 (`tools/vendor/loan/`, `npm run build:loan`, 共 314 条), 记的是日语通行写法 (`Lied` リート, `bier` ビール, `pao` パン, `норма` ノルマ), 只在该语言的行上生效 —— `rose` 在法语行是 ロゼ、英文行仍是 ローズ; 另外收了两批官方读音: [Project Sekai 主数据库](https://pjsekai.moe/#/music/803) 里单词歌名的官方读法 (`Nostalogic` ノスタロジック、`CHAOS` カオス) 和 [sljfaq「English words from Japanese」](https://www.sljfaq.org/afaq/japanese-in-english.html) 那批日语来源英文词 (`kudzu` クズ、`rickshaw` ジンリキシャ)
 - 只标歌词原文行和播放栏标题, 含汉字的行也照标; 中文翻译层、罗马音层、制作信息行 (作词/作曲/编曲/演唱/曲绘…) 和版权行 (`Copyright` / `©` / `℗`) 跳过
 - RNP 的「复制模式」(总览视图) 整块不注音, 复制歌词时不会带上注音文字

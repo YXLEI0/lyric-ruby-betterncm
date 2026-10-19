@@ -3538,6 +3538,52 @@ test("多音字：大模型按整句挑读音（银行 ハン / 行走 シン）
   assert.strictEqual(offRow.classList.contains("wk-pending"), false, "没开大模型就不是暂定");
 });
 
+test("西语歌词（On My Way）：y イ、ti ティ、de デ（不是字母名 / 英语读音）", async () => {
+  /*
+   * 之前没有西语引擎，这几句被英语词典和"孤零零单字母读字母名"接走：
+   *   `ti` -> ティーアイ（词典里是 T.I.）、`Y` -> ワイ、`de` -> ドゥ、`meter` -> メーター
+   * 现在整行判成西语之后，这些词都交给西语引擎。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>En mi propio camino seguiré lejos de ti</p></li>
+  <li class="line"><p>Y me cansé de luchar y de guerrear en vano</p></li>
+  <li class="line"><p>De estar en la línea de fuego y de meter la mano</p></li>
+  <li class="line"><p>So take aim and fire away</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(400);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const map = (p) =>
+    new Map(
+      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    );
+
+  const l0 = map(ps[0]);
+  assert.strictEqual(l0.get("ti"), "ティ", "西语的 ti 是 ティ（不是字母名）：" + ps[0].innerHTML);
+  assert.strictEqual(l0.get("mi"), "ミ", "mi 是 ミ：" + ps[0].innerHTML);
+  assert.strictEqual(l0.get("de"), "デ", "de 是 デ：" + ps[0].innerHTML);
+  assert.strictEqual(l0.get("seguiré"), "セギレ", "gu+i 的 u 不发音：" + ps[0].innerHTML);
+  assert.strictEqual(l0.get("camino"), "カミノ");
+
+  const l1 = map(ps[1]);
+  assert.strictEqual(l1.get("Y"), "イ", "西语的 Y 是连词 イ（不是字母名 ワイ）：" + ps[1].innerHTML);
+  assert.strictEqual(l1.get("me"), "メ", "me 是 メ：" + ps[1].innerHTML);
+  assert.strictEqual(l1.get("luchar"), "ルチャル");
+
+  const l2 = map(ps[2]);
+  assert.strictEqual(l2.get("meter"), "メテル", "西语的 meter 是动词 メテル：" + ps[2].innerHTML);
+  assert.strictEqual(l2.get("fuego"), "フエゴ");
+  assert.strictEqual(l2.get("mano"), "マノ");
+
+  // 同一首歌里的英文行照旧按英语读（别被西语抢走）
+  const en = map(ps[3]);
+  assert.strictEqual(en.get("take"), "テイク", "英文行不受影响：" + ps[3].innerHTML);
+  assert.strictEqual(en.get("away"), "アウェイ");
+});
+
 test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">

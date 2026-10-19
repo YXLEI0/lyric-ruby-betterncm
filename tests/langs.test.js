@@ -528,6 +528,37 @@ test("葡萄牙语拼读：鼻元音与二合字母", () => {
   assert.strictEqual(read("pt", "tabaco"), "タバコ");
 });
 
+test("西班牙语拼读：五个纯元音 + ll / ñ / j / g / qu", () => {
+  // 元音都是短音，没有长音符：camino カミノ、lejos レホス、vano バノ
+  assert.strictEqual(read("es", "camino"), "カミノ");
+  assert.strictEqual(read("es", "lejos"), "レホス");
+  assert.strictEqual(read("es", "vano"), "バノ");
+  assert.strictEqual(read("es", "mano"), "マノ");
+  // 二合字母 / 特殊读法
+  assert.strictEqual(read("es", "luchar"), "ルチャル"); // ch -> チャ
+  assert.strictEqual(read("es", "llave"), "リャベ"); // ll -> リャ
+  assert.strictEqual(read("es", "mañana"), "マニャナ"); // ñ -> ニャ
+  assert.strictEqual(read("es", "gente"), "ヘンテ"); // g + e -> ヘ
+  assert.strictEqual(read("es", "queso"), "ケソ"); // qu -> ケ
+  assert.strictEqual(read("es", "seguiré"), "セギレ"); // gu + i 的 u 不发音
+  assert.strictEqual(read("es", "cansé"), "カンセ"); // n 在辅音前收 ン
+  // 单字母：y 是连词 イ、ti 是 ティ（不是字母名）
+  assert.strictEqual(read("es", "y"), "イ");
+  assert.strictEqual(read("es", "ti"), "ティ");
+  // 整行判定：三句真机歌词都要判成西语
+  for (const line of [
+    "En mi propio camino seguiré lejos de ti",
+    "Y me cansé de luchar y de guerrear en vano",
+    "De estar en la línea de fuego y de meter la mano",
+  ]) {
+    assert.strictEqual(L.detect(line), "es", "这行是西语：" + line);
+  }
+  // 不能抢走英语 / 法语 / 德语
+  for (const line of ["So take aim and fire away", "I've never been so", "L'eau dans son courant", "der Himmel über mir"]) {
+    assert.notStrictEqual(L.detect(line), "es", "这行不是西语：" + line);
+  }
+});
+
 test("荷兰语拼读：ij / oe / ui / g", () => {
   assert.strictEqual(read("nl", "tijd"), "タイト");
   assert.strictEqual(read("nl", "goed"), "フート");

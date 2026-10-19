@@ -665,9 +665,157 @@
     return { col: col, kana: NL_VOWEL[col] || "\u30A4", len: 1 };
   }
 
-  function dutchToKatakana(raw) {
+  // ============================================================ 西班牙语
+  //
+  // 五个元音都短而纯（a ア / e エ / i イ / o オ / u ウ），重音符号只标重读、不改音质；
+  // h 不发音；ñ ニ、ll リャ行、j ハ行、g 在 e/i 前 ヘ行（gente ヘンテ）、
+  // c 在 e/i 前 セ/シ（cine シネ）、qu ケ/キ、gu 在 e/i 前 ゲ/ギ（guerra ゲラ）、
+  // y 单独出现或在词尾是 イ（y イ、hoy オイ），在元音前是 ヤ行（ya ヤ）。
+  // 词尾辅音按日语习惯收：n ン、s ス、r ル、l ル、d ド、z ス。
+  var ES_VOWEL = { a: "\u30A2", e: "\u30A8", i: "\u30A4", o: "\u30AA", u: "\u30A6" };
+  var ES_ROW = {
+    b: row5("\u30D0", "\u30D3", "\u30D6", "\u30D9", "\u30DC"), // バ行
+    c: row5("\u30AB", "\u30B7", "\u30AF", "\u30BB", "\u30B3"), // カ シ ク セ コ
+    d: row5("\u30C0", "\u30C7\u30A3", "\u30C9\u30A5", "\u30C7", "\u30C9"), // ダ ディ ドゥ デ ド
+    f: row5("\u30D5\u30A1", "\u30D5\u30A3", "\u30D5", "\u30D5\u30A7", "\u30D5\u30A9"), // ファ行
+    g: row5("\u30AC", "\u30AE", "\u30B0", "\u30B2", "\u30B4"), // ガ行（e/i 前另走 ヘ行）
+    j: row5("\u30CF", "\u30D2", "\u30D5", "\u30D8", "\u30DB"), // ハ行（j 是喉音）
+    k: row5("\u30AB", "\u30AD", "\u30AF", "\u30B1", "\u30B3"), // カ行
+    l: row5("\u30E9", "\u30EA", "\u30EB", "\u30EC", "\u30ED"), // ラ行
+    m: row5("\u30DE", "\u30DF", "\u30E0", "\u30E1", "\u30E2"), // マ行
+    n: row5("\u30CA", "\u30CB", "\u30CC", "\u30CD", "\u30CE"), // ナ行
+    p: row5("\u30D1", "\u30D4", "\u30D7", "\u30DA", "\u30DD"), // パ行
+    r: row5("\u30E9", "\u30EA", "\u30EB", "\u30EC", "\u30ED"), // ラ行（rr 也走这里）
+    s: row5("\u30B5", "\u30B7", "\u30B9", "\u30BB", "\u30BD"), // サ行
+    t: row5("\u30BF", "\u30C6\u30A3", "\u30C8\u30A5", "\u30C6", "\u30C8"), // タ ティ トゥ テ ト
+    v: row5("\u30D0", "\u30D3", "\u30D6", "\u30D9", "\u30DC"), // バ行（v 和 b 同音）
+    x: row5("\u30AF\u30B5", "\u30AF\u30B7", "\u30AF\u30B9", "\u30AF\u30BB", "\u30AF\u30BD"), // クサ行
+    z: row5("\u30B5", "\u30B7", "\u30B9", "\u30BB", "\u30BD"), // サ行（z 是齿间音）
+  };
+  /** 重音符号只标重读：á -> a、ü -> u */
+  function esBase(ch) {
+    if (ch === "\u00E1" || ch === "\u00E0") return "a";
+    if (ch === "\u00E9" || ch === "\u00E8") return "e";
+    if (ch === "\u00ED" || ch === "\u00EC") return "i";
+    if (ch === "\u00F3" || ch === "\u00F2") return "o";
+    if (ch === "\u00FA" || ch === "\u00F9" || ch === "\u00FC") return "u";
+    return ch;
+  }
+  function esIsVowel(ch) {
+    return ch !== "" && "aeiou".indexOf(esBase(ch)) >= 0;
+  }
+
+  function spanishToKatakana(raw) {
     var w = bare(raw);
     if (!w || !/^[a-z\u00E0-\u00FF]+$/.test(w)) return null;
+    var len = w.length;
+    var out = "";
+    var i = 0;
+    while (i < len) {
+      var rest = len - i;
+      var c = w.charAt(i);
+      var two = w.substr(i, 2);
+      var three = w.substr(i, 3);
+      var next = w.charAt(i + 1);
+      var nextB = esBase(next);
+      // 二合字母后面那个元音（ch/ll/qu/gu 要看它）
+      var after2 = w.charAt(i + 2);
+      var after2B = esBase(after2);
+      // 小元音：チャ / チェ / チョ / チュ
+      var small = after2B === "a" ? "\u30E3" : after2B === "o" ? "\u30E7" : after2B === "u" ? "\u30E5" : after2B === "e" ? "\u30A7" : "";
+
+      // ch -> チャ行（luchar ルチャル、noche ノチェ）
+      if (two === "ch") {
+        out += "\u30C1" + (esIsVowel(after2) && after2B !== "i" ? small : "");
+        i += esIsVowel(after2) ? 3 : 2;
+        continue;
+      }
+      // ll -> リャ行（llave リャベ、calle カリェ）；词尾的 ll 是 リ
+      if (two === "ll") {
+        out += "\u30EA" + (esIsVowel(after2) && after2B !== "i" ? small : "");
+        i += esIsVowel(after2) ? 3 : 2;
+        continue;
+      }
+      // qu / gu 里的 u 不发音：que ケ、qui キ、gue ゲ、gui ギ、seguiré セギレ
+      if (two === "qu" && "ei".indexOf(after2B) >= 0) { out += pick(ES_ROW.k, after2B); i += 3; continue; }
+      if (two === "gu" && "ei".indexOf(after2B) >= 0) { out += pick(ES_ROW.g, after2B); i += 3; continue; }
+      // g 在 e/i 前是喉音，读 ヘ行（gente ヘンテ、gira ヒラ）
+      if (c === "g" && "ei".indexOf(nextB) >= 0) { out += pick(ES_ROW.j, nextB); i += 2; continue; }
+      // ñ -> ニ + 小元音（niño ニーニョ、mañana マニャナ）
+      if (c === "\u00F1") {
+        if (esIsVowel(next)) {
+          out += "\u30CB" + (nextB === "a" ? "\u30E3" : nextB === "o" ? "\u30E7" : nextB === "u" ? "\u30E5" : nextB === "e" ? "\u30A7" : "");
+          i += 2;
+        } else {
+          out += "\u30CB";
+          i += 1;
+        }
+        continue;
+      }
+      // h 不发音
+      if (c === "h") { i += 1; continue; }
+      // y：元音前是 ヤ行（ya ヤ、yo ヨ），单独/词尾是 イ（y イ、hoy オイ）
+      if (c === "y") {
+        if (esIsVowel(next) && "ei".indexOf(nextB) < 0) {
+          out += nextB === "a" ? "\u30E4" : nextB === "o" ? "\u30E8" : nextB === "u" ? "\u30E6" : "\u30A4";
+          i += 2;
+        } else {
+          out += "\u30A4";
+          i += 1;
+        }
+        continue;
+      }
+      // 二重元音：ia ヤ、ie イェ、ue ウェ、ua ワ……
+      if (c === "i" && esIsVowel(next)) {
+        out += nextB === "a" ? "\u30E4" : nextB === "e" ? "\u30A4\u30A7" : nextB === "o" ? "\u30E8" : "\u30E6";
+        i += 2;
+        continue;
+      }
+      if (c === "u" && esIsVowel(next)) {
+        out += nextB === "a" ? "\u30EF" : nextB === "e" ? "\u30A6\u30A7" : nextB === "i" ? "\u30A6\u30A3" : nextB === "o" ? "\u30A6\u30A9" : "\u30A6";
+        i += 2;
+        continue;
+      }
+      // 前一个元音 + i/u：ai アイ、au アウ、eu エウ……
+      if (esIsVowel(c) && (nextB === "i" || nextB === "u")) {
+        if (two === "ai") { out += "\u30A2\u30A4"; i += 2; continue; }
+        if (two === "au") { out += "\u30A2\u30A6"; i += 2; continue; }
+        if (two === "ei") { out += "\u30A8\u30A4"; i += 2; continue; }
+        if (two === "eu") { out += "\u30A8\u30A6"; i += 2; continue; }
+        if (two === "oi") { out += "\u30AA\u30A4"; i += 2; continue; }
+        if (two === "ou") { out += "\u30AA\u30A6"; i += 2; continue; }
+      }
+      // 鼻音 / 流音后面不是元音时先收尾：cansé カンセ、campo カンポ、alma アルマ
+      if (c === "n" && !esIsVowel(next) && next !== "" && nextB !== "y") { out += "\u30F3"; i += 1; continue; }
+      if (c === "m" && !esIsVowel(next) && next !== "" && nextB !== "y") { out += "\u30E0"; i += 1; continue; }
+      if (c === "l" && !esIsVowel(next) && next !== "" && nextB !== "y") { out += "\u30EB"; i += 1; continue; }
+      if (c === "r" && !esIsVowel(next) && next !== "" && nextB !== "y") { out += "\u30EB"; i += 1; continue; }
+      if (c === "s" && !esIsVowel(next) && next !== "" && nextB !== "y") { out += "\u30B9"; i += 1; continue; }
+      // 辅音 + 元音
+      if (ES_ROW[c] && esIsVowel(next)) {
+        out += pick(ES_ROW[c], nextB);
+        i += 2;
+        continue;
+      }
+      // 元音
+      if (esIsVowel(c)) { out += ES_VOWEL[esBase(c)]; i += 1; continue; }
+      // 词尾辅音
+      if (rest === 1) {
+        if (c === "n") { out += "\u30F3"; i += 1; continue; }
+        if ("sz".indexOf(c) >= 0) { out += "\u30B9"; i += 1; continue; }
+        if ("rl".indexOf(c) >= 0) { out += "\u30EB"; i += 1; continue; }
+        if (c === "d") { out += "\u30C9"; i += 1; continue; }
+        if (c === "j") { out += "\u30D5"; i += 1; continue; }
+        if (c === "x") { out += "\u30C3\u30AF\u30B9"; i += 1; continue; }
+      }
+      if (ES_ROW[c]) { out += pick(ES_ROW[c], "u"); i += 1; continue; }
+      i += 1;
+    }
+    return out ? { kana: out, confident: false } : null;
+  }
+
+  function dutchToKatakana(raw) {
+    var w = bare(raw);    if (!w || !/^[a-z\u00E0-\u00FF]+$/.test(w)) return null;
     var len = w.length;
     var out = "";
     var i = 0;
@@ -1708,6 +1856,33 @@
         [/(?:\u00E3o|\u00F5e|nh|lh)$/, 2], [/(?:eiro|eira|\u00E7\u00E3o|mente)$/, 2], [/(?:ss|\u00E7)/, 1],
       ],
     },
+    /*
+     * 西班牙语：ñ / ¿ / ¡ 是它的"指纹"（葡萄牙语、法语都没有）；词表只收西班牙语
+     * 独有或高频的，de / en / mi / la 这种和法语、拉丁语、葡萄牙语都撞车的给 1 分。
+     */
+    es: {
+      min: 4,
+      hard: [
+        [/[\u00F1\u00BF\u00A1]/, 3],
+        [/[\u00E1\u00E9\u00ED\u00F3\u00FA]/, 1],
+      ],
+      words: {
+        el: 2, los: 2, las: 2, que: 1, y: 2, un: 1, una: 1, por: 1, para: 2, con: 1, mi: 2, tu: 2,
+        su: 1, es: 1, en: 1, me: 1, de: 1, la: 1, al: 2, del: 2,
+        soy: 2, eres: 2, está: 2, estoy: 2, tengo: 2, tienes: 2, quiero: 2, puedes: 2,
+        amor: 2, corazón: 2, vida: 2, cielo: 2, fuego: 2, llorar: 2, luchar: 2, camino: 2, lejos: 2,
+        propio: 2, vano: 2, mano: 2, noche: 2, día: 2, luna: 2, sol: 2, mar: 2, alma: 2, ojos: 2,
+        siempre: 2, nunca: 2, nada: 2, más: 1, sin: 1, sobre: 1, entre: 1, cuando: 2, donde: 2,
+        porque: 2, pero: 1, como: 1, estar: 2, vamos: 2, bailar: 2, cantar: 2, recordar: 2, olvidar: 2,
+        sentir: 2, seguir: 2, guerra: 2, destino: 2, silencio: 2, recuerdo: 2, mañana: 2,
+      },
+      shapes: [
+        [/(?:ci[oó]n|ll|rr|ñ)/, 2],
+        [/(?:ar|er|ir)$/, 2],
+        [/(?:ado|ido|ando|iendo)$/, 1],
+        [/(?:[aeiou]s)$/, 1],
+      ],
+    },
     nl: {
       min: 4,
       hard: [[/ij/, 3], [/[\u00E9\u00E8\u00EA\u00EB\u00EF\u00F6\u00FC]/, 2]],
@@ -1877,7 +2052,7 @@
      * 所有语种一起打分，法语也在里面（门槛交给 passes）。
      * 顺序 = 同分时的优先级（数组顺序就是候选顺序）。
      */
-    var ids = ["fr", "de", "la", "pt", "nl", "sw", "pinyin"];
+    var ids = ["fr", "de", "la", "pt", "es", "nl", "sw", "pinyin"];
     var cands = [];
     for (var i = 0; i < ids.length; i++) cands.push({ id: ids[i], score: scoreOf(ids[i], s) });
     cands.sort(function (a, b) {
@@ -2025,6 +2200,16 @@
     },
     la: {}, // 拉丁语行上整行都走规则层（见 main.js 的 needEngine），不需要逐个列
     pinyin: { wo: 1, ni: 1, ta: 1, men: 1, shi: 1, le: 1, de: 1, you: 1, ai: 1 },
+    /*
+     * 西班牙语：这些词在英语词典里有条目（ti ティーアイ、mi ミー、de ドゥ、el エル、
+     * meter メーター），按词典读全错。列在这里的词一律交给西语引擎，不吃词典。
+     */
+    es: {
+      ti: 1, mi: 1, tu: 1, su: 1, de: 1, en: 1, el: 1, la: 1, los: 1, las: 1, y: 1, es: 1,
+      un: 1, una: 1, con: 1, por: 1, para: 1, que: 1, me: 1, te: 1, se: 1, no: 1, si: 1, al: 1,
+      del: 1, mas: 1, más: 1, meter: 1, son: 1, ser: 1, ver: 1, dar: 1, ir: 1, sol: 1, mar: 1,
+      sal: 1, pan: 1, fin: 1, pie: 1, piel: 1, dos: 1, tres: 1, seis: 1, luz: 1, voz: 1, paz: 1,
+    },
     ru: {},
     el: {},
   };
@@ -2039,7 +2224,7 @@
   // ============================================================ 对外
 
   var LABEL = {
-    fr: "法语", de: "德语", la: "拉丁语", pt: "葡萄牙语", nl: "荷兰语",
+    fr: "法语", de: "德语", la: "拉丁语", pt: "葡萄牙语", es: "西班牙语", nl: "荷兰语",
     sw: "斯瓦希里语", pinyin: "汉语拼音", ru: "俄语", el: "希腊语",
   };
 
@@ -2048,6 +2233,7 @@
     de: germanToKatakana,
     la: latinToKatakana,
     pt: portugueseToKatakana,
+    es: spanishToKatakana,
     nl: dutchToKatakana,
     sw: swahiliToKatakana,
     pinyin: pinyinToKatakana,
@@ -2078,7 +2264,7 @@
   }
 
   return {
-    ids: ["fr", "de", "la", "pt", "nl", "sw", "pinyin", "ru", "el"],
+    ids: ["fr", "de", "la", "pt", "es", "nl", "sw", "pinyin", "ru", "el"],
     labels: LABEL,
     label: function (id) {
       return LABEL[id] || id;
