@@ -203,6 +203,8 @@
     furiganaKana: "hiragana",
     // 自定义读音：一行一条 `底字=假名`（面板里「高级设置 → 自定义读音」）
     furiganaOverrides: "",
+    // 歌词界面里就地改的读音：{ 整行原文: { 词: 假名 } }（按行，不做全局词表）
+    furiganaLineFixes: {},
     // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
     jpnFont: true,
     jpnFontFamily: JP_FONT_DEFAULT,
@@ -2100,6 +2102,137 @@
     return false;
   }
 
+  // ------------------------------------------------------------ 就地改读音
+
+  /*
+   * 双击歌词里的一个注音，就地弹一个小输入框改读音。
+   *
+   * 为什么是双击而不是单击：歌词区域单击是"跳到这一句"，抢掉会很难用。
+   * 为什么按"整行原文"存：同一个词在不同句子里读音不同，不能做全局词表 ——
+   * 改的只是这一句里的这个词（config.furiganaLineFixes[整行] = {词: 假名}）。
+   */
+  var editingEl = null;
+
+  function closeEditor() {
+    if (editingEl && editingEl.parentNode) editingEl.parentNode.removeChild(editingEl);
+    editingEl = null;
+  }
+
+  function lineTextOf(el) {
+    try {
+      if (state.annotator && state.annotator.textOf) return state.annotator.textOf(el) || "";
+    } catch (e) {
+      /* 退回到 textContent */
+    }
+    return el && el.textContent ? el.textContent : "";
+  }
+
+  /** 这个元素所在的"整行"（注音区域；找不到就用它自己） */
+  function lineElementOf(el) {
+    var p = el;
+    while (p && p !== document.body) {
+      if (p.getAttribute && p.getAttribute("data-wk-region") === "1") return p;
+      p = p.parentNode;
+    }
+    return el;
+  }
+
+  function saveInlineFix(lineText, word, kana) {
+    if (!lineText || !word) return;
+    var map = config.furiganaLineFixes;
+    if (!map || typeof map !== "object") map = config.furiganaLineFixes = {};
+    if (!map[lineText]) map[lineText] = {};
+    if (kana) map[lineText][word] = kana;
+    else if (map[lineText]) {
+      delete map[lineText][word];
+      if (!Object.keys(map[lineText]).length) delete map[lineText];
+    }
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    rescan();
+  }
+
+  function openEditor(rubyEl) {
+    if (!rubyEl || !rubyEl.parentNode) return;
+    var word = "";
+    try {
+      word = rubyEl.childNodes[0] ? rubyEl.childNodes[0].nodeValue || "" : "";
+    } catch (e) {
+      word = "";
+    }
+    if (!word) word = rubyEl.textContent || "";
+    var rt = rubyEl.querySelector(".wk-rt");
+    var current = rt ? rt.textContent || "" : "";
+    var lineEl = lineElementOf(rubyEl);
+    var lineText = lineTextOf(lineEl);
+
+    closeEditor();
+    var box = document.createElement("input");
+    box.type = "text";
+    box.value = current;
+    box.className = "wk-edit";
+    box.setAttribute("data-wk-edit", "1");
+    box.style.position = "fixed";
+    box.style.zIndex = "99999";
+    box.style.fontSize = "14px";
+    box.style.padding = "2px 6px";
+    box.style.width = Math.max(80, (current.length + 4) * 14) + "px";
+    try {
+      var r = rubyEl.getBoundingClientRect();
+      box.style.left = Math.max(4, r.left) + "px";
+      box.style.top = Math.max(4, r.top - 30) + "px";
+    } catch (e2) {
+      /* 拿不到位置就放左上角 */
+      box.style.left = "20px";
+      box.style.top = "20px";
+    }
+    box.addEventListener("keydown", function (ev) {
+      var k = ev.key || "";
+      if (k === "Enter") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var v = String(box.value || "").replace(/^\s+/, "").replace(/\s+$/, "");
+        closeEditor();
+        if (v && v !== current) saveInlineFix(lineText, word, v);
+        else if (!v) saveInlineFix(lineText, word, ""); // 清空 = 撤销这条
+      } else if (k === "Escape") {
+        ev.preventDefault();
+        closeEditor();
+      }
+    });
+    // 点到别处就关掉
+    box.addEventListener("blur", function () {
+      setTimeout(closeEditor, 0);
+    });
+    (document.body || document.documentElement).appendChild(box);
+    editingEl = box;
+    try {
+      box.focus();
+      box.select();
+    } catch (e3) {
+      /* 选不中也不影响输入 */
+    }
+  }
+
+  function installInlineEditor() {
+    document.addEventListener(
+      "dblclick",
+      function (ev) {
+        var t = ev.target;
+        while (t && t !== document.body) {
+          var cn = t && typeof t.className === "string" ? t.className : "";
+          if (/(^|\s)wk-ruby(\s|$)/.test(cn)) break;
+          t = t.parentNode;
+        }
+        if (!t || t === document.body) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        openEditor(t);
+      },
+      true
+    );
+  }
+
   // ------------------------------------------------------------ 扫描调度
 
   var RE_KANA_ANY = /[\u3041-\u3096\u30A1-\u30FA]/;
@@ -2209,6 +2342,15 @@
   /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
   function furiganaFixes(line, text, host) {
     var fixes = {};
+    /*
+     * 最高优先级：用户在歌词界面里就地改的（双击注音改的那份）。
+     * 键是"整行原文"，所以只对这一行生效 —— 同一个词换个句子照样用词典。
+     */
+    var inline = config.furiganaLineFixes;
+    if (inline && typeof inline === "object" && Object.prototype.hasOwnProperty.call(inline, line)) {
+      var mine = inline[line];
+      for (var k0 in mine) if (Object.prototype.hasOwnProperty.call(mine, k0)) fixes[k0] = mine[k0];
+    }
     var rules = parseFuriganaRules(config.furiganaOverrides);
     for (var i = 0; i < rules.length; i++) {
       if (line.indexOf(rules[i].scope) < 0) continue;
@@ -3758,6 +3900,8 @@
       // 自定义读音是按行匹配的，不用在这里灌；清一次缓存即可
       if (WKFurigana.clearCache) WKFurigana.clearCache();
     }
+
+    installInlineEditor();
 
     state.annotator = WKAnnotate.createAnnotator({
         // 返回 { kana, source }：source 用来给"按来源着色"的排障功能打标

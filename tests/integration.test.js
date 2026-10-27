@@ -3587,10 +3587,12 @@ test("数字也要注音（105 ひゃくご / 2020 にせんにじゅう）", as
   assert.deepStrictEqual(pairs(ps[2]), [["39", "さんじゅうきゅう"]], "纯数字行也要注：" + ps[2].innerHTML);
 });
 
-test("注音不改变行高（rt 的 line-height 归零）", async () => {
+test("注音在上方、且不改变行高（rt 的 line-height 归零、不许 display:inline）", async () => {
   /*
-   * 有注音的行被 <rt> 撑高，唱到那行时整块歌词往上跳。所以 rt 的 line-height 归零，
-   * 它照旧显示在底字上方但不参与行高计算。
+   * 两件事一起守：
+   *   1. 注音要在底字**上方**（ruby-position: over）—— 给 rt 写 display:inline 会把它排到旁边；
+   *   2. 有注音的行不许被 <rt> 撑高，所以 rt 的 line-height 归零（但不写在 ruby 上，
+   *      那会影响 ruby 自己的行盒）。
    */
   const env = bootPlugin(NCM_HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
@@ -3598,8 +3600,10 @@ test("注音不改变行高（rt 的 line-height 归零）", async () => {
   const style = env.document.getElementById("lyric-ruby-style");
   assert.ok(style, "要有注音样式表");
   const css = style.textContent;
+  assert.ok(/ruby\.wk-ruby[^{]*\{[^}]*ruby-position:\s*over/.test(css), "注音要在上方：" + css.slice(0, 300));
   assert.ok(/rt\.wk-rt[^{]*\{[^}]*line-height:\s*0/.test(css), "rt 要 line-height: 0：" + css.slice(0, 400));
-  assert.ok(/ruby\.wk-ruby[^{]*\{[^}]*line-height:\s*0/.test(css), "ruby 也不占行高：" + css.slice(0, 400));
+  assert.ok(!/rt\.wk-rt[^{]*\{[^}]*display:\s*inline/.test(css), "rt 不许 display:inline（会排到旁边）：" + css.slice(0, 400));
+  assert.ok(!/ruby\.wk-ruby[^{]*\{[^}]*line-height:\s*0/.test(css), "ruby 自己不要 line-height: 0");
 });
 
 test("卡面里原文 + 中文翻译在同一块：原文读日语，翻译读普通话", async () => {
@@ -3913,6 +3917,57 @@ test("词典读不出的汉字交给大模型（按整句问，答案是平假�
   const p = env.document.querySelector("ul.lyric li p");
   const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [["謎", "なぞ"]], "模型给的读音要注上去：" + p.innerHTML);
+});
+
+test("歌词界面里双击注音就能改：只改这一行，并落盘", async () => {
+  /*
+   * 用户要"直接在歌词界面选中改读音"：双击一个注音 -> 就地弹输入框 -> 回车保存。
+   * 存的键是**整行原文**（不做全局词表：同一个词换个句子读数可能不同）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日も君と</p></li>
+  <li class="line"><p>明日は晴れる</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const env = bootPlugin(HTML, { dev: true, config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 明日: "アス", は: "ハ", 晴れる: "ハレル" })
+  );
+  await env.runLoad();
+  await sleep(300);
+
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const firstRuby = ps[0].querySelector("ruby.wk-ruby");
+  assert.ok(firstRuby, "第一行要有注音：" + ps[0].innerHTML);
+
+  // 双击注音 -> 冒出输入框
+  firstRuby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击后要弹出输入框：" + env.document.body.innerHTML.slice(-200));
+  assert.ok(box.value.length > 0, "输入框里是当前读音：" + box.value);
+
+  // 改成 みょうにち（当前值本身就是 あした，所以换一个能看出变化的），回车
+  box.value = "みょうにち";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(
+    saved.furiganaLineFixes,
+    { "明日も君と": { 明日: "みょうにち" } },
+    "要按整行存：" + JSON.stringify(saved.furiganaLineFixes)
+  );
+
+  const p0 = env.document.querySelectorAll("ul.lyric li p")[0];
+  const rt = p0.querySelector("ruby.wk-ruby .wk-rt");
+  assert.strictEqual(rt.textContent, "みょうにち", "改完要立刻生效：" + p0.innerHTML);
+  // 另一行不受影响
+  const p1 = env.document.querySelectorAll("ul.lyric li p")[1];
+  const rt1 = p1.querySelector("ruby.wk-ruby .wk-rt");
+  assert.notStrictEqual(rt1.textContent, "みょうにち", "别的行不许跟着变：" + p1.innerHTML);
 });
 
 test("面板里填了按句的读音修正：只有那一行变，别的行照旧", async () => {

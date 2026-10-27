@@ -1130,7 +1130,14 @@
       for (var j = 0; j < tokens.length; j++) {
         var tk = tokens[j];
         if (tk.start > pos) pieces.push({ text: text.slice(pos, tk.start) });
-        if (!glosses[j]) {
+        if (tk.hide) {
+          /*
+           * 作词者自带的括号注音「漢字(かな)」：括号那一段是"读法"不是歌词。
+           * 显示出来就变成 漢字(かな) + 汉字上面的假名注音，两套读音并排 —— 藏起来。
+           * 用一个 display:none 的 span，不动原文顺序，还原时照旧能摘掉。
+           */
+          pieces.push({ text: tk.text, hide: true });
+        } else if (!glosses[j]) {
           pieces.push({ text: tk.text });
         } else {
           var isPending = false;
@@ -1216,7 +1223,8 @@
       // 只记注音的话，还原时这些分段会留在 DOM 里，原文就会重复一遍。
       for (var k = startIndex; k < pieces.length; k++) {
         var piece = pieces[k];
-        var childNode = piece.ruby || doc.createTextNode(piece.text);
+        var childNode = piece.ruby ||
+          (piece.hide ? makeHideSpan(doc, piece.text) : doc.createTextNode(piece.text));
         // 给"我们自己造出来的"节点打标记：别的插件（jp-furigana）的
         // MutationObserver 靠它区分"这是注音插件插的"从而不把行标脏。
         // 见 tools/patch-jp-furigana.js 的 __ktRecordIsOurs（它认 __wkOwned，
@@ -1320,7 +1328,15 @@
      * 哪个词是词典给的、哪个是规则猜的、哪个是模型换过的。类名一直在，
      * 不给它上色而已（这样开关一开立刻生效，不用重扫）。
      */
-    function buildRuby(base, gloss, provisional, source) {
+    /** 括号注音里的那段括号：藏起来（display:none），不占位 */
+function makeHideSpan(d, t) {
+  var el = d.createElement("span");
+  el.className = "wk-hide";
+  el.textContent = t;
+  return el;
+}
+
+function buildRuby(base, gloss, provisional, source) {
       var ruby = doc.createElement("ruby");
       ruby.className = "wk-ruby" + (provisional ? " wk-pending" : "") + (source ? " wk-src-" + source : "");
       ruby.appendChild(doc.createTextNode(base));
@@ -2314,7 +2330,6 @@
        * 让 <rt> 的 line-height 归零：它照旧显示在底字上方，但不参与行高计算。
        * 逐字歌词里每个字是独立 <span>，ruby 也不许换行，否则会被挤成两截。
        */
-      "  line-height: 0;",
       "  white-space: nowrap;",
       "}",
       "rt.wk-rt, .wk-rt {",
@@ -2324,7 +2339,6 @@
       "  font-style: normal;",
       "  letter-spacing: 0;",
       "  line-height: 0;",
-      "  display: inline;",
       "  text-align: center;",
       "  white-space: nowrap;",
       "  text-transform: none;",
@@ -2332,6 +2346,8 @@
       "  -webkit-user-select: none;",
       "}",
       // 内核不支持 ruby 排版：注音脱离文档流，免得 <rt> 退化成 block 撑坏行高
+      // 作词者自带的括号注音「漢字(かな)」：括号和里面的假名是"读法"，不唱，藏起来
+      ".wk-hide { display: none !important; }",
       '[data-wk-fallback] { position: relative; }',
       '[data-wk-fallback] > ruby.wk-ruby { position: relative; display: inline-block; }',
       '[data-wk-fallback] > ruby.wk-ruby > .wk-rt {',

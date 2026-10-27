@@ -227,7 +227,18 @@
     if (segs && segs.length) {
       for (var i = 0; i < segs.length; i++) {
         var seg = segs[i];
-        if (!seg || seg.hidden) continue;
+        if (!seg) continue;
+        /*
+         * 作词者自己写的括号注音「漢字(かな)」：括号那一段标了 hidden —— 它是读法不是歌词，
+         * 交给注音层藏起来（否则屏幕上会同时出现假名注音和原句里的括号假名）。
+         */
+        if (seg.hidden) {
+          var hAt = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
+          if (hAt >= 0 && seg.text) {
+            out.push({ text: s.substr(hAt, seg.text.length) || seg.text, start: hAt, end: hAt + seg.text.length, hide: true, kind: "hide" });
+          }
+          continue;
+        }
         if (!seg.rt) continue; // 没有读音的片段（标点 / 假名 / 拉丁）不注
         // at 是这一片段在整行里的起点；长度按底字算
         var at = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
