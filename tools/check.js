@@ -91,6 +91,7 @@ console.log("[0/7] 运行时版本");
     "tests/sljfaq-words.test.js",
     "tests/cjk.test.js",
     "tests/cn-line.test.js",
+    "tests/numbers.test.js",
     "tests/furigana.test.js",
     "tests/dict.test.js",
     "tests/annotate.test.js",

@@ -3544,6 +3544,64 @@ test("振假名可以关掉，也可以切成片假名写法", async () => {
   assert.strictEqual(rt.textContent, "ハズ", "面板切成片假名时要跟着变");
 });
 
+test("纯音乐占位行不注音（纯音乐，请欣赏 / 純音楽、請欣賞 / 暂无歌词）", async () => {
+  /*
+   * 纯音乐曲目在歌词位会显示一句提示，它不是歌词。真机上被当成普通中文行逐字注了音
+   * （`纯音乐，请欣赏` 上面一长串普通话读音）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>纯音乐，请欣赏</p></li>
+  <li class="line"><p>純音楽、請欣賞</p></li>
+  <li class="line"><p>暂无歌词</p></li>
+  <li class="line"><p>きらめく光の中で</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 光: "ヒカリ", 中: "ナカ" }));
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  for (let i = 0; i < 3; i++) {
+    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "占位行不许注音：" + ps[i].textContent);
+  }
+  assert.ok(ps[3].querySelectorAll("ruby.wk-ruby").length > 0, "真正的歌词行照旧要注");
+});
+
+test("数字也要注音（105 ひゃくご / 2020 にせんにじゅう）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>105℃の君</p></li>
+  <li class="line"><p>2020年</p></li>
+  <li class="line"><p>39</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 君: "キミ", 年: "ネン" }));
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs(ps[0]), [["105", "ひゃくご"], ["君", "きみ"]], "数字要注：" + ps[0].innerHTML);
+  assert.deepStrictEqual(pairs(ps[2]), [["39", "さんじゅうきゅう"]], "纯数字行也要注：" + ps[2].innerHTML);
+});
+
+test("注音不改变行高（rt 的 line-height 归零）", async () => {
+  /*
+   * 有注音的行被 <rt> 撑高，唱到那行时整块歌词往上跳。所以 rt 的 line-height 归零，
+   * 它照旧显示在底字上方但不参与行高计算。
+   */
+  const env = bootPlugin(NCM_HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(250);
+  const style = env.document.getElementById("lyric-ruby-style");
+  assert.ok(style, "要有注音样式表");
+  const css = style.textContent;
+  assert.ok(/rt\.wk-rt[^{]*\{[^}]*line-height:\s*0/.test(css), "rt 要 line-height: 0：" + css.slice(0, 400));
+  assert.ok(/ruby\.wk-ruby[^{]*\{[^}]*line-height:\s*0/.test(css), "ruby 也不占行高：" + css.slice(0, 400));
+});
+
 test("卡面里原文 + 中文翻译在同一块：原文读日语，翻译读普通话", async () => {
   /*
    * 真机现象（极简歌词那种卡面）：原文 `妄想感傷代償連盟` 上面注的是 ワンシャン…（普通话）。

@@ -180,6 +180,16 @@
   var RE_CREDIT_CN_SOFT = /(版权|版權|著作权|著作權|有限责任公司|有限公司)/;
   var RE_CREDIT_EN_SOFT = /\b(?:LTD|LLC|PUBLISHING|COPYRIGHT)\b|ALL RIGHTS RESERVED/i;
 
+  /*
+   * 占位行：纯音乐曲目在歌词位显示的那句话（`纯音乐，请欣赏` / `純音楽、請欣賞`），
+   * 以及 `暂无歌词` / `此歌曲为纯音乐` 这类提示。它们不是歌词，一个字都不该注。
+   */
+  var RE_PLACEHOLDER = /(?:纯音乐|純音楽|请欣赏|請欣賞|暂无歌词|暫無歌詞|此歌曲为纯音乐|此歌曲為純音樂|instrumental)/i;
+
+  function isPlaceholderLine(t) {
+    return RE_PLACEHOLDER.test(String(t == null ? "" : t));
+  }
+
   /** 这一行是不是制作信息 / 署名 / 版权编号（几种写法都认） */
   function isCreditText(t) {
     var s = String(t == null ? "" : t);
@@ -2141,6 +2151,14 @@
         if (text.length < 2 && !matcher.hasReadable(text)) continue;
         if (isCreditText(text)) continue; // 制作信息行跳过
         /*
+         * 占位行（纯音乐曲目那句 `纯音乐，请欣赏`，以及 `暂无歌词` 这类提示）：
+         * 它不是歌词，一个字都不该注。真机上它会被当成普通中文行逐字注上音。
+         */
+        if (isPlaceholderLine(text)) {
+          noteSkip("占位行（纯音乐 / 暂无歌词）", text, region);
+          continue;
+        }
+        /*
          * 制作信息行被拆成好几个节点时（RNP 常见），碎片本身不像制作信息 ——
          * 往上拿整行的文字再判一次，否则 `混音&母带处理：宫奇` 旁边的 `Gon`
          * 会被注上音（实测如此）。判到了就记一笔跳过原因，方便排障。
@@ -2289,6 +2307,15 @@
       "  ruby-position: over;",
       "  -webkit-ruby-position: before;",
       "  ruby-align: center;",
+      /*
+       * 有注音的行和没注音的行要一样高。
+       *
+       * 注音是额外的行盒，默认会把这一行撑高 —— 于是"唱到这行时整块歌词往上跳"。
+       * 让 <rt> 的 line-height 归零：它照旧显示在底字上方，但不参与行高计算。
+       * 逐字歌词里每个字是独立 <span>，ruby 也不许换行，否则会被挤成两截。
+       */
+      "  line-height: 0;",
+      "  white-space: nowrap;",
       "}",
       "rt.wk-rt, .wk-rt {",
       "  font-size: " + size + "%;",
@@ -2296,7 +2323,8 @@
       "  font-weight: normal;",
       "  font-style: normal;",
       "  letter-spacing: 0;",
-      "  line-height: 1.1;",
+      "  line-height: 0;",
+      "  display: inline;",
       "  text-align: center;",
       "  white-space: nowrap;",
       "  text-transform: none;",

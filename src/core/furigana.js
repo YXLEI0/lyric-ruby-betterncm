@@ -193,7 +193,8 @@
       autoLoad();
       return null;
     }
-    if (!d.core.hasKanji(s)) return null;
+    // 只有数字的行也要注（kuromoji 不给阿拉伯数字读音，由 core/numbers.js 补）
+    if (!d.core.hasKanji(s) && !/[0-9]/.test(s)) return null;
     var kana = (opts && opts.kana) || "hiragana";
     var key = cacheKey(s, kana);
     var hit = cache.get(key);
@@ -222,6 +223,38 @@
         if (!text0) continue;
         out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
       }
+    }
+    /*
+     * 数字：kuromoji 对阿拉伯数字不给读音（`105` 的 reading 是 `*`），这里自己补。
+     * 已经有读音的段（`1つ` ひとつ）不重复注：跟它重叠的数字段跳过。
+     */
+    if (typeof WKNumbers !== "undefined" && WKNumbers.reading) {
+      var runs = WKNumbers.scan(s);
+      for (var r = 0; r < runs.length; r++) {
+        var run = runs[r];
+        var covered = false;
+        for (var q = 0; q < out.length; q++) {
+          if (out[q].start < run.end && run.start < out[q].end) {
+            covered = true;
+            break;
+          }
+        }
+        if (covered) continue;
+        var numKana = WKNumbers.reading(run.text);
+        if (!numKana) continue;
+        out.push({
+          text: run.text,
+          start: run.start,
+          end: run.end,
+          kana: kana === "katakana" ? numKana : numKana.replace(/[\u30A1-\u30F6]/g, function (c) {
+            return String.fromCharCode(c.charCodeAt(0) - 0x60);
+          }),
+          kind: "num",
+        });
+      }
+      out.sort(function (a, b) {
+        return a.start - b.start;
+      });
     }
     remember(key, out);
     return out.length ? out : null;
