@@ -42,11 +42,28 @@
    */
   function fontStack(raw) {
     var v = String(raw == null ? "" : raw);
-    v = v.replace(/[|;{}\[\]<>\r\n\\]/g, " "); // 会破坏规则 / 注入的字符
-    v = v.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'"); // 弯引号 -> 直引号
-    v = v.replace(/\u3000/g, " "); // 全角空格
-    v = v.replace(/\s+/g, " ").trim();
-    return v || JP_FONT_DEFAULT;
+    v = v.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
+    v = v.replace(/\u3000/g, " ");
+    /*
+     * 按分隔符切开、逐项清洗、再拼回去。
+     *
+     * 以前只是把 `|` `;` 换成空格，结果 `"fontA" "fontB" x` 里两个字符串直接相邻 ——
+     * **整条规则仍然非法**，浏览器丢弃赋值，`style.fontFamily` 读回来是空的，
+     * 看起来还是"没生效"。逐项清洗才能保证拼出来一定合法：
+     *   - 分隔符认 `,` `;` `|`（用户当成"或者"随手写的）
+     *   - 每项去掉引号和会破坏规则的字符，保留日文（`游ゴシック`）和名字里的空格
+     *   - 名字里有空格或非 ASCII 就加双引号；`serif` 这类通用族不加
+     */
+    var parts = v.split(/[,;|\uFF0C\uFF1B]/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var name = parts[i].replace(/["']/g, "").replace(/[{}\[\]<>\\\r\n\t]/g, " ");
+      name = name.replace(/\s+/g, " ").trim();
+      if (!name) continue;
+      var generic = /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif)$/i.test(name);
+      out.push(generic ? name : '"' + name + '"');
+    }
+    return out.length ? out.join(", ") : JP_FONT_DEFAULT;
   }
 
   /*
@@ -2102,10 +2119,58 @@
    *
    * 振假名和中文读音的分岔就按它走。
    */
+  /**
+   * 整首歌的语种：日文 / 中文 / 拿不准。
+   *
+   * 为什么要整首投票：中文歌里总有几行没法光看字面就认出来（`那一些呼喊求助` 这种，
+   * 没有简体特有字形、也没有中文标点），逐行判会把它们漏到振假名那档，
+   * 于是同一首歌里一半普通话读音、一半日语读音。整首一句假名都没有、又能认出中文行，
+   * 那这首就是中文歌 —— 一行都不该走日语读音。
+   *
+   * 罗马音层 / 翻译层不参与投票（它们是页面自己加的，不代表原文语种）。
+   */
+  var songKindCache = { key: null, value: "unknown" };
+  function songKind() {
+    if (!state.annotator || !state.annotator.findRegions) return "unknown";
+    var regions = [];
+    try {
+      regions = state.annotator.findRegions("lyrics");
+    } catch (e) {
+      return "unknown";
+    }
+    if (!regions || !regions.length) return "unknown";
+    var texts = [];
+    var kana = 0;
+    var cjk = 0;
+    var cn = 0;
+    for (var i = 0; i < regions.length; i++) {
+      if (fontSkipped(regions[i])) continue;
+      var t = regionText(regions[i]);
+      if (!t) continue;
+      texts.push(t);
+      if (RE_KANA_ANY.test(t)) kana++;
+      else if (/[\u4E00-\u9FFF]/.test(t)) {
+        cjk++;
+        if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(t)) cn++;
+      }
+    }
+    var key = kana + "|" + cjk + "|" + cn + "|" + texts.join("\n").slice(0, 2000);
+    if (songKindCache.key === key) return songKindCache.value;
+    var value;
+    if (kana > 0) value = "ja"; // 有假名就是日文歌
+    else if (cn > 0) value = "zh"; // 一句假名都没有、还能认出中文行 = 中文歌
+    else if (cjk > 0) value = "ja"; // 纯汉字没有假名（`東京` 这种）按日文处理
+    else value = "unknown"; // 只有拉丁字母：交给逐行的西文逻辑
+    songKindCache = { key: key, value: value };
+    return value;
+  }
+
   function lineLooksJapanese(line) {
-    if (!line) return songLooksJapanese();
+    if (!line) return songKind() !== "zh" && songLooksJapanese();
     if (RE_KANA_ANY.test(line)) return true;
     if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(line)) return false;
+    var kind = songKind();
+    if (kind === "zh") return false;
     return songLooksJapanese();
   }
 
@@ -2177,18 +2242,19 @@
   }
 
   /**
-   * 注音层的 extraTokens：按"这一行是不是日语行"分岔。
+   * 注音层的 extraTokens：按"这一段文字是不是日文"分岔。
    *
-   *   - 日语行 -> 振假名（汉字标读音，平/片假名看配置）
-   *   - 非日语行 -> 中文 / 朝鲜语（core/cjk.js，逐字）
+   *   - 日文 -> 振假名（汉字标读音，平/片假名看配置）
+   *   - 中文 / 朝鲜语 -> core/cjk.js，逐字
    *
-   * 两条不会同时生效：日语歌里的汉字必须读日语，中文歌里的汉字才读普通话。
+   * **判语种看这一段自己的文字（s），不看整块的 context**：真机上"极简歌词"那种卡面
+   * 把 原文 + 罗马音 + 中文翻译 塞进同一个元素，拿 context 去判会读到同一块里的中文翻译，
+   * 于是日文原文被当成中文、逐字注上普通话读音（真机现象：`妄想感傷代償連盟` 上面是 ワンシャン…）。
    */
   function extraTokens(text, context) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    var line = context || s;
-    if (lineLooksJapanese(line)) return furiganaTokens(s);
+    if (lineLooksJapanese(s)) return furiganaTokens(s);
     return cjkTokens(s, context);
   }
 
@@ -2457,24 +2523,27 @@
   /**
    * 这一行该不该换日文字体。
    *
-   * 判据按"这一行的文字长什么样"来，不按选择器猜：
-   *   - 有假名 -> 日文行，换
+   * 判据看这一行**自己的直接文本**长什么样，不按选择器猜：
+   *   - 直接文本里有假名 -> 日文原文行，换
    *   - 罗马音 / 中文翻译那一类（class 已经是这几种）-> 不换
-   *   - 没有汉字（纯拉丁 = 罗马音行）-> 不换
+   *   - 直接文本里没有汉字（纯拉丁 = 罗马音行）-> 不换
    *   - 有汉字但明显是中文（core/cn-line.js 判）-> 不换
    *   - 其余（纯汉字日文行，比如 `東京`）-> 换
-   *
-   * 为什么改成按内容判：NCM 的歌词页把"原文 / 罗马音 / 翻译"渲染成**兄弟节点**，
-   * 它们全都匹配同一批歌词选择器 —— 只按选择器过滤，翻译行照样被换成日文字体，
-   * 中文按日文字形渲染很难看。按内容判，翻译行没有假名、又被判成中文，自然就跳过了。
    */
-  function wantsJapaneseFont(el) {
+  function ownText(el) {
     var t = "";
     try {
-      t = el.textContent || "";
+      for (var n = el.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 3) t += n.nodeValue || "";
+      }
     } catch (e) {
-      return false;
+      return "";
     }
+    return t;
+  }
+
+  function wantsJapaneseFont(el, text) {
+    var t = typeof text === "string" ? text : ownText(el);
     if (!t) return false;
     if (RE_KANA_ANY.test(t)) return true;
     if (fontSkipped(el)) return false;
@@ -2484,10 +2553,31 @@
   }
 
   /**
-   * 把字体写进区域元素的内联样式；family 为空 = 撤掉我们写过的那些。
+   * 找出"真的要换字体"的最内层元素。
    *
-   * 真机上只有内联样式压得过播放页自己的规则（面板预览也是内联，所以预览一直有效）；
-   * 目标不只包括"已经注过音的行"：日语歌里的纯汉字行、关掉振假名的行，字体也得换。
+   * 为什么不能直接给区域容器写字体：真机上"极简歌词"那种一行的三行排版是把
+   * 原文 / 罗马音 / 中文翻译塞进**同一个容器**的，给容器写 font-family，三行一起变 ——
+   * 中文和罗马字按日文字形渲染，很丑。所以往下钻，只认"自己的直接文本里有假名"的那一层。
+   */
+  function fontTargets(root) {
+    var out = [];
+    function walk(el) {
+      if (!el || el.nodeType !== 1) return;
+      var own = ownText(el);
+      if (own && wantsJapaneseFont(el, own)) {
+        out.push(el);
+        return; // 这一层就是原文行，不再往下
+      }
+      for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c);
+    }
+    walk(root);
+    return out;
+  }
+
+  /**
+   * 把字体写进目标元素的内联样式；family 为空 = 撤掉我们写过的那些。
+   *
+   * 真机上只有内联样式压得过播放页自己的规则（面板预览也是内联，所以预览一直有效）。
    */
   function applyJapaneseFontInline(family) {
     var targets = [];
@@ -2498,32 +2588,50 @@
       seen.push(el);
       targets.push(el);
     }
+    function scan(root) {
+      var list = fontTargets(root);
+      for (var i = 0; i < list.length; i++) add(list[i]);
+    }
     try {
       var tagged = document.querySelectorAll("[data-wk-region]");
-      for (var i = 0; i < tagged.length; i++) add(tagged[i]);
+      for (var i = 0; i < tagged.length; i++) scan(tagged[i]);
     } catch (e) {
       /* 查不到就算了 */
     }
     try {
       if (state.annotator && state.annotator.findRegions) {
         var regions = state.annotator.findRegions("lyrics");
-        for (var j = 0; j < regions.length; j++) add(regions[j]);
+        for (var j = 0; j < regions.length; j++) scan(regions[j]);
       }
     } catch (e2) {
       /* 同上 */
     }
-    // 以前写过、现在不该写的元素（换行 / 语言变了 / 关掉开关）也要能撤掉
+    /*
+     * 以前写过、现在不该写的元素也要能撤掉（换行 / 语言变了 / 关掉开关）。
+     * 这些元素上一定留着 data-wk-font 印记，直接按它找。
+     */
     try {
       var marked = document.querySelectorAll("[data-wk-font]");
-      for (var m = 0; m < marked.length; m++) add(marked[m]);
+      for (var m = 0; m < marked.length; m++) {
+        var old = marked[m];
+        if (targets.indexOf(old) >= 0) continue;
+        if (family && wantsJapaneseFont(old)) add(old);
+        else {
+          try {
+            old.style.removeProperty("font-family");
+            old.removeAttribute("data-wk-font");
+          } catch (eOld) {
+            /* 撤不掉就算 */
+          }
+        }
+      }
     } catch (e3) {
       /* 同上 */
     }
     for (var k = 0; k < targets.length; k++) {
       var el = targets[k];
-      var want = !!family && wantsJapaneseFont(el);
       try {
-        if (want) {
+        if (family) {
           var now = el.style.getPropertyValue("font-family");
           var pri = el.style.getPropertyPriority("font-family");
           if (now !== family || pri !== "important") el.style.setProperty("font-family", family, "important");
@@ -2540,37 +2648,20 @@
 
   function updateJapaneseFont() {
     var want = config.jpnFont === true && songLooksJapanese();
-    var css = "";
-    if (want) {
-      var family = fontStack(config.jpnFontFamily);
-      // 真机上起作用的是内联样式（见上面的说明），每轮补一次：换行 / 切歌会换元素
-      applyJapaneseFontInline(family);
-      /*
-       * 样式表只写 [data-wk-region]（注音层标过的行），不要再用宽泛的歌词选择器：
-       * 那些选择器连 `rnp-lyrics-line-romaji` / `-translated` 一起命中，
-       * 罗马音行和中文翻译行就被换成日文字体了（中文按日文字形渲染很难看）。
-       */
-      css = "[data-wk-region], [data-wk-region] * { font-family: " + family + " !important; }";
-    } else {
-      applyJapaneseFontInline("");
-    }
-    if (css === jpFontCss) return;
-    jpFontCss = css;
+    if (want) applyJapaneseFontInline(fontStack(config.jpnFontFamily));
+    else applyJapaneseFontInline("");
+    /*
+     * 样式表整个不用了：它只能按选择器命中，而真机上"原文 / 罗马音 / 翻译"常常在同一个
+     * 容器里（或者都匹配同一批选择器），写成 `SEL, SEL *` 会连子节点一起换。
+     * 真正起作用的一直是内联样式（面板预览也是内联），这里只负责把老版本留下的样式表收走。
+     */
     try {
       var el = document.getElementById("lyric-ruby-font");
-      if (!css) {
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-        return;
-      }
-      if (!el) {
-        el = document.createElement("style");
-        el.id = "lyric-ruby-font";
-        (document.head || document.documentElement).appendChild(el);
-      }
-      el.textContent = css;
+      if (el && el.parentNode) el.parentNode.removeChild(el);
     } catch (e) {
-      /* 样式表挂不上不影响注音 */
+      /* 没有就算了 */
     }
+    jpFontCss = want ? "inline" : "";
   }
 
   function updateStyles() {

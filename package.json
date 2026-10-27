@@ -1,6 +1,6 @@
 {
   "name": "lyric-ruby-betterncm",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "BetterNCM 插件：给歌词标注读音 —— 日语汉字振假名（kuromoji 离线分词），西文字母 / 中文 / 朝鲜语标片假名",
   "private": true,
   "license": "MIT",

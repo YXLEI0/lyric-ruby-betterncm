@@ -3544,6 +3544,109 @@ test("振假名可以关掉，也可以切成片假名写法", async () => {
   assert.strictEqual(rt.textContent, "ハズ", "面板切成片假名时要跟着变");
 });
 
+test("卡面里原文 + 中文翻译在同一块：原文读日语，翻译读普通话", async () => {
+  /*
+   * 真机现象（极简歌词那种卡面）：原文 `妄想感傷代償連盟` 上面注的是 ワンシャン…（普通话）。
+   * 原因：判语种时用的是整块 context，而整块里还躺着中文翻译，于是"这一块是中文"，
+   * 日文原文被逐字注成普通话。
+   * 现在按**每一段自己的文字**判：原文那段没假名、也不像中文 -> 走振假名；翻译那段像中文 -> 走中文。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><div class="card">
+    <div class="jp">妄想感傷代償連盟</div>
+    <div class="trans">妄想感伤代偿联盟</div>
+  </div></li>
+  <li class="line"><p>だから</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  // 日语分词器：只认识日文写法，读音是日语
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 妄想: "モウソウ", 感傷: "カンショウ", 代償: "ダイショウ", 連盟: "レンメイ" })
+  );
+  await env.runLoad();
+  await sleep(300);
+
+  const jp = env.document.querySelector(".jp");
+  const trans = env.document.querySelector(".trans");
+  const read = (el) =>
+    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+
+  assert.deepStrictEqual(
+    read(jp),
+    [
+      ["妄想", "もうそう"],
+      ["感傷", "かんしょう"],
+      ["代償", "だいしょう"],
+      ["連盟", "れんめい"],
+    ],
+    "原文要读日语（不是 ワンシャン…）：" + jp.innerHTML
+  );
+  /*
+   * 同一个 <li> 里的中文翻译块：注音层只取第一块（那边是原文），翻译块整块不注 ——
+   * 所以这里一条 ruby 都不该有。真机上翻译行被注普通话读音是另一条老 bug，
+   * 已经由「只取第一块」挡掉了。
+   */
+  assert.deepStrictEqual(read(trans), [], "翻译块不该被注音：" + trans.innerHTML);
+});
+
+test("中文歌整首不做振假名（逐行判会漏掉的那几行）", async () => {
+  /*
+   * 真机现象：中文歌里一半行是普通话读音、一半行被读成日语（`那一些呼喊求助` →
+   * いち こ もとめすけ）。原因是一行一行判：这行既没有简体特有字形、也没有中文标点，
+   * 逐行判据认不出来，就漏到振假名那档去了。
+   *
+   * 现在整首投票：一句假名都没有、又能认出中文行 -> 这首是中文歌，一行都不走日语读音。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>在我这里 有你的一个家</p></li>
+  <li class="line"><p>那一些呼喊求助</p></li>
+  <li class="line"><p>直到永远</p></li>
+</ul></div></div>
+</body></html>`;
+
+  // 振假名开着、词典也给了（有分词器），但没有一行该走日语读音
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 那: "ナ", 一: "イチ", 些: "サ", 呼: "コ", 喊: "カン", 求: "モトメ", 助: "スケ", 在: "ザイ", 我: "ガ" })
+  );
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  for (let i = 0; i < ps.length; i++) {
+    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "中文歌不许出现日语读音：" + ps[i].textContent + " -> " + ps[i].innerHTML);
+  }
+
+  // 打开中文注音：整首按普通话读音注，一行都不许是日语读音
+  const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  on.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 那: "ナ", 一: "イチ", 些: "サ", 呼: "コ", 喊: "カン", 求: "モトメ", 助: "スケ", 在: "ザイ", 我: "ガ" })
+  );
+  await on.runLoad();
+  await sleep(300);
+  const onPs = on.document.querySelectorAll("ul.lyric li p");
+  const pairs = Array.from(onPs[1].querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    pairs,
+    [
+      ["那", "ナ"],
+      ["一", "イ"],
+      ["些", "シェ"],
+      ["呼", "フ"],
+      ["喊", "ハン"],
+      ["求", "チュウ"],
+      ["助", "ジュ"],
+    ],
+    "中文行按普通话读音注（不是 いち こ もとめすけ）：" + onPs[1].innerHTML
+  );
+});
+
 test("日语歌里夹的中文行：按中文读音注，不按日语读", async () => {
   /*
    * 日语歌里夹中文行很常见（中文版歌词、双语字幕）。整首有假名不代表这一行是日语 ——
@@ -3606,10 +3709,13 @@ test("日文字体：重置按钮恢复默认，脏字体串会被洗干净", as
   });
   await env.runLoad();
   await sleep(250);
-  const css = env.document.getElementById("lyric-ruby-font");
-  assert.ok(css, "要有字体样式表");
-  assert.strictEqual(css.textContent.indexOf("|"), -1, "竖线要洗掉：" + css.textContent);
-  assert.ok(css.textContent.indexOf("Hiragano Kaku Gothic Pro") >= 0, "字体名本体要留着：" + css.textContent);
+  // 字体现在只走内联样式（样式表在真机上压不过页面规则，已经不用了）
+  const line = env.document.querySelector("ul.lyric li p");
+  const applied = line.style.getPropertyValue("font-family");
+  assert.ok(applied, "歌词行上要有内联字体：" + line.getAttribute("style"));
+  assert.strictEqual(applied.indexOf("|"), -1, "竖线要洗掉：" + applied);
+  assert.ok(applied.indexOf("Hiragano Kaku Gothic Pro") >= 0, "字体名本体要留着：" + applied);
+  assert.strictEqual(env.document.getElementById("lyric-ruby-font"), null, "不再挂字体样式表");
 
   const root = env.listeners.config[0]();
   const input = root.querySelector('[data-k="jpnFontFamily"]');
@@ -3674,9 +3780,35 @@ test("日文字体不碰罗马音行和中文翻译行", async () => {
     ps[2].style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0,
     "后面的日文行照旧要换：" + ps[2].getAttribute("style")
   );
+
+  /*
+   * 第三种形态（"极简歌词"那种卡面）：原文 / 罗马音 / 中文翻译三行塞在**同一个容器**里。
+   * 给容器写字体 = 三行一起变（用户反馈的就是这个）。所以字体要往下钻，只落在
+   * "自己的直接文本里有假名"那一层 —— 也就是原文那一行。
+   */
+  const NESTED = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><div class="card">
+    <div class="jp">この糸 ちぎるだけ</div>
+    <div class="roma">ko no i to chi gi ru da ke</div>
+    <div class="trans">只是将这条线切成小段</div>
+  </div></li>
+</ul></div></div>
+</body></html>`;
+  const env3 = bootPlugin(NESTED, { config: { online: false, llmEnabled: false } });
+  await env3.runLoad();
+  await sleep(300);
+  const card = env3.document.querySelector(".card");
+  const jp = env3.document.querySelector(".jp");
+  const roma = env3.document.querySelector(".roma");
+  const transLine = env3.document.querySelector(".trans");
+  assert.ok(jp.style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0, "卡面里的日文行要换：" + jp.getAttribute("style"));
+  assert.strictEqual(roma.style.getPropertyValue("font-family"), "", "卡面里的罗马音行不许换：" + roma.getAttribute("style"));
+  assert.strictEqual(transLine.style.getPropertyValue("font-family"), "", "卡面里的翻译行不许换：" + transLine.getAttribute("style"));
+  assert.strictEqual(card.style.getPropertyValue("font-family"), "", "容器本身不许写字体（否则三行一起变）");
 });
 
-test("日语歌词换日文字体：内联样式（真机生效的那条）+ 样式表兜底", async () => {
+test("日语歌词换日文字体：只写在原文行的内联样式上", async () => {
   /*
    * 中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染（直 / 骨 / 今 的笔画都不同），
    * 所以日语歌的歌词要换成日文字体。
@@ -3698,16 +3830,11 @@ test("日语歌词换日文字体：内联样式（真机生效的那条）+ 样
   const jp = bootPlugin(JP, { config: { online: false, llmEnabled: false } });
   await jp.runLoad();
   await sleep(250);
-  const css = jp.document.getElementById("lyric-ruby-font");
-  assert.ok(css, "日语歌要挂字体样式表");
   /*
-   * 样式表只写 [data-wk-region]（注音层标过的行）。以前用的是宽泛的歌词选择器，
-   * 结果连 rnp-lyrics-line-romaji / -translated 也命中 —— 罗马音行和中文翻译行
-   * 被换成日文字体了。
+   * 字体只走内联样式：样式表按选择器命中，真机上会把同容器的罗马音 / 翻译一起换掉，
+   * 而且压不过播放页自己的规则。这里顺便确认那个老样式表已经收走了。
    */
-  assert.ok(/\[data-wk-region\]/.test(css.textContent), "样式表要按注音区域写：" + css.textContent);
-  assert.strictEqual(css.textContent.indexOf("rnp-lyrics"), -1, "不许再按宽泛的歌词选择器写：" + css.textContent);
-  assert.ok(/font-family: 'Yu Gothic UI'/.test(css.textContent), "默认日文字体栈：" + css.textContent);
+  assert.strictEqual(jp.document.getElementById("lyric-ruby-font"), null, "不再挂字体样式表");
 
   // 真正生效的那条：注过音的行要带上内联 font-family（!important）
   const region = jp.document.querySelector("ul.lyric li p");
@@ -3741,14 +3868,16 @@ test("日语歌词换日文字体：内联样式（真机生效的那条）+ 样
     assert.strictEqual(offRegion.getAttribute("data-wk-font"), null, "印记也要摘掉");
   }
 
-  // 可以自定义字体
+  // 可以自定义字体（面板填的串会被整理成合法的 font-family）
   const custom = bootPlugin(JP, {
     config: { online: false, llmEnabled: false, jpnFontFamily: "'Noto Sans JP', serif" },
   });
   await custom.runLoad();
   await sleep(250);
-  const customEl = custom.document.getElementById("lyric-ruby-font");
-  assert.ok(customEl && customEl.textContent.indexOf("'Noto Sans JP', serif") >= 0, "面板填的字体要生效");
+  const customLine = custom.document.querySelector("ul.lyric li p");
+  const customFont = customLine.style.getPropertyValue("font-family");
+  assert.ok(customFont.indexOf("Noto Sans JP") >= 0, "面板填的字体名要生效：" + customFont);
+  assert.ok(/\bserif\b/.test(customFont) && customFont.indexOf('"serif"') < 0, "通用族 serif 不许加引号：" + customFont);
 });
 
 test("中文歌的版权块不注音（词版权管理方：… 有限公司）", async () => {
