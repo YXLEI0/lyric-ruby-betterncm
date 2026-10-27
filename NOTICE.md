@@ -17,6 +17,11 @@
 
 振假名完全离线，运行时不请求任何第三方服务。
 
+另外两处来自 [JapaneseFonts](https://github.com/MuttonString/Furigana)（作者 Mutton_String）：
+- `src/core/jp-kanji.js` 里的 544 对「简体 / 繁中特有写法 → 日标汉字」对应表（取自它的 `HANZI` / `KANJI` 两条常量）；
+  这是标准的一对一映射，本插件只用来给振假名取读音，不改显示。
+- 面板里「日文字体」的默认字体栈（`'Yu Gothic UI', 'Yu Gothic', '游ゴシック', 'Meiryo UI', 'Meiryo', 'MS Gothic', 'MS Mincho', 'Microsoft YaHei'`）。
+
 ## 1. 离线读音词典 `src/core/dict.js`
 
 - 生成脚本：`tools/build-dict.js` (不联网, 只把现成的表合成一个文件)

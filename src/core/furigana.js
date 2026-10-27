@@ -198,9 +198,17 @@
     var key = cacheKey(s, kana);
     var hit = cache.get(key);
     if (hit) return hit.length ? hit : null;
+    /*
+     * 分词用的是"换成日标写法"的文本：歌词里混进简体字（爱 / 时 / 说）时，
+     * IPADIC 里没有那个字形，切不出词也就没有读音，整段留白。
+     * 映射是一对一的，所以片段位置和长度都能直接对回原文 —— 显示仍是原文。
+     */
+    var probe = s;
+    if (typeof WKJpKanji !== "undefined" && WKJpKanji.toJapanese) probe = WKJpKanji.toJapanese(s);
+    if (!d.core.hasKanji(probe)) probe = s;
     var segs = null;
     try {
-      segs = d.core.tokensToSegments(d.tokenizer.tokenize(s), { kana: kana });
+      segs = d.core.tokensToSegments(d.tokenizer.tokenize(probe), { kana: kana });
     } catch (e) {
       segs = null;
     }
@@ -211,9 +219,12 @@
         if (!seg || seg.hidden) continue;
         if (!seg.rt) continue; // 没有读音的片段（标点 / 假名 / 拉丁）不注
         // at 是这一片段在整行里的起点；长度按底字算
-        var at = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
+        var at = typeof seg.at === "number" ? seg.at : probe.indexOf(seg.text);
         if (at < 0) continue;
-        out.push({ text: seg.text, start: at, end: at + seg.text.length, kana: seg.rt, kind: "kanji" });
+        // 底字取原文那一段（位置一一对应），读音来自换过写法的分词结果
+        var text0 = s.substr(at, seg.text.length);
+        if (!text0) continue;
+        out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
       }
     }
     remember(key, out);

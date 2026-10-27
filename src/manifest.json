@@ -3,7 +3,7 @@
 	"manifest_version": 1,
 	"name": "歌词注音",
 	"slug": "lyric-ruby",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"author": "YXLEI0",
 	"author_link": "https://github.com/YXLEI0",
 	"description": "在歌词上方标注读音：日语汉字标振假名（kuromoji 离线分词），西文字母 / 中文 / 朝鲜语标片假名。日语歌里按日语读，非日语歌里按那门语言读",
@@ -37,6 +37,9 @@
 			},
 			{
 				"file": "core/cjk.js"
+			},
+			{
+				"file": "core/jp-kanji.js"
 			},
 			{
 				"file": "core/furigana.js"

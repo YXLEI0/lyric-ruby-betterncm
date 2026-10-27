@@ -3544,6 +3544,53 @@ test("振假名可以关掉，也可以切成片假名写法", async () => {
   assert.strictEqual(rt.textContent, "ハズ", "面板切成片假名时要跟着变");
 });
 
+test("日语歌词换日文字体：日语歌有、英文歌没有、关掉就没有", async () => {
+  /*
+   * 中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染（直 / 骨 / 今 的笔画都不同），
+   * 所以日语歌的歌词要换成日文字体。做法是在 <head> 挂一张样式表，不动 DOM ——
+   * 改元素属性会被注音层当成"内容变了"，真机上就是一直重扫。
+   */
+  const JP = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>そんな筈はないだろ</p></li>
+</ul></div></div>
+</body></html>`;
+  const EN = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>We are the champions</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const jp = bootPlugin(JP, { config: { online: false, llmEnabled: false } });
+  await jp.runLoad();
+  await sleep(250);
+  const css = jp.document.getElementById("lyric-ruby-font");
+  assert.ok(css, "日语歌要挂字体样式表");
+  assert.ok(/ul\.lyric li p/.test(css.textContent), "样式表要覆盖歌词选择器：" + css.textContent);
+  assert.ok(/font-family: 'Yu Gothic UI'/.test(css.textContent), "默认日文字体栈：" + css.textContent);
+
+  // 英文歌不换字体
+  const en = bootPlugin(EN, { config: { online: false, llmEnabled: false } });
+  await en.runLoad();
+  await sleep(250);
+  assert.strictEqual(en.document.getElementById("lyric-ruby-font"), null, "英文歌不许换日文字体");
+
+  // 关掉之后日语歌也不换
+  const off = bootPlugin(JP, { config: { online: false, llmEnabled: false, jpnFont: false } });
+  await off.runLoad();
+  await sleep(250);
+  assert.strictEqual(off.document.getElementById("lyric-ruby-font"), null, "关掉之后不许挂样式表");
+
+  // 可以自定义字体
+  const custom = bootPlugin(JP, {
+    config: { online: false, llmEnabled: false, jpnFontFamily: "'Noto Sans JP', serif" },
+  });
+  await custom.runLoad();
+  await sleep(250);
+  const customEl = custom.document.getElementById("lyric-ruby-font");
+  assert.ok(customEl && customEl.textContent.indexOf("'Noto Sans JP', serif") >= 0, "面板填的字体要生效");
+});
+
 test("中文歌的版权块不注音（词版权管理方：… 有限公司）", async () => {
   /*
    * 真机形态：中文歌的歌词列表末尾挂着一整块版权信息，而且没有"作词 / 编曲"式标签 ——

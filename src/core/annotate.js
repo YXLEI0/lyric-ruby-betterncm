@@ -2262,6 +2262,10 @@
       churnedCount: churnedCount,
       repairLine: repairLine,
       cleanup: cleanup,
+      /** 歌词区域的选择器（日文字体样式表按同一批选择器写，免得两处各维护一份） */
+      lyricSelectors: function () {
+        return LYRIC_SELECTORS.slice();
+      },
       /*
        * 一个元素的可见原文（不含任何注音）。上层判"这首歌是不是日语歌"、
        * 判整首语种、匹配整首专属读音都要用它 —— 直接用 textContent 会把我们

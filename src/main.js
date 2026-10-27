@@ -23,6 +23,14 @@
   var REPO_URL = "https://github.com/YXLEI0/lyric-ruby-betterncm";
 
   /*
+   * 日语歌词的字体栈。中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染
+   * （`直` 的竖折、`骨` 的框内、`今` 的最后一笔都不一样），日文字体排在前面就能纠正。
+   * 字体名写在这里只是默认值，面板可以改（老版本 JapaneseFonts 也是让用户填的）。
+   */
+  var JP_FONT_DEFAULT =
+    "'Yu Gothic UI', 'Yu Gothic', '游ゴシック', 'Meiryo UI', 'Meiryo', 'MS Gothic', 'MS Mincho', 'Microsoft YaHei'";
+
+  /*
    * 插件改过两次名：latin-katakana -> western-katakana（0.1.x 之前）-> lyric-ruby（1.0）。
    * localStorage 的键前缀跟着换，但已有的配置、学会的词、缓存、用量账本不该因为改名全丢，
    * 所以做一次性搬家：新键不存在、老键存在才复制，老键留着不删（万一要回退）。
@@ -157,6 +165,9 @@
     // 日语汉字振假名：默认开（装了本插件就是要看读音）；平假名是日语歌词的惯例
     furigana: true,
     furiganaKana: "hiragana",
+    // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
+    jpnFont: true,
+    jpnFontFamily: JP_FONT_DEFAULT,
     scope: "all", // titles | lyrics | all | custom
     customSelector: "",
     rtSize: 55, // 注音字号（相对底字百分比）
@@ -2247,6 +2258,7 @@
        * 之后注音层查到的 `state.songWords` 就是这首歌的。
        */
       updateSongScope();
+      updateJapaneseFont();
       var regions = null;
       if (config.scope === "lyrics") regions = state.annotator.findRegions("lyrics");
       else if (config.scope === "titles") regions = state.annotator.findRegions("titles");
@@ -2390,6 +2402,46 @@
     schedule(0);
   }
 
+  /**
+   * 日语歌的歌词字体：<head> 里挂一个样式表，只改字体，不动 DOM。
+   *
+   * 为什么用样式表而不是给元素加 inline style：注音层每轮都在扫歌词，改元素属性会
+   * 被它当成"内容变了"（真机上就是一直重扫 / 抽搐）。样式表只影响渲染，注音层看不到。
+   * 非日语歌 / 关掉这一项时把样式清空，切歌立刻生效。
+   */
+  var jpFontCss = null;
+  function updateJapaneseFont() {
+    var want = config.jpnFont === true && songLooksJapanese();
+    var css = "";
+    if (want) {
+      var family = String(config.jpnFontFamily || JP_FONT_DEFAULT).trim() || JP_FONT_DEFAULT;
+      var sels =
+        typeof state.annotator !== "undefined" && state.annotator && state.annotator.lyricSelectors
+          ? state.annotator.lyricSelectors()
+          : ["ul.lyric li p", ".rnp-lyrics-line-original"];
+      var parts = [];
+      for (var i = 0; i < sels.length; i++) parts.push(sels[i]);
+      css = parts.join(",\n") + " { font-family: " + family + " !important; }";
+    }
+    if (css === jpFontCss) return;
+    jpFontCss = css;
+    try {
+      var el = document.getElementById("lyric-ruby-font");
+      if (!css) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        return;
+      }
+      if (!el) {
+        el = document.createElement("style");
+        el.id = "lyric-ruby-font";
+        (document.head || document.documentElement).appendChild(el);
+      }
+      el.textContent = css;
+    } catch (e) {
+      /* 样式表挂不上不影响注音 */
+    }
+  }
+
   function updateStyles() {
     if (typeof WKAnnotate !== "undefined" && WKAnnotate.applyStyles) {
       WKAnnotate.applyStyles(document, {
@@ -2441,6 +2493,8 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateAll"> 也标播放栏的歌名 / 歌手</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="furigana"> 日语歌词给汉字标振假名</label></div>' +
       '<div class="wk-row"><label>振假名写法 <select data-k="furiganaKana"><option value="hiragana">平假名</option><option value="katakana">片假名</option></select></label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="jpnFont"> 日语歌词用日文字体</label></div>' +
+      '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 也给汉字标普通话读音 (片假名)</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 也给谚文标朝鲜语读音</label></div>' +
       '<div class="wk-hint">振假名只标日语歌里的汉字 (kuromoji 分词, 离线词典); 汉字 / 谚文那两条只标非日语歌里的行</div>' +
@@ -2904,6 +2958,8 @@
     }, 1000);
 
     var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana"];
+    // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
+    var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
 
     var inputs = root.querySelectorAll("[data-k]");
@@ -2964,6 +3020,10 @@
             rescan();
           } else if (NEEDS_RESCAN.indexOf(key) >= 0) {
             rescan();
+          } else if (NEEDS_FONT.indexOf(key) >= 0) {
+            // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次样式表
+            jpFontCss = null;
+            updateJapaneseFont();
           } else if (NEEDS_RESTYLE.indexOf(key) >= 0) {
             if (state.annotator) state.annotator.restoreAll();
             schedule(0);

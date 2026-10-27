@@ -15,7 +15,7 @@ const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, "src");
 
 /** 按 manifest 顺序注入的核心模块（加文件时这里和 manifest 一起改） */
-const CORE_FILES = ["core/letters.js", "core/dict.js", "core/enwords.js", "core/hanzi.js", "core/hangul.js", "core/cjk.js", "core/furigana.js", "core/reading.js", "core/loan.js", "core/songs.js", "core/langs.js", "core/correct.js", "core/llm.js", "core/usage.js", "core/learn.js", "core/annotate.js"];
+const CORE_FILES = ["core/letters.js", "core/dict.js", "core/enwords.js", "core/hanzi.js", "core/hangul.js", "core/cjk.js", "core/jp-kanji.js", "core/furigana.js", "core/reading.js", "core/loan.js", "core/songs.js", "core/langs.js", "core/correct.js", "core/llm.js", "core/usage.js", "core/learn.js", "core/annotate.js"];
 
 /** 第三方底座（按需注入：只有振假名的测试需要） */
 const VENDOR_FILES = ["vendor/furigana.js"];
