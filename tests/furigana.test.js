@@ -113,24 +113,6 @@ test("振假名：没有汉字 / 没有分词器 / 读不出读音时不产出 t
   assert.strictEqual(W.WKFurigana.tokens("謎"), null, "读不出读音就不注");
 });
 
-test("振假名：简体字按日标写法取读音（爱 -> 愛 -> あい，显示仍是原文）", () => {
-  const ctx = newWindow();
-  const W = ctx.window;
-  // 分词器只认识日标字形：收到 愛 才有读音，收到简体 爱 就当作不认识的单字
-  W.WKFurigana.setTokenizer(
-    fakeTokenizer({ 愛: "アイ", 上: "ジョウ", 我: "ワガ", 東京: "トウキョウ" })
-  );
-  const tokens = W.WKFurigana.tokens("我 爱 上");
-  assert.deepStrictEqual(
-    Array.from(tokens, (t) => [t.text, t.kana]),
-    [["我", "わが"], ["爱", "あい"], ["上", "じょう"]],
-    "简体字要能读出日语音，且底字保持原文：" + JSON.stringify(tokens)
-  );
-  // 位置仍然对得上原文（注音层按它切底字）
-  assert.strictEqual(tokens[1].start, 2);
-  assert.strictEqual(tokens[1].end, 3);
-});
-
 test("振假名：同一行第二次直接命中缓存", () => {
   const ctx = newWindow();
   const W = ctx.window;

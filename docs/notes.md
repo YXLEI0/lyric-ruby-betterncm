@@ -1,4 +1,4 @@
-> 本插件的详细说明: 读音来源与规则依据、离线词典怎么生成、和另外两个插件怎么共存、
+> 本插件的详细说明: 读音来源与规则依据、离线词典怎么生成、按行分流怎么判、
 > 排障、实现要点、已知限制。上手部分在 README 里。
 
 ---
@@ -341,83 +341,39 @@ npm run build:dict            合并进 src/core/dict.js (人工 > 沉淀 > 大�
 
 ```bash
 npm install
-npm run build            # 产出 builds/western-katakana.plugin
+npm run build            # 产出 builds/lyric-ruby.plugin
 npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 ```
 
-## 几个注音插件一起用
+## 和别的注音插件一起用
 
-| 插件 | 标什么 |
-| --- | --- |
-| [jp-furigana](https://github.com/Leleawa/jp-furigana) | 汉字 → 振假名 |
-| 另一个片假名注音插件 | 片假名 → 英文 |
-| [JapaneseFonts](https://github.com/MuttonString/Furigana) | 给日文歌换日文字体 |
-| 本插件 | 西文字母 → 片假名读音 |
+振假名、日文字体原本是 [jp-furigana](https://github.com/Leleawa/jp-furigana) 和
+[JapaneseFonts](https://github.com/MuttonString/Furigana) 两个插件的功能，1.0 起都内置了
+（词典随插件分发，离线可用），所以**不要再装那两个**：它们会在同一行上再插一层注音，
+于是一行两个 ruby、或者互相判脏来回重建（现象是歌词抽搐）。
 
-四家都会往同一行插节点（JapaneseFonts 是不插节点的例外，但它要判断"这是不是日文歌"），所以 jp-furigana 与 JapaneseFonts 各需要一处共存补丁
-
-补丁有两个版本, 我们注入的节点类名前缀跟着插件改名走过一轮:
-
-| 版本 | 认哪些前缀 | 什么时候用 |
-| --- | --- | --- |
-| v1 | `kt-*` / `lt-*` | 插件还叫 latin-katakana 时的补丁 |
-| v2 | `kt-*` / `lt-*` / `wk-*` | 现在这一版。`wk-*` 是本插件改名后的前缀 |
-
-装上的是 v1 时直接重跑 `npm run patch:furigana` 就会就地升级成 v2 (只改类名枚举和标记位), `--check` 会告诉你打的是哪一版
-
-> 另一个片假名注音插件那边也要跟着改: 它认识本插件的 `lt-ruby` / `lt-rt` (所以文档里写着要 2.1.1 或更新)。插件的 DOM 前缀改成 `wk-` 之后, 它那一侧也得把 `wk-ruby` / `wk-rt` 加进识别表, 否则我们的注音会被它当成外人改的、把行重建, 症状和我们当年踩的"一直闪"一模一样。那是另一个仓库, 本仓库没有它的代码
-
-```bash
-npm run patch:furigana            # 自动找 C:\betterncm\plugins 里的 jp-furigana*.plugin
-npm run patch:furigana -- --check # 已打补丁? 打的是 v1 还是 v2?
-npm run patch:furigana -- --force # 以备份为基准重打
-```
-
-补丁做五件事 (细节见 `tools/patch-jp-furigana.js` 的注释):
-
-1. `isClean()` 的子节点计数忽略两家注音插件的节点 (`kt-*` 与本插件的 `wk-*`, 老版本的 `lt-*` 也认)
-2. `restore()` 拆 wrap 前把外来注音暂存, 别一起丢掉
-3. observer 忽略注音插件引起的变更 (那是闪烁的真正来源, `__ktOwned` / `__ltOwned` / `__wkOwned` 三种标记都认)
-4. `hostsText()` 的"看得见的原文"排除外来注音的 `rt`
-5. `processLine()` 重建完一行后回调 `window.__ktRepairLine(line)`, 让注音同步补回去 (第 5 条是"不闪"的关键: 靠 MutationObserver 等下一帧补, 中间那一帧就是可见的一闪; 两个插件都会挂这个钩子, 所以后加载的那个必须链上去, 而不是覆盖)
-
-补丁打在别人的包上, jp-furigana 一升级就没了; 补丁工具本身也会变。症状是歌词抽搐、或某个词反复闪, 这时用 `--check` 看包里的补丁是不是当前这一版, 不一致就重跑 `npm run patch:furigana -- --force`
-
-反过来, 本插件也认另外两家的注音节点: `isSkippable()` 会整棵跳过 `kt-ruby` / `fg-ruby` 里面。另一个片假名注音插件的注音里装的偏偏是英文原词 (`<rt class="kt-rt">dream</rt>`), 正是本插件要标的对象
-
-### JapaneseFonts (MuttonString/Furigana) 的额外一处: "这是不是日文歌"
-
-[Leleawa/jp-furigana](https://github.com/Leleawa/jp-furigana) 之外, [MuttonString/Furigana](https://github.com/MuttonString/Furigana) (插件名 JapaneseFonts, 只做"给日文歌换日文字体") 也要打一处补丁。它的 `pronounce()` 这样判"这是不是日文歌":
-
-```js
-if (elem.querySelector('furigana') || /[ぁ-ヿ]/g.test(elem.innerHTML)) {
-```
-
-判据是整行 `innerHTML` 里有没有假名, 而本插件的读音就写在 `<rt>` 里的片假名, 于是德语/拉丁语/俄语歌只要被本插件注了音, 它就当成日文歌、把日文字体套上去 (症状: 本插件注出来的片假名被当成"这是日文歌"的证据)。补丁把判据换成 `__wkPlainText(elem)`: 遍历自己的文字, 跳过别家插的注音整块 (`kt-*` / `lt-*` / `wk-*`), 再找假名。它自己的 `<ruby>/<rt>` 没有类名, 照旧算数, 所以真的日文歌不受影响
-
-```bash
-npm run patch:fonts              # 自动找 C:\betterncm\plugins 里的 JapaneseFonts*.plugin
-npm run patch:fonts -- --check   # 已打补丁? 打的是不是当前这一版?
-```
-
-补丁打的是 `.plugin` 包 (BetterNCM 每次启动都从包里重新解包), 备份是 `<原名>.wk-bak`; 打完删掉 `plugins_runtime\JapaneseFonts` 再重启才会生效。细节与锚点见 `tools/patch-japanese-fonts.js`
+老版本里那两支共存补丁（`npm run patch:furigana` / `patch:fonts`）已经删掉了，不需要再打。
 
 ## 设置
 
-面板默认只显示三块: 开关、大模型校正、预览; 其余折进最下面的「高级设置」(原生 `<details>`), 里面按「接口 / 外观 / 范围 / 读音来源顺序 / API 用量 / 操作」分组
+面板按用途分块，默认只显示常用的几项；其余折进最下面的「高级设置」（原生 `<details>`）。
 
-| 选项 | 说明 |
-| --- | --- |
-| 启用注音 | 总开关 |
-| 用大模型校正读音 | 需要填 API Key; 关掉则这一层完全不工作 |
-| 接口地址 / 模型 / API Key | 默认 DeepSeek; 任何 OpenAI 兼容接口都行。「测试连接」当场验证 |
-| 规则没把握时联网校正读音 | 免费的那条路 (Google 接口)。配了大模型时大模型优先 |
-| 也标注播放栏的歌名 / 歌手 | 关掉就只处理歌词区域 |
-| 注音字号 / 不透明度 | 默认 55% / 80% |
-| 标注范围 | 歌词 + 播放栏 / 只标歌词 / 只标播放栏 / 自定义选择器 |
-| 非日语歌也注音 | 默认开。关掉 = 只标日语歌: 整首歌词一个假名都没有的整首跳过 (连播放栏标题也不标), 并把之前注上的撤掉。判据看整首而不是逐行, 所以日语歌里的纯英文行照旧注音 |
-| 读音来源顺序 (↑↓) | 五层的优先级 |
-| 输入 / 输出单价 | 只用来估算花费 (元 / 百万 token), 默认 0 = 不算钱 |
+| 分区 | 选项 | 说明 |
+| --- | --- | --- |
+| — | 启用注音 | 总开关 |
+| 日语歌词 | 标振假名 | 汉字标读音（kuromoji + IPADIC） |
+| 日语歌词 | 平假名 / 片假名 | 振假名的写法 |
+| 日语歌词 | 用日文字体 | 只对日语歌生效；不动 DOM，改的是一张样式表 |
+| 其它语言 | 中文歌词标普通话读音 | 只标非日文行 |
+| 其它语言 | 朝鲜语歌词标朝鲜语读音 | 谚文按拼写现读 |
+| 大模型校正 | 开关 / API Key / 测试 | 关掉则这一层完全不工作 |
+| 预览 | — | 示例歌词跟着字号 / 写法 / 字体当场变 |
+| 高级·外观 | 注音字号 / 不透明度 / 日文字体名 + 重置 / 来源着色 | 字号默认 55%、不透明度 80% |
+| 高级·范围 | 标注范围 / 自定义选择器 / 播放栏 / 非日语歌 / 联网校正 | 关掉「非日语歌也注音」= 只标日语歌，整首一个假名都没有就整首跳过 |
+| 高级·接口 | 接口地址 / 模型 | 默认 DeepSeek；任何 OpenAI 兼容接口都行 |
+| 高级·读音来源顺序 | 五层 ↑↓ | 见「读音从哪来」 |
+| 高级·API 用量 | 单价 / 清零 | 单价只用来估算花费（元 / 百万 token） |
+| 高级·操作 | 重扫 / 重试 / 导出词库 / 清缓存 / 清学会的词 | 排障与维护 |
 
 ## API 用量
 
@@ -672,12 +628,10 @@ tools/
   vendor/sekai/*.json Project Sekai 主数据库里含西文字母的歌名 (带来源)
   build-song-readings.js  生成 src/core/songs.js (整首专属读音: 官方多词歌名切分 + 手工)
   song-readings-hand.js   手工的整首/整句专属读音条目
-  patch-japanese-fonts*.js  JapaneseFonts 共存补丁 (它把我们的片假名当成日文歌)
   promote-learned.js  运行期素材筛选 (→ seed-words-learned.js)
   seed-words.js       人工种子词表
   seed-words-llm.js   大模型批量生成的词表
   seed-words-learned.js  运行期沉淀的词 (生成物)
-  patch-jp-furigana*.js  jp-furigana 共存补丁 (另一个片假名注音插件仓库里也有同一份, 必须保持一致)
 ```
 
 `src/preview.png` 是真机截图裁出来的歌词区: 从默认歌词页截图里裁出歌词部分, 等比放大到 750×350, 和 [jp-furigana](https://github.com/Leleawa/jp-furigana) 的 `preview.jpg` 同尺寸 (商店里两个插件并排时构图一致)。不是画出来的示意图, 不要用占位图覆盖它

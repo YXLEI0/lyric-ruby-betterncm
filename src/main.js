@@ -30,6 +30,20 @@
   var JP_FONT_DEFAULT =
     "'Yu Gothic UI', 'Yu Gothic', '游ゴシック', 'Meiryo UI', 'Meiryo', 'MS Gothic', 'MS Mincho', 'Microsoft YaHei'";
 
+  /**
+   * 把面板里填的字体串洗成能用的 CSS。
+   *
+   * 输入框里很容易写进竖线、分号、换行（`"fontA" | "fontB"` 这种），那会让整条 CSS 规则
+   * 被浏览器丢掉 —— 现象就是"改了字体没生效"。这里只留字体名、逗号、引号、空格。
+   */
+  function fontStack(raw) {
+    var v = String(raw == null ? "" : raw);
+    v = v.replace(/[|;{}\[\]<>\r\n]/g, " ");
+    v = v.replace(/[^A-Za-z0-9\u4E00-\u9FFF\s,'"\-.]/g, " ");
+    v = v.replace(/\s+/g, " ").trim();
+    return v || JP_FONT_DEFAULT;
+  }
+
   /*
    * 插件改过两次名：latin-katakana -> western-katakana（0.1.x 之前）-> lyric-ruby（1.0）。
    * localStorage 的键前缀跟着换，但已有的配置、学会的词、缓存、用量账本不该因为改名全丢，
@@ -2075,12 +2089,19 @@
    * 结论按歌词文本缓存：同一首歌每轮扫描都要问一次，没必要每次重算。
    */
   /**
-   * 这一行算不算日语行：有假名，或者整首是日语歌（纯汉字行 / 纯英文行都算）。
+   * 这一行算不算日文行。
+   *
+   *   - 有假名 -> 是（`きらめく光`）
+   *   - 没有假名但明显是中文 -> 不是（`我爱上你`，中文版歌词 / 双语字幕常见）
+   *   - 其余纯汉字行（`東京`）按整首判：整首是日语歌就是日文行
+   *
    * 振假名和中文读音的分岔就按它走。
    */
   function lineLooksJapanese(line) {
     if (!line) return songLooksJapanese();
-    return RE_KANA_ANY.test(line) || songLooksJapanese();
+    if (RE_KANA_ANY.test(line)) return true;
+    if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(line)) return false;
+    return songLooksJapanese();
   }
 
   /**
@@ -2115,7 +2136,10 @@
     var hasHangul = hangul && WKCJK.hasHangul(s);
     if (!hasHan && !hasHangul) return null;
     if (RE_KANA_ANY.test(s)) return null;
-    if (songLooksJapanese()) return null;
+    /*
+     * 这里不再按"整首是不是日语歌"拦：分流已经在 extraTokens 里按行做完了
+     * （日语歌里夹的中文行要能走到这里，按普通话读音注）。
+     */
     var out = WKCJK.scan(s, { han: hasHan, hangul: hasHangul });
     if (!out || !out.length) return null;
     /*
@@ -2414,13 +2438,17 @@
     var want = config.jpnFont === true && songLooksJapanese();
     var css = "";
     if (want) {
-      var family = String(config.jpnFontFamily || JP_FONT_DEFAULT).trim() || JP_FONT_DEFAULT;
+      var family = fontStack(config.jpnFontFamily);
       var sels =
         typeof state.annotator !== "undefined" && state.annotator && state.annotator.lyricSelectors
           ? state.annotator.lyricSelectors()
           : ["ul.lyric li p", ".rnp-lyrics-line-original"];
       var parts = [];
-      for (var i = 0; i < sels.length; i++) parts.push(sels[i]);
+      for (var i = 0; i < sels.length; i++) {
+        parts.push(sels[i]);
+        // 行里的子节点（逐字 span、注音）也一起换：有的歌词插件给每个字单独一个 span
+        parts.push(sels[i] + " *");
+      }
       css = parts.join(",\n") + " { font-family: " + family + " !important; }";
     }
     if (css === jpFontCss) return;
@@ -2515,7 +2543,9 @@
       "<h3>外观</h3>" +
       '<div class="wk-row"><label>注音字号 <input type="range" data-k="rtSize" min="30" max="120" step="1"> <span data-v="rtSize"></span></label></div>' +
       '<div class="wk-row"><label>注音不透明度 <input type="range" data-k="rtOpacity" min="10" max="100" step="1"> <span data-v="rtOpacity"></span></label></div>' +
-      '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label></div>' +
+      '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label> ' +
+      '<button data-a="fontReset">重置</button> <span data-v="fontReset"></span></div>' +
+      '<div class="wk-hint">填字体名（逗号分隔多个），只对日语歌生效；清空 = 用默认</div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="colorBySource"> 按读音来源给注音上色 (排障)</label></div>' +
       '<div class="wk-hint">' +
       '<span style="color:#46d17e">■ 词典</span>　' +
@@ -3078,6 +3108,21 @@
           var what = b.dataset.a;
           if (what === "rescan") {
             rescan();
+          } else if (what === "fontReset") {
+            /*
+             * 恢复默认日文字体栈。字体名是串 CSS，改坏了（多写了竖线 / 拼错）就会静默失效 ——
+             * 留一个一键回到默认的口子，不用自己去翻默认值。
+             */
+            config.jpnFontFamily = JP_FONT_DEFAULT;
+            var input = root.querySelector('[data-k="jpnFontFamily"]');
+            if (input) input.value = JP_FONT_DEFAULT;
+            jpFontCss = null;
+            updateJapaneseFont();
+            saveConfig();
+            b.textContent = "已恢复默认";
+            setTimeout(function () {
+              b.textContent = "重置";
+            }, 1500);
           } else if (what === "retry") {
             // 两层一起清：免费接口那些"查过、没有"的，和模型那些"问过但没收下"的
             var n = state.corrector ? state.corrector.retryMisses() : 0;

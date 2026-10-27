@@ -1,6 +1,6 @@
 {
   "name": "lyric-ruby-betterncm",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "BetterNCM 插件：给歌词标注读音 —— 日语汉字振假名（kuromoji 离线分词），西文字母 / 中文 / 朝鲜语标片假名",
   "private": true,
   "license": "MIT",
@@ -9,8 +9,8 @@
     "build:dict": "node tools/build-dict.js",
     "install:plugin": "node tools/build.js --install",
     "verify:install": "node tools/verify-install.js",
-    "test": "node --test tests/letters.test.js tests/reading.test.js tests/langs.test.js tests/sljfaq-words.test.js tests/cjk.test.js tests/furigana.test.js tests/dict.test.js tests/annotate.test.js tests/correct.test.js tests/llm.test.js tests/usage.test.js tests/learn.test.js tests/promote.test.js tests/integration.test.js",
-    "test:serial": "node tests/letters.test.js && node tests/reading.test.js && node tests/langs.test.js && node tests/sljfaq-words.test.js && node tests/cjk.test.js && node tests/furigana.test.js && node tests/dict.test.js && node tests/annotate.test.js && node tests/correct.test.js && node tests/llm.test.js && node tests/usage.test.js && node tests/learn.test.js && node tests/promote.test.js && node tests/integration.test.js",
+    "test": "node --test tests/letters.test.js tests/reading.test.js tests/langs.test.js tests/sljfaq-words.test.js tests/cjk.test.js tests/cn-line.test.js tests/furigana.test.js tests/dict.test.js tests/annotate.test.js tests/correct.test.js tests/llm.test.js tests/usage.test.js tests/learn.test.js tests/promote.test.js tests/integration.test.js",
+    "test:serial": "node tests/letters.test.js && node tests/reading.test.js && node tests/langs.test.js && node tests/sljfaq-words.test.js && node tests/cjk.test.js && node tests/cn-line.test.js && node tests/furigana.test.js && node tests/dict.test.js && node tests/annotate.test.js && node tests/correct.test.js && node tests/llm.test.js && node tests/usage.test.js && node tests/learn.test.js && node tests/promote.test.js && node tests/integration.test.js",
     "build:loan": "node tools/build-loan.js",
     "build:sekai": "node tools/build-sekai.js",
     "build:songs": "node tools/build-song-readings.js",

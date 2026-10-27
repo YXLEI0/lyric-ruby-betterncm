@@ -3544,6 +3544,84 @@ test("振假名可以关掉，也可以切成片假名写法", async () => {
   assert.strictEqual(rt.textContent, "ハズ", "面板切成片假名时要跟着变");
 });
 
+test("日语歌里夹的中文行：按中文读音注，不按日语读", async () => {
+  /*
+   * 日语歌里夹中文行很常见（中文版歌词、双语字幕）。整首有假名不代表这一行是日语 ——
+   * 以前整首判成日语，中文行也被拿去查日语读音，读不出来就整行留白。
+   * 现在按行分流：有假名的行走振假名，明显是中文的行回中文读音那档。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>きらめく光の中で</p></li>
+  <li class="line"><p>我爱上你</p></li>
+  <li class="line"><p>東京</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const table = Object.assign({}, JP_TABLE, { 光: "ヒカリ", 中: "ナカ" });
+  // 中文注音打开：中文行走普通话读音，日文行照旧日语读音
+  const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  on.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer(table));
+  await on.runLoad();
+  await sleep(300);
+  const ps = on.document.querySelectorAll("ul.lyric li p");
+  const pairs = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+
+  assert.deepStrictEqual(pairs(ps[0]), [["光", "ひかり"], ["中", "なか"]], "日文行走振假名：" + ps[0].innerHTML);
+  assert.deepStrictEqual(
+    pairs(ps[1]),
+    [
+      ["我", "ウォ"],
+      ["爱", "アイ"],
+      ["上", "シャン"],
+      ["你", "ニ"],
+    ],
+    "中文行走普通话读音（不是 わが / あい / じょう）：" + ps[1].innerHTML
+  );
+
+  // 中文注音关掉：中文行不注（也不许退回日语读音）
+  const off = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: false } });
+  off.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer(table));
+  await off.runLoad();
+  await sleep(300);
+  const offPs = off.document.querySelectorAll("ul.lyric li p");
+  assert.strictEqual(offPs[1].querySelectorAll("ruby.wk-ruby").length, 0, "没开中文注音就不注：" + offPs[1].innerHTML);
+  assert.ok(offPs[0].querySelectorAll("ruby.wk-ruby").length > 0, "日文行照旧要注");
+});
+
+test("日文字体：重置按钮恢复默认，脏字体串会被洗干净", async () => {
+  /*
+   * 字体名是一串 CSS，写坏了（多一个竖线 / 分号）浏览器会把整条规则丢掉 ——
+   * 现象就是"改了字体没生效"。所以：输入串先洗一遍，再给一个「重置」按钮回默认。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>そんな筈はないだろ</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, jpnFontFamily: '"Hiragano Kaku Gothic Pro"| "苹方-简";x' },
+  });
+  await env.runLoad();
+  await sleep(250);
+  const css = env.document.getElementById("lyric-ruby-font");
+  assert.ok(css, "要有字体样式表");
+  assert.strictEqual(css.textContent.indexOf("|"), -1, "竖线要洗掉：" + css.textContent);
+  assert.ok(css.textContent.indexOf("Hiragano Kaku Gothic Pro") >= 0, "字体名本体要留着：" + css.textContent);
+
+  const root = env.listeners.config[0]();
+  const input = root.querySelector('[data-k="jpnFontFamily"]');
+  assert.ok(input, "要有字体输入框");
+  const btn = root.querySelector('[data-a="fontReset"]');
+  assert.ok(btn, "要有重置按钮");
+  btn.dispatchEvent(new env.window.Event("click"));
+  assert.ok(/Yu Gothic UI/.test(input.value), "重置后输入框回到默认：" + input.value);
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.ok(/Yu Gothic UI/.test(saved.jpnFontFamily), "重置后的值要落盘");
+});
+
 test("日语歌词换日文字体：日语歌有、英文歌没有、关掉就没有", async () => {
   /*
    * 中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染（直 / 骨 / 今 的笔画都不同），
