@@ -2468,6 +2468,10 @@
       "#lyric-ruby-config input[type=text], #lyric-ruby-config input[type=password] { width: 300px; padding: 2px 6px; }" +
       "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
       "#lyric-ruby-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
+      "#lyric-ruby-config .wk-preview { background: linear-gradient(darkslategray 0%, midnightblue 100%); color: #fff; }" +
+      "#lyric-ruby-config .wk-pv-line { font-size: 22px; line-height: 2.1; }" +
+      "#lyric-ruby-config .wk-pv-bold { font-weight: bold; }" +
+      "#lyric-ruby-config .wk-pv-dim { font-size: 18px; opacity: .75; }" +
       "#lyric-ruby-config .wk-llm-state { margin: 2px 0; }" +
       "#lyric-ruby-config .wk-layer { display: flex; align-items: center; gap: 6px; line-height: 1.8; }" +
       "#lyric-ruby-config .wk-layer-name { min-width: 110px; }" +
@@ -2487,36 +2491,31 @@
       '<a href="#" data-open="' + REPO + '">源码仓库</a>' +
       '<a href="#" data-open="' + REPO + '/issues">反馈问题</a>' +
       "</div>" +
-      "<h3>开关</h3>" +
-      '<div class="wk-row"><label><input type="checkbox" data-k="enabled"> 启用注音</label></div>' +
-      '<div class="wk-row"><label><input type="checkbox" data-k="online"> 规则没把握时联网校正 (免费接口)</label></div>' +
-      '<div class="wk-row"><label><input type="checkbox" data-k="annotateAll"> 也标播放栏的歌名 / 歌手</label></div>' +
-      '<div class="wk-row"><label><input type="checkbox" data-k="furigana"> 日语歌词给汉字标振假名</label></div>' +
-      '<div class="wk-row"><label>振假名写法 <select data-k="furiganaKana"><option value="hiragana">平假名</option><option value="katakana">片假名</option></select></label></div>' +
+      /*
+       * 主面板只放"天天会动的开关"。其余（接口 / 外观细节 / 范围 / 读音顺序 / 用量 / 操作）
+       * 全部收进下面那个「高级设置」折叠里 —— 原来两家的设置项按"用户还是要调得到"合并进来：
+       * 振假名写法、日文字体（含字体名）、字号，一样不少，只是不再占着主面板。
+       */
+      '<div class="wk-row"><label><input type="checkbox" data-k="enabled"> <b>启用注音</b></label></div>' +
+      "<h3>日语歌词</h3>" +
+      '<div class="wk-row"><label><input type="checkbox" data-k="furigana"> 标振假名</label> ' +
+      '<select data-k="furiganaKana"><option value="hiragana">平假名</option><option value="katakana">片假名</option></select></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="jpnFont"> 日语歌词用日文字体</label></div>' +
-      '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label></div>' +
-      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 也给汉字标普通话读音 (片假名)</label></div>' +
-      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 也给谚文标朝鲜语读音</label></div>' +
-      '<div class="wk-hint">振假名只标日语歌里的汉字 (kuromoji 分词, 离线词典); 汉字 / 谚文那两条只标非日语歌里的行</div>' +
+      "<h3>其它语言</h3>" +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 中文歌词标普通话读音</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 朝鲜语歌词标朝鲜语读音</label></div>' +
       "<h3>大模型校正</h3>" +
       '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
-      '<div class="wk-row"><label>API Key <input type="password" data-k="llmKey" placeholder="sk-..."></label> ' +
-      '<button data-a="llmTest">测试连接</button> <span data-v="llmTest"></span></div>' +
-      '<div class="wk-llm-state"></div>' +
-      '<div class="wk-row"><span data-v="learned"></span> ' +
-      '<button data-a="learnClear">清空已学会的词</button></div>' +
-      '<div class="wk-hint">Key 只存本机 localStorage, 不会进仓库; 留空则这一层不工作, 自动退回免费接口<br>' +
-      "词典外的词和两可短音节 (Do / Re / PI / ME…) 由它按整句语境判; 答稳的词自动沉淀成离线词条, 以后不再问</div>" +
+      '<div class="wk-row"><input type="password" data-k="llmKey" placeholder="大模型 API Key（留空则不用）"> ' +
+      '<button data-a="llmTest">测试</button> <span data-v="llmTest"></span></div>' +
+      '<div class="wk-llm-state wk-hint"></div>' +
       "<h3>预览</h3>" +
       '<div class="wk-preview"></div>' +
-      '<details class="wk-adv"><summary>高级设置（接口 / 外观 / 范围 / 读音来源顺序 / 用量 / 操作）</summary>' +
-      "<h3>接口</h3>" +
-      '<div class="wk-row"><label>接口地址 <input type="text" data-k="llmEndpoint"></label></div>' +
-      '<div class="wk-row"><label>模型 <input type="text" data-k="llmModel"></label></div>' +
-      '<div class="wk-hint">粘文档里的 <code>base_url</code> 也行, 会自动补成 <code>/chat/completions</code></div>' +
+      '<details class="wk-adv"><summary>高级设置</summary>' +
       "<h3>外观</h3>" +
       '<div class="wk-row"><label>注音字号 <input type="range" data-k="rtSize" min="30" max="120" step="1"> <span data-v="rtSize"></span></label></div>' +
       '<div class="wk-row"><label>注音不透明度 <input type="range" data-k="rtOpacity" min="10" max="100" step="1"> <span data-v="rtOpacity"></span></label></div>' +
+      '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="colorBySource"> 按读音来源给注音上色 (排障)</label></div>' +
       '<div class="wk-hint">' +
       '<span style="color:#46d17e">■ 词典</span>　' +
@@ -2534,9 +2533,15 @@
       '<option value="custom">自定义选择器</option>' +
       "</select></label></div>" +
       '<div class="wk-row"><label>自定义选择器 <input type="text" data-k="customSelector" placeholder="例如 ul.lyric > li"></label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateAll"> 也标播放栏的歌名 / 歌手</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateNonJapanese"> 非日语歌也注音 (纯英文 / 西文各语种 / 中文歌)</label></div>' +
-      '<div class="wk-hint">关掉 = 只标日语歌: 整首歌词一个假名都没有的整首跳过; ' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="online"> 规则没把握时联网校正 (免费接口)</label></div>' +
+      '<div class="wk-hint">关掉「非日语歌也注音」= 只标日语歌: 整首歌词一个假名都没有的整首跳过; ' +
       "判据看整首, 所以日语歌里的纯英文行照旧注音</div>" +
+      "<h3>接口</h3>" +
+      '<div class="wk-row"><label>接口地址 <input type="text" data-k="llmEndpoint"></label></div>' +
+      '<div class="wk-row"><label>模型 <input type="text" data-k="llmModel"></label></div>' +
+      '<div class="wk-hint">Key 只存本机 localStorage, 不会进仓库; 粘文档里的 <code>base_url</code> 也行, 会自动补成 <code>/chat/completions</code></div>' +
       "<h3>读音来源顺序</h3>" +
       '<div class="wk-hint">越靠上越优先; 把<b>英文音译规则</b>提到在线层前面 = 一个请求都不发 (纯离线)<br>' +
       "记号 / 缩写 / 字母名 (<code>D/N/A</code>、<code>I'll</code>、<code>LDK</code>) 不参与排序, 永远最先判</div>" +
@@ -2558,7 +2563,10 @@
       '<button data-a="exportWords">导出词库素材</button> ' +
       '<button data-a="clearCache">清除校正缓存</button>' +
       "</div>" +
+      '<div class="wk-row"><span data-v="learned"></span> ' +
+      '<button data-a="learnClear">清空已学会的词</button></div>' +
       "</details>";
+
 
     function fmt(key) {
       return config[key] + "%";
@@ -2776,64 +2784,74 @@
     /** 从 usage 模块拿两层 id（别在 main.js 里写死一份） */
     var USAGE_KINDS = typeof WKUsage !== "undefined" ? WKUsage.KINDS : ["llm", "google"];
 
+    /**
+     * 预览：照 JapaneseFonts 的样子 —— 一个深色框里几行日语示例，汉字带振假名，第二行加粗。
+     *
+     * 比原来那句英文示例更贴近现在的场景（日语歌），而且字号 / 不透明度 / 振假名写法 /
+     * 日文字体 一改，这里马上能看到效果 —— 相当于把两家的预览合成一个。
+     * 第三行留一个西文词，提醒"西文字母也照旧注片假名"。
+     */
     function refreshPreview() {
       preview.innerHTML = "";
-      if (typeof WKMatcher === "undefined" || !state.reader) {
-        preview.textContent = "核心模块未加载";
-        return;
-      }
-      /*
-       * 预览示例句用高考英语听力那句名句（「衬衫的价格为九磅十五便士」）。
-       *
-       * 两行是刻意的：第一行是原文，按真实逻辑注音；第二行是中文翻译。
-       * 真机上翻译层是不标的（见 annotate.js：同一个 <li> 只取第一块、
-       * class 里带 trans/translated 的整层跳过），预览也照这个来 ——
-       * 免得给人「翻译也会被注音」的错预期。
-       */
-      var demo = "The shirt is nine pounds fifteen pence.";
-      var demoTrans = "衬衫的价格为九磅十五便士";
-      var frag = document.createDocumentFragment();
-      var pos = 0;
-      var tokens = WKMatcher.scan(demo);
-      var got = 0;
-      for (var i = 0; i < tokens.length; i++) {
-        var tk = tokens[i];
-        // 和 annotate.js 一样传原始写法：折过的形式会把连字符吃掉，
-        // 记号（D/N/A）和普通词（x-ray）就分不出来了
-        var r = WKMatcher.looksReadable(tk) ? state.reader.read(tk.text) : null;
-        if (tk.start > pos) frag.appendChild(document.createTextNode(demo.slice(pos, tk.start)));
-        if (r && r.kana) {
+      var kata = config.furiganaKana === "katakana";
+      // 每个 ruby 的底字在整行里的位置；写法跟着面板上的「平假名 / 片假名」走
+      var lines = [
+        {
+          text: "天気が良いから",
+          rubies: [
+            ["天気", kata ? "テンキ" : "てんき"],
+            ["良", kata ? "イ" : "い"],
+          ],
+          bold: false,
+        },
+        {
+          text: "散歩しましょう",
+          rubies: [["散歩", kata ? "サンポ" : "さんぽ"]],
+          bold: true,
+        },
+        {
+          text: "ずっと light と clover",
+          rubies: [["light", "ライト"], ["clover", "クローバー"]],
+          bold: false,
+          dim: true,
+        },
+      ];
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var row = document.createElement("div");
+        row.className = "wk-pv-line" + (line.bold ? " wk-pv-bold" : "") + (line.dim ? " wk-pv-dim" : "");
+        var pos = 0;
+        // 按出现顺序切：底字在 text 里的位置就是它自己的下标（示例都是简单句子）
+        var pieces = line.rubies.slice().sort(function (a, b) {
+          return line.text.indexOf(a[0]) - line.text.indexOf(b[0]);
+        });
+        for (var j = 0; j < pieces.length; j++) {
+          var base = pieces[j][0];
+          var reading = pieces[j][1];
+          var at = line.text.indexOf(base, pos);
+          if (at < 0) continue;
+          if (at > pos) row.appendChild(document.createTextNode(line.text.slice(pos, at)));
           var ruby = document.createElement("ruby");
           ruby.className = "wk-ruby";
-          ruby.appendChild(document.createTextNode(tk.text));
+          ruby.appendChild(document.createTextNode(base));
           var rt = document.createElement("rt");
           rt.className = "wk-rt";
-          rt.textContent = r.kana;
+          rt.textContent = reading;
           ruby.appendChild(rt);
-          frag.appendChild(ruby);
-          got++;
-        } else {
-          frag.appendChild(document.createTextNode(tk.text));
+          row.appendChild(ruby);
+          pos = at + base.length;
         }
-        pos = tk.end;
+        if (pos < line.text.length) row.appendChild(document.createTextNode(line.text.slice(pos)));
+        preview.appendChild(row);
       }
-      if (pos < demo.length) frag.appendChild(document.createTextNode(demo.slice(pos)));
-      preview.appendChild(frag);
       /*
-       * 中文翻译行：真机上不注音，预览里也不注。用单独的类而不是塞进上面那段文本，
-       * 是为了让样式和真机的翻译层一样淡一点，一眼能看出"这行不归我们管"。
+       * 字体：日文字体开着时，预览跟着用那套字体 —— 这正是"换日文字体"要看的东西
+       * （中文黑体里的日文汉字笔画是中文写法）。
        */
-      if (demoTrans) {
-        var trans = document.createElement("div");
-        trans.className = "wk-preview-trans";
-        trans.textContent = demoTrans;
-        preview.appendChild(trans);
-      }
-      if (!got) {
-        var hint = document.createElement("div");
-        hint.className = "wk-hint";
-        hint.textContent = "没能给示例词算出读音 (可在控制台调 WK.read('shirt') 查看)";
-        preview.appendChild(hint);
+      try {
+        preview.style.fontFamily = config.jpnFont === true ? String(config.jpnFontFamily || "") : "";
+      } catch (e) {
+        /* 样式挂不上不影响预览内容 */
       }
     }
 

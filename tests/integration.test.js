@@ -4498,10 +4498,14 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   assert.ok(adv, "要有「高级设置」折叠块");
   assert.strictEqual(adv.open, false, "默认应该收起");
 
+  // 主面板只留"天天会动的开关"：启用 / 振假名(写法) / 日文字体 / 中文 / 朝鲜语 / 大模型
   const outside = [
     '[data-k="enabled"]',
-    '[data-k="online"]',
-    '[data-k="annotateAll"]',
+    '[data-k="furigana"]',
+    '[data-k="furiganaKana"]',
+    '[data-k="jpnFont"]',
+    '[data-k="annotateHanzi"]',
+    '[data-k="annotateHangul"]',
     '[data-k="llmEnabled"]',
     '[data-k="llmKey"]',
     '[data-a="llmTest"]',
@@ -4514,12 +4518,20 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     assert.strictEqual(adv.contains(el), false, sel + " 应该默认就能看到（别收进高级）");
   }
 
+  // 其余全部收进高级：接口、外观细节、范围、读音顺序、用量、操作
   const inside = [
     '[data-k="llmEndpoint"]',
     '[data-k="llmModel"]',
     '[data-k="rtSize"]',
     '[data-k="rtOpacity"]',
+    '[data-k="jpnFontFamily"]',
     '[data-k="scope"]',
+    '[data-k="customSelector"]',
+    '[data-k="annotateAll"]',
+    '[data-k="annotateNonJapanese"]',
+    '[data-k="online"]',
+    '[data-k="colorBySource"]',
+    '[data-a="learnClear"]',
     ".wk-layers",
     ".wk-usage",
     '[data-a="rescan"]',
@@ -4533,16 +4545,16 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["接口", "外观", "范围", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });
 
-test("设置面板的预览：高考听力那句 + 中文翻译行不注音", async () => {
-  // 预览的示例句换成高考英语听力名句（「衬衫的价格为九磅十五便士」）。这里钉住三点：
-  // 每个词的读音都从词典取（这批数字词原本不在词典里，规则层会读错：fifteen -> フィファテエン）；
-  // 中文翻译行照样显示、但一个字都不注音（真机行为）；预览走的是真扫描 + 真读音逻辑，
-  // 不是手写的字符串。
+test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假名 + 一行西文", async () => {
+  /*
+   * 预览改成 JapaneseFonts 那种：深色框里几行示例歌词，汉字带振假名、第二行加粗。
+   * 这样字号 / 振假名写法 / 日文字体一改就能当场看到 —— 原来两家的预览合成一个。
+   */
   const env = bootPlugin(NCM_HTML, { dev: true });
   await env.runLoad();
   const root = env.listeners.config[0]();
@@ -4556,21 +4568,47 @@ test("设置面板的预览：高考听力那句 + 中文翻译行不注音", as
   assert.deepStrictEqual(
     pairs,
     [
-      ["The", "ザ"],
-      ["shirt", "シャツ"],
-      ["is", "イズ"],
-      ["nine", "ナイン"],
-      ["pounds", "パウンズ"],
-      ["fifteen", "フィフティーン"],
-      ["pence", "ペンス"],
+      ["天気", "てんき"],
+      ["良", "い"],
+      ["散歩", "さんぽ"],
+      ["light", "ライト"],
+      ["clover", "クローバー"],
     ],
-    "预览示例句的读音"
+    "预览的示例读音（默认平假名）"
   );
 
-  const trans = preview.querySelector(".wk-preview-trans");
-  assert.ok(trans, "预览里应该带一行中文翻译");
-  assert.strictEqual(trans.textContent, "衬衫的价格为九磅十五便士");
-  assert.strictEqual(trans.querySelectorAll("ruby, rt").length, 0, "翻译行不许注音");
+  const lines = [...preview.querySelectorAll(".wk-pv-line")];
+  assert.strictEqual(lines.length, 3, "三行示例");
+  assert.ok(lines[1].classList.contains("wk-pv-bold"), "第二行加粗（JapaneseFonts 的样式）");
+  // 底字要把 rt 去掉再比：textContent 会把注音一起算进来
+  const plain = (el) => {
+    const c = el.cloneNode(true);
+    c.querySelectorAll("rt").forEach((x) => x.remove());
+    return c.textContent;
+  };
+  assert.strictEqual(plain(lines[0]), "天気が良いから", "示例句 1");
+  assert.strictEqual(plain(lines[1]), "散歩しましょう", "示例句 2");
+  assert.strictEqual(plain(lines[2]), "ずっと light と clover", "示例句 3");
+
+  // 切成片假名写法：预览跟着变
+  const kata = bootPlugin(NCM_HTML, { dev: true, config: { furiganaKana: "katakana" } });
+  await kata.runLoad();
+  const kataPreview = kata.listeners.config[0]().querySelector(".wk-preview");
+  const kataPairs = [...kataPreview.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    kataPairs,
+    [
+      ["天気", "テンキ"],
+      ["良", "イ"],
+      ["散歩", "サンポ"],
+      ["light", "ライト"],
+      ["clover", "クローバー"],
+    ],
+    "切成片假名之后预览也要跟着变"
+  );
 });
 
 test("改名搬家：老的 latin-katakana.* 键会复制到 lyric-ruby.*，老键留着", async () => {
