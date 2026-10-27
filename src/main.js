@@ -34,12 +34,17 @@
    * 把面板里填的字体串洗成能用的 CSS。
    *
    * 输入框里很容易写进竖线、分号、换行（`"fontA" | "fontB"` 这种），那会让整条 CSS 规则
-   * 被浏览器丢掉 —— 现象就是"改了字体没生效"。这里只留字体名、逗号、引号、空格。
+   * 被浏览器丢掉 —— 现象就是"改了字体没生效"。
+   *
+   * 只删真正会破坏规则的字符，**不做白名单**：字体名里可以有日文
+   * （`游ゴシック`、`ヒラギノ角ゴ`），白名单一刀切会把它们削成半个名字（`游`），
+   * 那比原样保留更糟 —— 名字对不上就静默回落，同样"没生效"。
    */
   function fontStack(raw) {
     var v = String(raw == null ? "" : raw);
-    v = v.replace(/[|;{}\[\]<>\r\n]/g, " ");
-    v = v.replace(/[^A-Za-z0-9\u4E00-\u9FFF\s,'"\-.]/g, " ");
+    v = v.replace(/[|;{}\[\]<>\r\n\\]/g, " "); // 会破坏规则 / 注入的字符
+    v = v.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'"); // 弯引号 -> 直引号
+    v = v.replace(/\u3000/g, " "); // 全角空格
     v = v.replace(/\s+/g, " ").trim();
     return v || JP_FONT_DEFAULT;
   }
@@ -2427,29 +2432,92 @@
   }
 
   /**
-   * 日语歌的歌词字体：<head> 里挂一个样式表，只改字体，不动 DOM。
+   * 日语歌的歌词字体。
    *
-   * 为什么用样式表而不是给元素加 inline style：注音层每轮都在扫歌词，改元素属性会
-   * 被它当成"内容变了"（真机上就是一直重扫 / 抽搐）。样式表只影响渲染，注音层看不到。
-   * 非日语歌 / 关掉这一项时把样式清空，切歌立刻生效。
+   * 两条腿一起走，为什么：
+   *   - 样式表（<head> 里那条规则）覆盖面广，但真机上**不生效** —— 播放页的歌词
+   *     NCM 自己用更高优先级的规则（或内联样式）钉死了 font-family，我们的 !important
+   *     照样输。面板里的预览用的是内联样式，所以预览有效、歌词没效，就是这个原因。
+   *   - 所以真正起作用的是**内联样式**：给注音层已经标过的区域（[data-wk-region]）逐个
+   *     写 `style="font-family: … !important"`，只有它压得过页面自己的规则。
+   *     每个元素只写一次（值相同就跳过），关掉时按印记 data-wk-font 撤掉。
+   *
+   * 样式表留着当兜底：还没注过音的行（第一轮之前）先按它渲染，不至于闪一下。
    */
   var jpFontCss = null;
+
+  /** 罗马音 / 翻译 / 占位那一类行：注音层不碰，字体也不许换（换了中文翻译行会变日文字形） */
+  var RE_FONT_SKIP = /rnp-lyrics-(?:overview-)?line-(?:romaji|translated|translation|placeholder)|lyricSubLine|lyricSubText|lyricTrans|(?:^|[\s_-])(?:romaji|romanized|translated|translation|transLine|transText)(?:[\s_-]|$)/i;
+
+  function fontSkipped(el) {
+    var cn = el && typeof el.className === "string" ? el.className : "";
+    return RE_FONT_SKIP.test(cn);
+  }
+
+  /**
+   * 把字体写进区域元素的内联样式；family 为空 = 撤掉我们写过的那些。
+   *
+   * 目标是"注音层认得出的歌词行"，不只是已经注过音的行 —— 日语歌里的纯汉字行、
+   * 关掉振假名的行，字体也得换（JapaneseFonts 就是整页换）。
+   * 但罗马音行 / 中文翻译行要跳过：那是给中文和罗马字看的，换成日文字体只会更难看。
+   */
+  function applyJapaneseFontInline(family) {
+    var targets = [];
+    var seen = [];
+    function add(el) {
+      if (!el || el.nodeType !== 1 || !el.style) return;
+      if (fontSkipped(el)) return;
+      if (seen.indexOf(el) >= 0) return;
+      seen.push(el);
+      targets.push(el);
+    }
+    try {
+      var tagged = document.querySelectorAll("[data-wk-region]");
+      for (var i = 0; i < tagged.length; i++) add(tagged[i]);
+    } catch (e) {
+      /* 查不到就算了 */
+    }
+    try {
+      if (state.annotator && state.annotator.findRegions) {
+        var regions = state.annotator.findRegions("lyrics");
+        for (var j = 0; j < regions.length; j++) add(regions[j]);
+      }
+    } catch (e2) {
+      /* 同上 */
+    }
+    for (var k = 0; k < targets.length; k++) {
+      var el = targets[k];
+      try {
+        if (family) {
+          var now = el.style.getPropertyValue("font-family");
+          var pri = el.style.getPropertyPriority("font-family");
+          if (now !== family || pri !== "important") el.style.setProperty("font-family", family, "important");
+          if (el.getAttribute("data-wk-font") !== "1") el.setAttribute("data-wk-font", "1");
+        } else if (el.getAttribute("data-wk-font") === "1") {
+          el.style.removeProperty("font-family");
+          el.removeAttribute("data-wk-font");
+        }
+      } catch (e3) {
+        /* 单个元素写不进去不影响其它行 */
+      }
+    }
+  }
+
   function updateJapaneseFont() {
     var want = config.jpnFont === true && songLooksJapanese();
     var css = "";
     if (want) {
       var family = fontStack(config.jpnFontFamily);
-      var sels =
-        typeof state.annotator !== "undefined" && state.annotator && state.annotator.lyricSelectors
-          ? state.annotator.lyricSelectors()
-          : ["ul.lyric li p", ".rnp-lyrics-line-original"];
-      var parts = [];
-      for (var i = 0; i < sels.length; i++) {
-        parts.push(sels[i]);
-        // 行里的子节点（逐字 span、注音）也一起换：有的歌词插件给每个字单独一个 span
-        parts.push(sels[i] + " *");
-      }
-      css = parts.join(",\n") + " { font-family: " + family + " !important; }";
+      // 真机上起作用的是内联样式（见上面的说明），每轮补一次：换行 / 切歌会换元素
+      applyJapaneseFontInline(family);
+      /*
+       * 样式表只写 [data-wk-region]（注音层标过的行），不要再用宽泛的歌词选择器：
+       * 那些选择器连 `rnp-lyrics-line-romaji` / `-translated` 一起命中，
+       * 罗马音行和中文翻译行就被换成日文字体了（中文按日文字形渲染很难看）。
+       */
+      css = "[data-wk-region], [data-wk-region] * { font-family: " + family + " !important; }";
+    } else {
+      applyJapaneseFontInline("");
     }
     if (css === jpFontCss) return;
     jpFontCss = css;

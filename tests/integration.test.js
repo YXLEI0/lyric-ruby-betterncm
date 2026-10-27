@@ -3622,11 +3622,41 @@ test("日文字体：重置按钮恢复默认，脏字体串会被洗干净", as
   assert.ok(/Yu Gothic UI/.test(saved.jpnFontFamily), "重置后的值要落盘");
 });
 
-test("日语歌词换日文字体：日语歌有、英文歌没有、关掉就没有", async () => {
+test("日文字体不碰罗马音行和中文翻译行", async () => {
+  /*
+   * RNP 把一行渲染成三层：-original（原文）/ -romaji（罗马音）/ -translated（中文翻译）。
+   * 字体只该换原文那一层 —— 罗马音和中文按日文字形渲染很难看，中文翻译更不该动。
+   * 注音层本来就不碰后两层，字体这条路径也得跟着跳过。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="lyric">
+  <div class="rnp-lyrics-line-original">そんな筈はないだろ</div>
+  <div class="rnp-lyrics-line-romaji">so n na ha zu wa na i da ro</div>
+  <div class="rnp-lyrics-line-translated">不该是这样的吧</div>
+</div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(300);
+  const orig = env.document.querySelector(".rnp-lyrics-line-original");
+  const romaji = env.document.querySelector(".rnp-lyrics-line-romaji");
+  const trans = env.document.querySelector(".rnp-lyrics-line-translated");
+  assert.ok(orig, "要有原文行");
+  assert.ok(
+    orig.style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0,
+    "原文行要换日文字体：" + orig.getAttribute("style")
+  );
+  assert.strictEqual(romaji.style.getPropertyValue("font-family"), "", "罗马音行不许换：" + romaji.getAttribute("style"));
+  assert.strictEqual(trans.style.getPropertyValue("font-family"), "", "翻译行不许换：" + trans.getAttribute("style"));
+});
+
+test("日语歌词换日文字体：内联样式（真机生效的那条）+ 样式表兜底", async () => {
   /*
    * 中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染（直 / 骨 / 今 的笔画都不同），
-   * 所以日语歌的歌词要换成日文字体。做法是在 <head> 挂一张样式表，不动 DOM ——
-   * 改元素属性会被注音层当成"内容变了"，真机上就是一直重扫。
+   * 所以日语歌的歌词要换成日文字体。
+   *
+   * 真机上**只有内联样式压得过**播放页自己的规则（面板预览也是内联，所以预览一直有效、
+   * 歌词没效）；样式表留着当兜底。两条都验。`
    */
   const JP = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
@@ -3644,8 +3674,29 @@ test("日语歌词换日文字体：日语歌有、英文歌没有、关掉就�
   await sleep(250);
   const css = jp.document.getElementById("lyric-ruby-font");
   assert.ok(css, "日语歌要挂字体样式表");
-  assert.ok(/ul\.lyric li p/.test(css.textContent), "样式表要覆盖歌词选择器：" + css.textContent);
+  /*
+   * 样式表只写 [data-wk-region]（注音层标过的行）。以前用的是宽泛的歌词选择器，
+   * 结果连 rnp-lyrics-line-romaji / -translated 也命中 —— 罗马音行和中文翻译行
+   * 被换成日文字体了。
+   */
+  assert.ok(/\[data-wk-region\]/.test(css.textContent), "样式表要按注音区域写：" + css.textContent);
+  assert.strictEqual(css.textContent.indexOf("rnp-lyrics"), -1, "不许再按宽泛的歌词选择器写：" + css.textContent);
   assert.ok(/font-family: 'Yu Gothic UI'/.test(css.textContent), "默认日文字体栈：" + css.textContent);
+
+  // 真正生效的那条：注过音的行要带上内联 font-family（!important）
+  const region = jp.document.querySelector("ul.lyric li p");
+  assert.ok(region, "歌词行要被标成注音区域：" + jp.document.querySelector("ul.lyric li p").outerHTML);
+  assert.ok(
+    region.style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0,
+    "区域上要有内联字体：" + region.getAttribute("style")
+  );
+  assert.strictEqual(region.style.getPropertyPriority("font-family"), "important", "要 !important，否则压不过页面规则");
+  assert.strictEqual(region.getAttribute("data-wk-font"), "1", "要留个印记，关掉时按它撤");
+  // 字体名里的日文不许被洗掉（'游ゴシック' 曾被削成 '游'，名字对不上就静默回落 = 没生效）
+  assert.ok(
+    region.style.getPropertyValue("font-family").indexOf("游ゴシック") >= 0,
+    "日文字体名要完整保留：" + region.style.getPropertyValue("font-family")
+  );
 
   // 英文歌不换字体
   const en = bootPlugin(EN, { config: { online: false, llmEnabled: false } });
@@ -3653,11 +3704,16 @@ test("日语歌词换日文字体：日语歌有、英文歌没有、关掉就�
   await sleep(250);
   assert.strictEqual(en.document.getElementById("lyric-ruby-font"), null, "英文歌不许换日文字体");
 
-  // 关掉之后日语歌也不换
+  // 关掉之后日语歌也不换（样式表和内联都不许留）
   const off = bootPlugin(JP, { config: { online: false, llmEnabled: false, jpnFont: false } });
   await off.runLoad();
   await sleep(250);
   assert.strictEqual(off.document.getElementById("lyric-ruby-font"), null, "关掉之后不许挂样式表");
+  const offRegion = off.document.querySelector("ul.lyric li p");
+  if (offRegion) {
+    assert.strictEqual(offRegion.style.getPropertyValue("font-family"), "", "关掉之后内联字体要撤掉");
+    assert.strictEqual(offRegion.getAttribute("data-wk-font"), null, "印记也要摘掉");
+  }
 
   // 可以自定义字体
   const custom = bootPlugin(JP, {
