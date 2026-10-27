@@ -1,8 +1,21 @@
 # 第三方组件与数据来源
 
-本插件由 YXLEI0 维护：https://github.com/YXLEI0/western-katakana-betterncm
+本插件由 YXLEI0 维护：https://github.com/YXLEI0/lyric-ruby-betterncm
 
-本插件没有打包任何第三方运行时库 (不需要 kuromoji、不需要分词词典)。分发的文件只有本仓库 `src/` 下的代码、一份生成的读音词典和一张预览图。
+分发的文件是本仓库 `src/` 下的代码、生成的读音词典（`src/core/dict.js` / `core/hanzi.js`）、一张预览图，
+以及 `vendor/` 下用于日语振假名的第三方组件（见下面第 0 节）。
+
+## 0. 振假名的第三方组件 `vendor/`
+
+- `vendor/kuromoji.js`：日语形态素解析器 [kuromoji.js](https://github.com/takuyaa/kuromoji.js)，Apache License 2.0（全文见 `vendor/LICENSE-kuromoji.txt`）。
+  与上游的区别只有一处：加了 `globalThis.__FURIGANA_DICT_LOADER__` 钩子，让词典通过 BetterNCM 的 `betterncm.fs` 读，而不是 XHR。
+- `vendor/dict/*.dat.gz`：IPADIC 词典（mecab-ipadic，BSD 类许可；版权与条件见 `vendor/NOTICE-furigana.md`）。
+- `vendor/furigana.js`：把分词结果对齐成「底字 → 读音」片段，MIT（见 `vendor/LICENSE-furigana.txt`）。
+
+  这三个都取自 [jp-furigana](https://github.com/Leleawa/jp-furigana) 的分发包（同一套 Apache-2.0 + IPADIC 组合）。
+  本插件只调用 furigana.js 的纯文本层（`tokensToSegments` 等），渲染走自己的 `core/annotate.js`。
+
+振假名完全离线，运行时不请求任何第三方服务。
 
 ## 1. 离线读音词典 `src/core/dict.js`
 
