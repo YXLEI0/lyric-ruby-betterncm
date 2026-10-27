@@ -1,5 +1,5 @@
 /*
- * western-katakana 的种子词表：英文 -> 片假名读音。
+ * lyric-ruby 的种子词表：英文 -> 片假名读音。
  *
  * 这是唯一的数据源（`src/core/dict.js` 由 tools/build-dict.js 从它生成，
  * 不要手改生成物）。

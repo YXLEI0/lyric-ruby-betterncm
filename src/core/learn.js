@@ -1,5 +1,5 @@
 /*
- * 西文字母片假名注音 (western-katakana) —— 「学会的词」：把大模型给过的答案沉淀成离线词条
+ * 西文字母片假名注音 (lyric-ruby) —— 「学会的词」：把大模型给过的答案沉淀成离线词条
  *
  * 为什么要有这一份：大模型那层的缓存是按「词 + 所在那一句」存的 ——
  * 换一首歌、同一句歌词再出现一次，都要重新花钱问一遍。
@@ -17,7 +17,7 @@
  * 收下之后按离线词典的优先级参与层序（`source: "learned"`）——
  * 也就是说这个词以后不再问模型，钱就省在这里。
  *
- * 落盘：localStorage['western-katakana.learned.v1']；
+ * 落盘：localStorage['lyric-ruby.learned.v1']；
  * 坏了 / 被手改坏 / 写不进去一律当没有（绝不能因为一份缓存把插件搞崩）。
  * 条数上限 MAX_WORDS，超了丢"最久没用过的"。
  *
@@ -29,7 +29,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  var STORAGE_KEY = "western-katakana.learned.v1";
+  var STORAGE_KEY = "lyric-ruby.learned.v1";
   var VERSION = 1;
 
   /** 条数上限：够一首歌到一整张专辑的量，也不会把 localStorage 撑爆 */
@@ -140,7 +140,7 @@
      * 只清一次（用一个小标记记住）；以后也不会再收（见 main.js 的 onAnswer 过滤）。
      */
     function purgeSingleLetters() {
-      var FLAG = "western-katakana.learned.purge1";
+      var FLAG = "lyric-ruby.learned.purge1";
       try {
         if (!storage || storage.getItem(FLAG)) return;
         storage.setItem(FLAG, "1");

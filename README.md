@@ -1,6 +1,6 @@
-# 西文字母片假名注音 · western-katakana
+# 歌词注音 · lyric-ruby
 
-在日语歌歌词的拉丁字母 / 西里尔字母 / 希腊字母上方标注片假名读音
+给歌词标注读音：日语歌词的汉字标**振假名**（平假名 / 片假名），拉丁字母 / 西里尔字母 / 希腊字母标片假名，中文汉字和朝鲜语谚文也能标片假名
 
 ![截图](src/preview.png)
 
@@ -11,20 +11,26 @@
 
 ## 安装
 
-从 [Releases](../../releases) 下载 `western-katakana.plugin`, 放进 BetterNCM 的插件目录后重启网易云
+从 [Releases](../../releases) 下载 `lyric-ruby.plugin`, 放进 BetterNCM 的插件目录后重启网易云
+
+> 从旧版（`western-katakana.plugin`）升级：把旧的那个文件删掉再放新的，两个同时装会重复注音。配置 / 学会的词 / 用量会自动从老键搬过来。
+> 装过 `jp-furigana` / `JapaneseFonts` 的可以卸掉了 —— 振假名现在是本插件的一部分（词典随插件分发，离线可用）。
 
 自己打包:
 
 ```bash
 npm ci                   # 依赖按 package-lock.json 装
-npm run build            # 产出 builds/western-katakana.plugin
+npm run build            # 产出 builds/lyric-ruby.plugin
 npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 ```
+
+包体约 15 MB: 其中 14 MB 是振假名用的 kuromoji + IPADIC 词典 (`vendor/`), 词典在第一次出现日语歌词时才读, 不拖慢启动。
 
 发版: 推一个 `v*` tag (`git tag v0.1.1 && git push origin v0.1.1`) 会触发 CI —— 跑完 `npm run check` 与全套测试后打包, 把 `western-katakana.plugin` 挂到 [Releases](../../releases); 也可以在 Actions 页面手动 Run workflow 发一版 (tag 留空就用 `src/manifest.json` 里的版本号)。
 
 ## 说明
 
+- 日语歌词的汉字标振假名 (设置面板「开关 → 日语歌词给汉字标振假名」, **默认开**, 写法可选平假名 / 片假名): 读**日语读音**, 不是普通话读音 —— `今日` きょう、`一人` ひとり、`東京` とうきょう; 送假名留在底字外面 (`食べる` 只给 `食` 注 た), 作词者自己写的括号注音 (`漢字(かな)`) 直接用括号里的读音
 - 读音按五层顺序取: 离线词典 (6895 条) > 日式罗马音 > 大模型校正 > 免费接口 > 英文音译规则。顺序可以在设置面板里上下调
 - 推荐填一个大模型 API Key (默认 DeepSeek, 任何 OpenAI 兼容接口都行), 只存在本机 localStorage。留空则这一层不工作, 自动退回免费接口。按「词 + 它所在的那句歌词」缓存, 所以同一个词在不同句子里会分别判断
 - 模型答过两次、读音一致的词会自动沉淀成离线词条, 以后不再问模型; 面板「操作 → 导出词库素材」可以把攒下来的词筛进离线词典 (`npm run promote:learned`)
@@ -41,7 +47,8 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
   - 只标「非日语歌、且这一行没有假名」的行 —— 日语歌里的汉字必须留日语读音 (`東京` 是 トウキョウ, 不是 ドンジン)
 - 连字符标记长音: 全大写、形如罗马字音节、被短横线串起来的词每一节都读长音 (`MO-SO` モーソー、`KYO-SO` キョーソー)。这种词要整首歌词一起看, 因为它常被换行拆开 (上一行结尾 `SO-`、下一行开头 `ZO`), 只看一行判不出来。德语复合词 (`Looser-Krankheit-Was`)、小写词、记号里的单字母 (`X-Y`) 不受影响
 - 整首 / 整句专属读音 (`src/core/songs.js`, `npm run build:songs`): 有些读音只在这一首歌里成立, 歌名命中 (或歌词里出现识别词) 时按表读 (`the EmpErroR` 的 `the` 是 ジ、`Disco No.39` 的 `No.` 是 ナンバー、`potatoになっていく` 的 `potato` 是 ポテト), 别的歌不受影响; 单句专属的走 `Xだけの…` 里的 X 读 ツイッター 那种。进表的前提是有官方读音可查 (Sekai 主数据或别的官方读法), 自己按词义猜的不进表
-- 可以和 [jp-furigana](https://github.com/Leleawa/jp-furigana)、[JapaneseFonts](https://github.com/MuttonString/Furigana) 同时开着, 其它片假名注音插件也做了互认; jp-furigana 要先打共存补丁 `npm run patch:furigana`, JapaneseFonts 要打 `npm run patch:fonts`。后者不打的话, 它会把本插件注出来的片假名当成"这是日文歌"的证据
+- 振假名的读音来源是 kuromoji + IPADIC (`vendor/kuromoji.js`、`vendor/dict/`, 词典随插件分发、完全离线); 词典读不出来的时候留白, 不猜
+- `jp-furigana` / `JapaneseFonts` 不必再装: 装两个会在同一行上各注一次。共存补丁 (`npm run patch:furigana` / `patch:fonts`) 在 1.0 里已经删掉
 - 桌面歌词无效, 那是原生窗口而不是网页
 - 读音来源、规则依据、词典怎么生成、排障、实现要点、已知限制见 [docs/notes.md](docs/notes.md)
 

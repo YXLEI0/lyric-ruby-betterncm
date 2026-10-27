@@ -1,5 +1,5 @@
 /*
- * western-katakana 的注音注入与还原。
+ * lyric-ruby 的注音注入与还原。
  *
  * 职责：在指定区域里找西文词，给它们套上 <ruby>词<rt>片假名读音</rt></ruby>。
  *
@@ -1053,9 +1053,9 @@
           tokens[i].beforeSpaced = /\s$/.test(beforeRaw);
         }
         if (tokens[i].kana) {
-          // 汉字 / 谚文：读音是切的时候就定好的，不问读音层、也不进"暂定"队列
+          // 振假名 / 汉字 / 谚文：读音是切的时候就定好的，不问读音层、也不进"暂定"队列
           g = tokens[i].kana;
-          src = "cjk";
+          src = tokens[i].source || "cjk";
         } else if (matcher.looksReadable(tokens[i])) {
           /*
            * 传原始写法（tk.text）而不是 tk.norm：
@@ -2363,11 +2363,11 @@
 
   function applyStyles(doc, opts) {
     if (!doc || !doc.head) return;
-    styleEl(doc, "western-katakana-style").textContent = styles(opts);
+    styleEl(doc, "lyric-ruby-style").textContent = styles(opts);
   }
 
   function removeStyles(doc) {
-    var el = doc && doc.getElementById("western-katakana-style");
+    var el = doc && doc.getElementById("lyric-ruby-style");
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 

@@ -9,7 +9,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadCore, loadScripts, CORE_FILES } = require("./helpers");
+const { loadCore, loadScripts, CORE_FILES, VENDOR_FILES } = require("./helpers");
 
 const FILES = CORE_FILES.concat(["main.js"]);
 
@@ -43,6 +43,9 @@ function bootPlugin(html, options) {
   options = options || {};
   // 默认注入全部核心模块；options.files 用来测"某个模块没注入"时的降级
   const ctx = loadCore(html || NCM_HTML, { reader: false, files: options.files });
+  // 第三方底座：vendor/furigana.js 是纯文本层（30 KB），真机里必然注入，所有用例都带上。
+  // kuromoji + 词典只在振假名用例里显式加载（17 MB，没必要每个用例都读）。
+  loadScripts(ctx.dom, VENDOR_FILES);
   const dom = ctx.dom;
   const window = ctx.window;
 
@@ -55,7 +58,7 @@ function bootPlugin(html, options) {
   if (options.config) {
     const saved = {};
     for (const k of Object.keys(options.config)) saved[k] = options.config[k];
-    window.localStorage.setItem("western-katakana.config", JSON.stringify(saved));
+    window.localStorage.setItem("lyric-ruby.config", JSON.stringify(saved));
   }
   // 改名前的键（用来测"老键搬家"那条）
   if (options.legacyKeys) {
@@ -79,7 +82,7 @@ function bootPlugin(html, options) {
   };
   const plugin = {
     devMode: !!options.dev,
-    pluginPath: "C:/betterncm/plugins/western-katakana",
+    pluginPath: "C:/betterncm/plugins/lyric-ruby",
     onLoad: function (fn) {
       listeners.load.push(fn);
     },
@@ -1451,7 +1454,7 @@ test("层序可调：设置面板的 ↑↓ 按钮能改顺序、落盘，并立
   down.dispatchEvent(new env.window.Event("click"));
 
   assert.deepStrictEqual([...env.api.layers()], ["romaji", "dict", "llm", "google", "rule"], "点完就要换过来");
-  const saved = JSON.parse(env.window.localStorage.getItem("western-katakana.config"));
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.deepStrictEqual(saved.layerOrder, ["romaji", "dict", "llm", "google", "rule"], "顺序要落盘");
 
   // 面板上第一层的 ↑ 现在是禁用的（已经在最上面）
@@ -1775,12 +1778,12 @@ test("禁用后 DOM 完全还原并收走样式，重新启用又能标注", asy
   await sleep(200);
   assert.strictEqual(rubyCount(env.document.body), 0, "禁用后不该有注音");
   assert.ok(!env.document.body.innerHTML.includes("wk-ruby"), "禁用后 DOM 里不该有痕迹");
-  assert.strictEqual(env.document.getElementById("western-katakana-style"), null, "注入的样式表要收走");
+  assert.strictEqual(env.document.getElementById("lyric-ruby-style"), null, "注入的样式表要收走");
 
   env.api.set("enabled", true);
   await sleep(600);
   assert.strictEqual(env.document.body.innerHTML, annotated, "重新启用后应该回到同样的结果");
-  assert.ok(env.document.getElementById("western-katakana-style"), "样式要补回来");
+  assert.ok(env.document.getElementById("lyric-ruby-style"), "样式要补回来");
 });
 
 test("断网时依然能标（词典 + 罗马音 + 规则全在本地）", async () => {
@@ -1834,7 +1837,7 @@ test("用量：大模型返回的 token 数会记进账本（本次 / 今天 / �
     [1, 1, 1],
     "本次 / 今天 / 累计 三份账一起涨"
   );
-  const saved = JSON.parse(env.window.localStorage.getItem("western-katakana.usage"));
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.usage"));
   assert.strictEqual(saved.total.llm.promptTokens, 321, "累计要落盘");
 });
 
@@ -1845,7 +1848,7 @@ test("用量：设置面板显示账本，三个清零按钮各管一段", async
   const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   const bucket = (n) => ({ requests: n, ok: n, failures: 0, words: n, chars: n * 5, promptTokens: n * 100, completionTokens: n * 10 });
   env.window.localStorage.setItem(
-    "western-katakana.usage",
+    "lyric-ruby.usage",
     JSON.stringify({ version: 1, day: key, today: { llm: bucket(7), google: bucket(2) }, total: { llm: bucket(9), google: bucket(3) } })
   );
   await env.runLoad();
@@ -1884,7 +1887,7 @@ test("用量：单价填了就算花费，单价 0 就不显示钱", async () =>
   const d = new Date();
   const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   env.window.localStorage.setItem(
-    "western-katakana.usage",
+    "lyric-ruby.usage",
     JSON.stringify({
       version: 1,
       day: key,
@@ -1947,7 +1950,7 @@ test("按来源着色：类名一直在，颜色只由开关决定（开了立�
   const p = env.document.querySelector("ul.lyric li p");
   assert.ok(p.querySelector("ruby.wk-src-dict"), "词典给的词要带 wk-src-dict：" + p.innerHTML);
 
-  const styleText = () => env.document.getElementById("western-katakana-style").textContent;
+  const styleText = () => env.document.getElementById("lyric-ruby-style").textContent;
   assert.strictEqual(env.api.colorize(), false, "默认不开");
   assert.strictEqual(styleText().indexOf("wk-src-dict"), -1, "没开的时候一条颜色规则都不注入");
 
@@ -2005,7 +2008,7 @@ test("按来源着色：大模型换过的词，颜色跟着来源一起变", as
 test("注音不透明度真的生效（老版本被一条 !important 压掉了）", () => {
   const ctx = loadCore(NCM_HTML);
   ctx.WKAnnotate.applyStyles(ctx.document, { rtSize: 55, rtOpacity: 40, colorBySource: false });
-  const css = ctx.document.getElementById("western-katakana-style").textContent;
+  const css = ctx.document.getElementById("lyric-ruby-style").textContent;
   assert.ok(/rt\.wk-rt,\s*\.wk-rt\s*\{\s*opacity:\s*0\.4\s*!important/.test(css), "注音按设置里的 40%：" + css);
   assert.ok(
     css.indexOf("ruby.wk-ruby { opacity: 1 !important; }") >= 0,
@@ -2028,7 +2031,7 @@ test("设置面板：粘进来的 key 会自动洗掉引号 / 空格 / Bearer，
 
   assert.strictEqual(input.value, "sk-abc123456789012345", "输入框里要写成干净的值");
   assert.strictEqual(env.api.config.llmKey, "sk-abc123456789012345");
-  const saved = JSON.parse(env.window.localStorage.getItem("western-katakana.config"));
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.strictEqual(saved.llmKey, "sk-abc123456789012345", "落盘的也要是干净的");
 });
 
@@ -3306,7 +3309,7 @@ test("段标不会被「学会的词」带出读音；呼语 O 读 オー", asyn
     config: { online: false, llmEnabled: false },
     // 模拟真机：老版本攒下来的单字母词条
     legacyKeys: {
-      "western-katakana.learned.v1": JSON.stringify({ version: 1, words: { a: { k: "アー", at: 1 } }, seen: {} }),
+      "lyric-ruby.learned.v1": JSON.stringify({ version: 1, words: { a: { k: "アー", at: 1 } }, seen: {} }),
     },
   });
   await env.runLoad();
@@ -3439,6 +3442,106 @@ test("日语歌里的汉字不标普通话读音（开了开关也不标）", as
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const han = [...ps[1].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
   assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
+});
+
+const fakeFuriganaTokenizer = (table) => ({
+  tokenize(text) {
+    const out = [];
+    let i = 0;
+    while (i < text.length) {
+      let hit = null;
+      for (const surface of Object.keys(table)) {
+        if (text.startsWith(surface, i)) {
+          hit = surface;
+          break;
+        }
+      }
+      if (hit) {
+        out.push({ surface_form: hit, reading: table[hit], pronunciation: table[hit] });
+        i += hit.length;
+      } else {
+        const ch = text.charAt(i);
+        out.push({ surface_form: ch, reading: ch, pronunciation: ch });
+        i += 1;
+      }
+    }
+    return out;
+  },
+});
+
+const JP_TABLE = {
+  そんな: "ソンナ",
+  筈: "ハズ",
+  は: "ハ",
+  ない: "ナイ",
+  だろ: "ダロ",
+  東京: "トウキョウ",
+  の: "ノ",
+  空: "ソラ",
+  光: "ヒカリ",
+  中: "ナカ",
+};
+
+test("日语歌词：汉字标振假名（平假名），假名和西文各走各的", async () => {
+  /*
+   * 振假名的读音来源是 kuromoji + IPADIC（17 MB，懒加载）。测试里换成假分词器：
+   * 这里验的是"汉字片段被切出来、注成平假名、假名不被注、西文照旧"这条链路。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>そんな筈はないだろ</p></li>
+  <li class="line"><p>東京の空</p></li>
+  <li class="line"><p>光の中で love</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer(JP_TABLE));
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+
+  assert.deepStrictEqual(pairs(ps[0]), [["筈", "はず"]], "只有汉字要注：" + ps[0].innerHTML);
+  assert.deepStrictEqual(pairs(ps[1]), [["東京", "とうきょう"], ["空", "そら"]], "熟字训按词注：" + ps[1].innerHTML);
+  // 同一行里西文照旧注片假名，汉字注平假名，假名一个都不注
+  const l2 = pairs(ps[2]);
+  assert.deepStrictEqual(
+    l2,
+    [["光", "ひかり"], ["中", "なか"], ["love", "ラブ"]],
+    "汉字和西文共存：" + ps[2].innerHTML
+  );
+  // 原文一个字都不改
+  const clone = ps[1].cloneNode(true);
+  clone.querySelectorAll(".wk-rt").forEach((el) => el.remove());
+  assert.strictEqual(clone.textContent, "東京の空");
+});
+
+test("振假名可以关掉，也可以切成片假名写法", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>そんな筈はないだろ</p></li>
+</ul></div></div>
+</body></html>`;
+
+  // 关掉：一条注音都没有
+  const off = bootPlugin(HTML, { config: { online: false, llmEnabled: false, furigana: false } });
+  off.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer(JP_TABLE));
+  await off.runLoad();
+  await sleep(250);
+  assert.strictEqual(
+    off.document.querySelectorAll("ul.lyric li p ruby.wk-ruby").length,
+    0,
+    "关掉之后不许注音：" + off.document.querySelector("ul.lyric li p").innerHTML
+  );
+
+  // 片假名写法
+  const kata = bootPlugin(HTML, { config: { online: false, llmEnabled: false, furiganaKana: "katakana" } });
+  kata.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer(JP_TABLE));
+  await kata.runLoad();
+  await sleep(250);
+  const rt = kata.document.querySelector("ul.lyric li p ruby.wk-ruby .wk-rt");
+  assert.strictEqual(rt.textContent, "ハズ", "面板切成片假名时要跟着变");
 });
 
 test("中文歌的版权块不注音（词版权管理方：… 有限公司）", async () => {
@@ -3670,7 +3773,7 @@ test("一次性清掉旧的「问过但没收下」记录：被误伤的答案�
   const asked = [];
   const env = bootPlugin(HTML, {
     config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    legacyKeys: { "western-katakana.llm.v1": JSON.stringify(legacy) },
+    legacyKeys: { "lyric-ruby.llm.v1": JSON.stringify(legacy) },
     fetch: function (url, init) {
       if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
       const content = JSON.parse(init.body).messages[0].content;
@@ -3697,7 +3800,7 @@ test("一次性清掉旧的「问过但没收下」记录：被误伤的答案�
   const got = linePairs(env.document.querySelectorAll("ul.lyric li p"), 0);
   assert.strictEqual(got.get("Vacuum"), "ワクーム", JSON.stringify([...got]));
   // 落盘的缓存里也不该再有那条 miss
-  const raw = JSON.parse(env.window.localStorage.getItem("western-katakana.llm.v1"));
+  const raw = JSON.parse(env.window.localStorage.getItem("lyric-ruby.llm.v1"));
   assert.ok(!raw["vacuum\u0000Vacuum, fatuus"] || raw["vacuum\u0000Vacuum, fatuus"].miss !== true, "老的 miss 要清掉：" + JSON.stringify(raw));
 });
 
@@ -3837,7 +3940,7 @@ test("人工词典优先于「学会的词」：模型沉淀的 `ave アヴェ` 
     config: { online: false, llmEnabled: false },
     legacyKeys: {
       // 照抄真机：ave 被沉淀成了 アヴェ（错的）；fortuna 词典里没有，沉淀的 フォルトゥーナ 该用
-      "western-katakana.learned.v1": JSON.stringify({
+      "lyric-ruby.learned.v1": JSON.stringify({
         version: 1,
         words: { ave: { k: "アヴェ", at: 2 }, fortuna: { k: "フォルトゥーナ", at: 3 } },
         seen: {},
@@ -4247,7 +4350,7 @@ test("学会的词：模型在两个句子里答同一个读音 -> 沉淀成离�
    * 重开一次（模拟重启网易云）：把沉淀下来的那份 localStorage 搬到新的页面里，
    * 换成"什么都不许问"的 fetch —— 只要还在注音，就说明它没再花请求。
    */
-  const saved = env.window.localStorage.getItem("western-katakana.learned.v1");
+  const saved = env.window.localStorage.getItem("lyric-ruby.learned.v1");
   assert.ok(saved && saved.indexOf("セレンディピティ") >= 0, "要落盘：" + saved);
 
   let calls = 0;
@@ -4258,7 +4361,7 @@ test("学会的词：模型在两个句子里答同一个读音 -> 沉淀成离�
       return Promise.reject(new Error("不该有任何请求"));
     },
   });
-  env2.window.localStorage.setItem("western-katakana.learned.v1", saved);
+  env2.window.localStorage.setItem("lyric-ruby.learned.v1", saved);
   await env2.runLoad();
   await sleep(600);
 
@@ -4423,8 +4526,8 @@ test("设置面板的预览：高考听力那句 + 中文翻译行不注音", as
   assert.strictEqual(trans.querySelectorAll("ruby, rt").length, 0, "翻译行不许注音");
 });
 
-test("改名搬家：老的 latin-katakana.* 键会复制到 western-katakana.*，老键留着", async () => {
-  // 插件从 latin-katakana 改名成 western-katakana 之后，localStorage 的键前缀也换了。
+test("改名搬家：老的 latin-katakana.* 键会复制到 lyric-ruby.*，老键留着", async () => {
+  // 插件从 latin-katakana 改名成 lyric-ruby 之后，localStorage 的键前缀也换了。
   // 老配置（含 API Key）、学会的词、模型缓存、用量账本不该因为一次改名全丢 ——
   // main.js 开头有一段一次性搬家：新键不存在、老键存在才复制，老键不删。
   const env = bootPlugin(NCM_HTML, {
@@ -4445,7 +4548,7 @@ test("改名搬家：老的 latin-katakana.* 键会复制到 western-katakana.*�
 
   // 新键都写出来了
   for (const suffix of [".config", ".usage", ".learned.v1"]) {
-    assert.ok(env.window.localStorage.getItem("western-katakana" + suffix), "要写出 western-katakana" + suffix);
+    assert.ok(env.window.localStorage.getItem("lyric-ruby" + suffix), "要写出 lyric-ruby" + suffix);
     assert.ok(env.window.localStorage.getItem("latin-katakana" + suffix), "老键留着不删：" + suffix);
   }
   // 学会的词也读得到（不是空表）
@@ -4464,12 +4567,40 @@ test("改名搬家：老的 latin-katakana.* 键会复制到 western-katakana.*�
   assert.strictEqual(env2.api.config.rtSize, 66, "新键优先，老键不许盖回来");
 });
 
+test("第二次改名：0.4.x 的 western-katakana.* 键也会搬到 lyric-ruby.*", async () => {
+  /*
+   * 1.0 把插件从「西文字母片假名注音」改名成「歌词注音」，键前缀从 western-katakana
+   * 换成 lyric-ruby。上一版用户的配置（含 API Key）、学会的词、用量都在老键里，
+   * 搬家要连带这一跳一起认 —— 只认 latin-katakana 的话，这些人一升级设置就全丢。
+   */
+  const env = bootPlugin(NCM_HTML, {
+    legacyKeys: {
+      "western-katakana.config": JSON.stringify({ rtSize: 77, rtOpacity: 33, llmKey: "sk-prev", enabled: true }),
+      "western-katakana.usage": JSON.stringify({ session: {}, today: {}, total: {} }),
+      "western-katakana.learned.v1": JSON.stringify({ version: 1, words: { prevword: { k: "プリヴ", at: 1 } }, seen: {} }),
+    },
+  });
+  await env.runLoad();
+
+  assert.strictEqual(env.api.config.rtSize, 77, "上一版的配置要搬过来");
+  assert.strictEqual(env.api.config.llmKey, "sk-prev");
+  for (const suffix of [".config", ".usage", ".learned.v1"]) {
+    assert.ok(env.window.localStorage.getItem("lyric-ruby" + suffix), "要写出 lyric-ruby" + suffix);
+    assert.ok(env.window.localStorage.getItem("western-katakana" + suffix), "老键留着不删：" + suffix);
+  }
+  const learned = env.api.learn.list();
+  assert.ok(
+    learned.some((r) => r.word === "prevword" && r.kana === "プリヴ"),
+    "学会的词也要跟过来：" + JSON.stringify(learned)
+  );
+});
+
 test("设置面板能构建出来，改动落盘到 localStorage", async () => {
   const env = bootPlugin(NCM_HTML, { dev: true });
   await env.runLoad();
   const root = env.listeners.config[0]();
   assert.ok(root, "onConfig 应该返回一个元素");
-  assert.strictEqual(root.id, "western-katakana-config");
+  assert.strictEqual(root.id, "lyric-ruby-config");
 
   const enabled = root.querySelector('[data-k="enabled"]');
   assert.ok(enabled && enabled.type === "checkbox" && enabled.checked === true);
@@ -4479,7 +4610,7 @@ test("设置面板能构建出来，改动落盘到 localStorage", async () => {
   rtSize.value = "70";
   rtSize.dispatchEvent(new env.window.Event("change"));
 
-  const raw = env.window.localStorage.getItem("western-katakana.config");
+  const raw = env.window.localStorage.getItem("lyric-ruby.config");
   assert.ok(raw, "配置应该写进 localStorage");
   assert.strictEqual(JSON.parse(raw).rtSize, 70);
 });

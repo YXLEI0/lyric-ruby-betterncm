@@ -1,5 +1,5 @@
 /*
- * western-katakana —— 大模型校正层
+ * lyric-ruby —— 大模型校正层
  *
  * 存在意义：纯拼写规则永远读不对 hello / question / shining 这类词
  * （规则给 ヘッラオ / クワエサション，没人这么唱）。实测大模型给的读音质量
@@ -28,7 +28,7 @@
 
   var G = typeof globalThis !== "undefined" ? globalThis : {};
 
-  var CACHE_KEY = "western-katakana.llm.v1";
+  var CACHE_KEY = "lyric-ruby.llm.v1";
   var CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 半年
   var CACHE_MAX = 6000;
   var FLUSH_DELAY_MS = 400; // 攒批窗口
@@ -323,7 +323,7 @@
      * 命中的缓存一条都不动。
      */
     (function purgeStaleMisses() {
-      var FLAG = "western-katakana.llm.misspurge1";
+      var FLAG = "lyric-ruby.llm.misspurge1";
       try {
         if (typeof localStorage === "undefined" || localStorage.getItem(FLAG)) return;
         localStorage.setItem(FLAG, "1");

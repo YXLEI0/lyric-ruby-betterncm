@@ -95,7 +95,7 @@ test("落盘 + 重启后还在：换个实例读同一份 localStorage 也能拿
   a.note("muze", "ミューズ", "one", "ムセ");
   a.note("muze", "ミューズ", "two", "ムセ");
   a.flush();
-  assert.ok(storage._map["western-katakana.learned.v1"], "要落盘：" + JSON.stringify(storage._map));
+  assert.ok(storage._map["lyric-ruby.learned.v1"], "要落盘：" + JSON.stringify(storage._map));
 
   const b = newStore({ storage: storage });
   assert.strictEqual(b.get("muze"), "ミューズ", "重启后直接能用，不用再问模型");
@@ -103,7 +103,7 @@ test("落盘 + 重启后还在：换个实例读同一份 localStorage 也能拿
 });
 
 test("localStorage 里的脏数据一律忽略，不能把插件搞崩", () => {
-  const KEY = "western-katakana.learned.v1";
+  const KEY = "lyric-ruby.learned.v1";
   for (const raw of ["不是 JSON", "null", "[]", '{"words":"x"}', '{"words":{"muse":{"k":"漢字"}}}', '{"words":{"muse":{"k":""}}}', '{"words":{"muse":42}}']) {
     const storage = fakeStorage({ [KEY]: raw });
     const s = newStore({ storage: storage });
@@ -122,7 +122,7 @@ test("单字母词条一律不收：载入时清掉老的，之后也不会被�
   // 单字母的读音取决于语境（冠词 a ア / 字母名 (A, B) エー / 段标 (A: 不标），
   // 词级词条钉死一个必然出错 —— 机器上就攒了 `a → アー`，
   // 于是拉丁语歌词里的段标一直带着读音。
-  const KEY = "western-katakana.learned.v1";
+  const KEY = "lyric-ruby.learned.v1";
   const storage = fakeStorage({ [KEY]: JSON.stringify({ version: 1, words: { a: { k: "アー", at: 1 }, muse: { k: "ミューズ", at: 2 } }, seen: {} }) });
   const s = newStore({ storage: storage });
   assert.strictEqual(s.get("a"), null, "单字母老词条要清掉");

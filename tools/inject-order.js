@@ -12,12 +12,16 @@
 "use strict";
 
 const WANT_ORDER = [
+  // 振假名的底座：kuromoji（分词）+ furigana.js（把分词结果对齐成注音片段）
+  "vendor/kuromoji.js",
+  "vendor/furigana.js",
   "core/letters.js",
   "core/dict.js",
   "core/enwords.js",
   "core/hanzi.js",
   "core/hangul.js",
   "core/cjk.js",
+  "core/furigana.js",
   "core/reading.js",
   "core/loan.js",
   "core/songs.js",
@@ -30,4 +34,15 @@ const WANT_ORDER = [
   "main.js",
 ];
 
-module.exports = { WANT_ORDER };
+/**
+ * 注入文件的真实位置：core/ 与 main.js 在 src/ 下，vendor/ 在仓库根的 vendor/ 下。
+ * 打包时进包的名字就是清单里写的那个（vendor/kuromoji.js 进包还是这个路径）。
+ */
+function injectPath(root, src, file) {
+  const path = require("path");
+  const inSrc = path.join(src, file);
+  if (require("fs").existsSync(inSrc)) return inSrc;
+  return path.join(root, file);
+}
+
+module.exports = { WANT_ORDER, injectPath };

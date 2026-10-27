@@ -19,22 +19,26 @@
 (function () {
   "use strict";
 
-  var LOG = "[western-katakana]";
-  var REPO_URL = "https://github.com/YXLEI0/western-katakana-betterncm";
+  var LOG = "[歌词注音]";
+  var REPO_URL = "https://github.com/YXLEI0/lyric-ruby-betterncm";
 
   /*
-   * 插件从「latin-katakana」改名叫「western-katakana」，localStorage 的键前缀也跟着换了。
-   * 已有的配置、学会的词、缓存、用量账本不该因为一次改名全丢，所以做一次性搬家：
-   * 新键不存在、老键存在才复制，老键留着不删（万一要回退）。得在读 config / 建各层之前跑。
+   * 插件改过两次名：latin-katakana -> western-katakana（0.1.x 之前）-> lyric-ruby（1.0）。
+   * localStorage 的键前缀跟着换，但已有的配置、学会的词、缓存、用量账本不该因为改名全丢，
+   * 所以做一次性搬家：新键不存在、老键存在才复制，老键留着不删（万一要回退）。
+   * 从老版本一路升上来的人两条老前缀都要试；得在读 config / 建各层之前跑。
    */
   (function migrateStorage() {
     var SUFFIX = [".config", ".trace", ".learned.v1", ".usage", ".llm.v1", ".cache.v1", ".off", ".dev"];
+    var OLD_PREFIX = ["latin-katakana", "western-katakana"];
     try {
-      for (var i = 0; i < SUFFIX.length; i++) {
-        var oldKey = "latin-katakana" + SUFFIX[i];
-        var newKey = "western-katakana" + SUFFIX[i];
-        var val = localStorage.getItem(oldKey);
-        if (val !== null && localStorage.getItem(newKey) === null) localStorage.setItem(newKey, val);
+      for (var p = 0; p < OLD_PREFIX.length; p++) {
+        for (var i = 0; i < SUFFIX.length; i++) {
+          var oldKey = OLD_PREFIX[p] + SUFFIX[i];
+          var newKey = "lyric-ruby" + SUFFIX[i];
+          var val = localStorage.getItem(oldKey);
+          if (val !== null && localStorage.getItem(newKey) === null) localStorage.setItem(newKey, val);
+        }
       }
     } catch (e) {
       /* localStorage 不可用就跳过（隐私模式 / 配额满） */
@@ -90,7 +94,7 @@
    * 那里面的值是 Snappy 压缩的、还跨 record 分片，别手工捞）。
    * 上限 250 行，超出丢最旧的，避免把配额写爆。
    */
-  var TRACE_KEY = "western-katakana.trace";
+  var TRACE_KEY = "lyric-ruby.trace";
   var TRACE_MAX = 250;
 
   function trace(kind, msg) {
@@ -115,7 +119,7 @@
     }
   }
 
-  var CONFIG_KEY = "western-katakana.config";
+  var CONFIG_KEY = "lyric-ruby.config";
 
   var DEFAULTS = {
     enabled: true,
@@ -150,6 +154,9 @@
      */
     annotateHanzi: false,
     annotateHangul: false,
+    // 日语汉字振假名：默认开（装了本插件就是要看读音）；平假名是日语歌词的惯例
+    furigana: true,
+    furiganaKana: "hiragana",
     scope: "all", // titles | lyrics | all | custom
     customSelector: "",
     rtSize: 55, // 注音字号（相对底字百分比）
@@ -407,11 +414,11 @@
   /*
    * 紧急开关：插件一旦把页面搞崩，设置面板也进不去，所以留一个不依赖 UI 的关闭方式。
    * 在网易云的开发者工具控制台执行：
-   *     localStorage['western-katakana.off'] = '1'   // 并重启
+   *     localStorage['lyric-ruby.off'] = '1'   // 并重启
    */
   function emergencyOff() {
     try {
-      return localStorage.getItem("western-katakana.off") === "1";
+      return localStorage.getItem("lyric-ruby.off") === "1";
     } catch (e) {
       return false;
     }
@@ -420,7 +427,7 @@
   function devMode() {
     try {
       if (typeof plugin !== "undefined" && plugin.devMode) return true;
-      return localStorage.getItem("western-katakana.dev") === "1";
+      return localStorage.getItem("lyric-ruby.dev") === "1";
     } catch (e) {
       return false;
     }
@@ -1941,7 +1948,11 @@
      *   - 没答案就返回 null —— relabel() 保持原样（离线读音），不会把中文擦掉。
      * 谚文是拼写即读音，没有多音字问题，一直返回 null。
      */
-    if (typeof WKCJK !== "undefined" && WKCJK.hasHan(word)) return hanziFromLLM(word, line);
+    if (typeof WKCJK !== "undefined" && WKCJK.hasHan(word)) {
+      // 日语行里的汉字归振假名管（东京 トウキョウ），不能拿普通话读音去改
+      if (lineLooksJapanese(line)) return null;
+      return hanziFromLLM(word, line);
+    }
     if (typeof WKCJK !== "undefined" && WKCJK.hasHangul(word)) return null;
     // 全角字母折半角（`ＮＯ` -> `NO`）：查表 / 模型键 / 层序都得用同一个形式
     word = foldFullwidthLetters(word);
@@ -2011,6 +2022,7 @@
      * 答案没回来之前算"暂定"，回来了 relabel() 会改写并摘掉 wk-pending。
      */
     if (typeof WKCJK !== "undefined" && WKCJK.hasHan(word)) {
+      if (lineLooksJapanese(line)) return false;
       if (!polyOptions(word) || !llmAvailable() || !state.llm) return false;
       try {
         return !!(state.llm.isWaiting && state.llm.isWaiting(word, line));
@@ -2051,6 +2063,28 @@
    * 非日语歌（纯英语/法语/中文）一行假名都没有，所以整首判定很稳。
    * 结论按歌词文本缓存：同一首歌每轮扫描都要问一次，没必要每次重算。
    */
+  /**
+   * 这一行算不算日语行：有假名，或者整首是日语歌（纯汉字行 / 纯英文行都算）。
+   * 振假名和中文读音的分岔就按它走。
+   */
+  function lineLooksJapanese(line) {
+    if (!line) return songLooksJapanese();
+    return RE_KANA_ANY.test(line) || songLooksJapanese();
+  }
+
+  /**
+   * 日语行的振假名 token：汉字片段交给 core/furigana.js（kuromoji + IPADIC）。
+   *
+   * 词典是懒加载的：这一趟读不到就返回 null，等 onReady 触发重扫时再补上。
+   * 面板里关掉之后一条都不产出（现有注音由 rescan 里的 restore 撤掉）。
+   */
+  function furiganaTokens(s) {
+    if (config.furigana === false) return null;
+    if (typeof WKFurigana === "undefined") return null;
+    var out = WKFurigana.tokens(s, { kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana" });
+    return out && out.length ? out : null;
+  }
+
   /**
    * 汉字 / 谚文的注音 token（core/cjk.js 扫出来，读音已经定好）。
    *
@@ -2100,6 +2134,22 @@
       }
     }
     return out;
+  }
+
+  /**
+   * 注音层的 extraTokens：按"这一行是不是日语行"分岔。
+   *
+   *   - 日语行 -> 振假名（汉字标读音，平/片假名看配置）
+   *   - 非日语行 -> 中文 / 朝鲜语（core/cjk.js，逐字）
+   *
+   * 两条不会同时生效：日语歌里的汉字必须读日语，中文歌里的汉字才读普通话。
+   */
+  function extraTokens(text, context) {
+    var s = String(text == null ? "" : text);
+    if (!s) return null;
+    var line = context || s;
+    if (lineLooksJapanese(line)) return furiganaTokens(s);
+    return cjkTokens(s, context);
   }
 
   /** 这个汉字是不是多音字；是就返回它构建期算好的候选读音 */
@@ -2356,30 +2406,30 @@
 
   function buildConfigUI() {
     var root = document.createElement("div");
-    root.id = "western-katakana-config";
+    root.id = "lyric-ruby-config";
     root.innerHTML =
       "<style>" +
-      "#western-katakana-config { font-size: 14px; line-height: 1.9; }" +
-      "#western-katakana-config h3 { margin: 12px 0 4px; font-size: 15px; }" +
-      "#western-katakana-config .wk-row { margin: 3px 0; }" +
-      "#western-katakana-config .wk-hint { opacity: .65; font-size: 12px; line-height: 1.5; }" +
-      "#western-katakana-config input[type=text], #western-katakana-config input[type=password] { width: 300px; padding: 2px 6px; }" +
-      "#western-katakana-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
-      "#western-katakana-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
-      "#western-katakana-config .wk-llm-state { margin: 2px 0; }" +
-      "#western-katakana-config .wk-layer { display: flex; align-items: center; gap: 6px; line-height: 1.8; }" +
-      "#western-katakana-config .wk-layer-name { min-width: 110px; }" +
-      "#western-katakana-config .wk-layer-note { opacity: .6; font-size: 12px; flex: 1; }" +
-      "#western-katakana-config .wk-layer-btn { min-width: 26px; }" +
-      "#western-katakana-config .wk-layer-btn[disabled] { opacity: .35; }" +
-      "#western-katakana-config .wk-layer-warn { color: #e8a33d; margin-top: 4px; }" +
-      "#western-katakana-config .wk-warn { color: #e8a33d; }" +
-      "#western-katakana-config .wk-links { margin-bottom: 4px; }" +
-      "#western-katakana-config .wk-links a { margin-right: 14px; }" +
+      "#lyric-ruby-config { font-size: 14px; line-height: 1.9; }" +
+      "#lyric-ruby-config h3 { margin: 12px 0 4px; font-size: 15px; }" +
+      "#lyric-ruby-config .wk-row { margin: 3px 0; }" +
+      "#lyric-ruby-config .wk-hint { opacity: .65; font-size: 12px; line-height: 1.5; }" +
+      "#lyric-ruby-config input[type=text], #lyric-ruby-config input[type=password] { width: 300px; padding: 2px 6px; }" +
+      "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
+      "#lyric-ruby-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
+      "#lyric-ruby-config .wk-llm-state { margin: 2px 0; }" +
+      "#lyric-ruby-config .wk-layer { display: flex; align-items: center; gap: 6px; line-height: 1.8; }" +
+      "#lyric-ruby-config .wk-layer-name { min-width: 110px; }" +
+      "#lyric-ruby-config .wk-layer-note { opacity: .6; font-size: 12px; flex: 1; }" +
+      "#lyric-ruby-config .wk-layer-btn { min-width: 26px; }" +
+      "#lyric-ruby-config .wk-layer-btn[disabled] { opacity: .35; }" +
+      "#lyric-ruby-config .wk-layer-warn { color: #e8a33d; margin-top: 4px; }" +
+      "#lyric-ruby-config .wk-warn { color: #e8a33d; }" +
+      "#lyric-ruby-config .wk-links { margin-bottom: 4px; }" +
+      "#lyric-ruby-config .wk-links a { margin-right: 14px; }" +
       // 高级设置整块折叠：面板默认只有"开关 / 大模型 / 预览"三块，其余收起来
-      "#western-katakana-config details.wk-adv { margin-top: 12px; border-top: 1px solid rgba(128,128,128,.25); padding-top: 6px; }" +
-      "#western-katakana-config details.wk-adv > summary { cursor: pointer; opacity: .8; }" +
-      "#western-katakana-config details.wk-adv > summary:hover { opacity: 1; }" +
+      "#lyric-ruby-config details.wk-adv { margin-top: 12px; border-top: 1px solid rgba(128,128,128,.25); padding-top: 6px; }" +
+      "#lyric-ruby-config details.wk-adv > summary { cursor: pointer; opacity: .8; }" +
+      "#lyric-ruby-config details.wk-adv > summary:hover { opacity: 1; }" +
       "</style>" +
       '<div class="wk-links">' +
       '<a href="#" data-open="' + REPO + '">源码仓库</a>' +
@@ -2389,9 +2439,11 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="enabled"> 启用注音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="online"> 规则没把握时联网校正 (免费接口)</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateAll"> 也标播放栏的歌名 / 歌手</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="furigana"> 日语歌词给汉字标振假名</label></div>' +
+      '<div class="wk-row"><label>振假名写法 <select data-k="furiganaKana"><option value="hiragana">平假名</option><option value="katakana">片假名</option></select></label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 也给汉字标普通话读音 (片假名)</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 也给谚文标朝鲜语读音</label></div>' +
-      '<div class="wk-hint">汉字 / 谚文只标非日语歌里的行, 日语歌里的汉字不动 (那要用日语读音)</div>' +
+      '<div class="wk-hint">振假名只标日语歌里的汉字 (kuromoji 分词, 离线词典); 汉字 / 谚文那两条只标非日语歌里的行</div>' +
       "<h3>大模型校正</h3>" +
       '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
       '<div class="wk-row"><label>API Key <input type="password" data-k="llmKey" placeholder="sk-..."></label> ' +
@@ -2851,7 +2903,7 @@
       refreshLearned();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
 
     var inputs = root.querySelectorAll("[data-k]");
@@ -2980,7 +3032,7 @@
               copied = false;
             }
             try {
-              console.log("[western-katakana] 词库素材（" + count + " 条）：", json);
+              console.log("[lyric-ruby] 词库素材（" + count + " 条）：", json);
             } catch (eLog) {
               /* 控制台打不出来就算了 */
             }
@@ -3242,7 +3294,24 @@
           },
         });
       }
-      state.annotator = WKAnnotate.createAnnotator({
+      /*
+     * 振假名词典（kuromoji + IPADIC，17 MB）是懒加载的：这里只登记"读完要重扫"，
+     * 真正读盘发生在第一行日语歌词出现时。读完重扫一次，屏幕上已经渲染出来的
+     * 汉字行就能补上注音，不用等下一次歌词滚动。
+     */
+    if (typeof WKFurigana !== "undefined" && WKFurigana.configure) {
+      WKFurigana.configure({
+        onReady: function () {
+          try {
+            rescan();
+          } catch (e) {
+            /* 还没进主循环时忽略 */
+          }
+        },
+      });
+    }
+
+    state.annotator = WKAnnotate.createAnnotator({
         // 返回 { kana, source }：source 用来给"按来源着色"的排障功能打标
         // 第三个参数是这个词的 token（段标 `M:` 那类判断要看 token 的位置，不能只看整行）
         lookup: function (word, line, token) {
@@ -3256,9 +3325,9 @@
         censoredRun: function (text) {
           return looksCensoredRun(text);
         },
-        // 汉字 / 谚文：读音在切的时候就定了，注音层只负责包成 ruby（见 cjkTokens）
-        extraTokens: function (text) {
-          return cjkTokens(text);
+        // 振假名 / 汉字 / 谚文：读音在切的时候就定了，注音层只负责包成 ruby（见 extraTokens）
+        extraTokens: function (text, context) {
+          return extraTokens(text, context);
         },
         annotateAll: config.annotateAll !== false,
         log: function () {

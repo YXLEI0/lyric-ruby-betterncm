@@ -13,7 +13,7 @@
  * 后面才是正文。所以拿到原始字节后按 UTF-16LE 解码。
  *
  * 用法：
- *   node tools/read-trace.js            # 读 western-katakana.trace
+ *   node tools/read-trace.js            # 读 lyric-ruby.trace
  *   node tools/read-trace.js --key xxx  # 读别的键
  *   node tools/read-trace.js --raw      # 直接输出值（不按轨迹数组格式化）
  */
@@ -24,7 +24,7 @@ const path = require("path");
 
 const KEY = process.argv.includes("--key")
   ? process.argv[process.argv.indexOf("--key") + 1]
-  : "western-katakana.trace";
+  : "lyric-ruby.trace";
 const RAW = process.argv.includes("--raw");
 
 const base = path.join(process.env.LOCALAPPDATA, "Netease", "CloudMusic", "webapp91x64", "Local Storage", "leveldb");

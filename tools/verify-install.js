@@ -17,7 +17,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { readZip } = require("./patch-jp-furigana-plugin");
+const { readZip } = require("./zip");
 
 const ROOT = path.join(__dirname, "..");
 const manifest = require(path.join(ROOT, "src", "manifest.json"));
@@ -50,16 +50,18 @@ function main() {
   check(packed.version === manifest.version, "版本号 " + packed.version + "（期望 " + manifest.version + "）");
   check(packed.slug === manifest.slug, "slug = " + packed.slug);
 
-  // 包内每个条目都要和 src/ 下同名文件逐字节一致
+  // 包内每个条目都要和仓库里的同名文件逐字节一致。
+  // core/*.js 与 main.js 在 src/ 下，vendor/*（kuromoji、词典、许可文件）在仓库根的 vendor/ 下。
   for (const e of entries) {
-    const onDisk = path.join(ROOT, "src", e.name);
+    const inSrc = path.join(ROOT, "src", e.name);
+    const onDisk = fs.existsSync(inSrc) ? inSrc : path.join(ROOT, e.name);
     if (!fs.existsSync(onDisk)) {
-      check(false, "src/" + e.name + " 在仓库里不存在");
+      check(false, "仓库里找不到 " + e.name);
       continue;
     }
     const disk = fs.readFileSync(onDisk);
     const same = Buffer.compare(e.data, disk) === 0;
-    check(same, "src/" + e.name + (same ? " 一致" : " **不一致**（库里 " + disk.length + " 字节 / 包里 " + e.data.length + " 字节）"));
+    check(same, e.name + (same ? " 一致" : " **不一致**（库里 " + disk.length + " 字节 / 包里 " + e.data.length + " 字节）"));
   }
   // 反过来：src/ 下的文件不能漏打进包（manifest 里 injects 声明的必须都在）
   for (const item of (manifest.injects && manifest.injects.Main) || []) {
@@ -69,11 +71,12 @@ function main() {
     );
   }
 
-  // 共存相关的关键串：只做"有没有"，细节由单测保证
-  const ann = entries.find((e) => e.name === "core/annotate.js");
-  if (ann) {
-    const src = ann.data.toString("utf8");
-    check(/kt-ruby/.test(src) && /fg-ruby/.test(src), "annotate.js 认另外两家的注音节点（kt-ruby / fg-ruby）");
+  // 振假名的底座必须在包里（词典缺失时插件会静默地不注音，很难看出来）
+  for (const rel of ["vendor/kuromoji.js", "vendor/furigana.js", "vendor/dict/base.dat.gz", "core/furigana.js"]) {
+    check(
+      entries.some((e) => e.name === rel),
+      rel + " 在包里"
+    );
   }
   const main = entries.find((e) => e.name === "main.js");
   if (main) {

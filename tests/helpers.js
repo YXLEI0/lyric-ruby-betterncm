@@ -11,10 +11,15 @@ const vm = require("vm");
 const { JSDOM } = require("jsdom");
 const { after } = require("node:test");
 
-const SRC = path.join(__dirname, "..", "src");
+const ROOT = path.join(__dirname, "..");
+const SRC = path.join(ROOT, "src");
 
 /** 按 manifest 顺序注入的核心模块（加文件时这里和 manifest 一起改） */
-const CORE_FILES = ["core/letters.js", "core/dict.js", "core/enwords.js", "core/hanzi.js", "core/hangul.js", "core/cjk.js", "core/reading.js", "core/loan.js", "core/songs.js", "core/langs.js", "core/correct.js", "core/llm.js", "core/usage.js", "core/learn.js", "core/annotate.js"];
+const CORE_FILES = ["core/letters.js", "core/dict.js", "core/enwords.js", "core/hanzi.js", "core/hangul.js", "core/cjk.js", "core/furigana.js", "core/reading.js", "core/loan.js", "core/songs.js", "core/langs.js", "core/correct.js", "core/llm.js", "core/usage.js", "core/learn.js", "core/annotate.js"];
+
+/** 第三方底座（按需注入：只有振假名的测试需要） */
+const VENDOR_FILES = ["vendor/furigana.js"];
+const VENDOR_KUROMOJI = "vendor/kuromoji.js";
 
 /**
  * jsdom 的窗口里会有 setInterval / MutationObserver，不关掉进程就不退出。
@@ -37,7 +42,8 @@ function autoClose(window) {
 /** 按顺序注入任意 src/ 下的模块（files 换掉就是另一套清单） */
 function loadScripts(dom, files) {
   for (const f of files) {
-    const code = fs.readFileSync(path.join(SRC, f), "utf8");
+    const base = f.indexOf("vendor/") === 0 ? ROOT : SRC;
+    const code = fs.readFileSync(path.join(base, f), "utf8");
     vm.runInContext(code, dom.getInternalVMContext(), { filename: f });
   }
 }
@@ -104,4 +110,4 @@ function forceRubyLayout(ctx, supported) {
   ctx.window.__WK_FORCE_RUBY__ = supported;
 }
 
-module.exports = { loadCore, makeAnnotator, forceRubyLayout, loadScripts, SRC, CORE_FILES };
+module.exports = { loadCore, makeAnnotator, forceRubyLayout, loadScripts, SRC, ROOT, CORE_FILES, VENDOR_FILES, VENDOR_KUROMOJI };

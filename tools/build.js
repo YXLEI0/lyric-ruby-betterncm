@@ -1,5 +1,5 @@
 /*
- * 打包：把 src/ 打成 builds/western-katakana.plugin（.plugin 就是个 zip，文件在 zip 根目录）。
+ * 打包：把 src/ 打成 builds/lyric-ruby.plugin（.plugin 就是个 zip，文件在 zip 根目录）。
  *
  *   node tools/build.js
  *   node tools/build.js --install              复制到 C:\betterncm\plugins
@@ -61,6 +61,30 @@ const BUILD_DATE = new Date(buildEpoch());
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(SRC, "manifest.json"), "utf8"));
 const INJECTED = ((MANIFEST.injects && MANIFEST.injects.Main) || []).map((i) => i.file);
 const SRC_FILES = ["manifest.json"].concat(INJECTED).concat([MANIFEST.preview || "preview.png"]);
+
+/*
+ * 注入文件分两处：core/*.js 与 main.js 在 src/ 下，vendor/kuromoji.js、vendor/furigana.js
+ * 在仓库根的 vendor/ 下（那是第三方代码，不参与 src 的 ES5 检查）。
+ * 进包的名字就是清单里写的那个，不做改名。
+ */
+const { injectPath } = require("./inject-order");
+
+/** vendor/ 下除了注入的 js，还有振假名词典（dict/*.dat.gz）和第三方许可文件：全部进包 */
+function vendorEntries() {
+  const out = [];
+  const base = path.join(ROOT, "vendor");
+  if (!fs.existsSync(base)) return out;
+  const walk = (dir, rel) => {
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      const relName = rel ? rel + "/" + name : name;
+      if (fs.statSync(full).isDirectory()) walk(full, relName);
+      else out.push("vendor/" + relName);
+    }
+  };
+  walk(base, "");
+  return out;
+}
 
 // src/ 下允许存在的全部内容（多出来说明有临时文件误提交）
 const ALLOWED_TOP = new Set(["manifest.json", "main.js", "preview.png", "core"]);
@@ -163,11 +187,15 @@ function buildZip(entries) {
 
 function collect() {
   const entries = [];
+  const seen = new Set();
   const add = (fullPath, name) => {
-    if (!fs.existsSync(fullPath)) throw new Error(`缺少 src/${name}（先跑 npm run build:dict / build:preview 生成）`);
+    if (seen.has(name)) return; // vendor 里被 manifest 注入的 js 会走两遍
+    if (!fs.existsSync(fullPath)) throw new Error(`缺少 ${name}（先跑 npm run build:dict / build:preview 生成）`);
+    seen.add(name);
     entries.push({ name, data: fs.readFileSync(fullPath), mtime: BUILD_DATE });
   };
-  for (const f of SRC_FILES) add(path.join(SRC, f), f);
+  for (const f of SRC_FILES) add(injectPath(ROOT, SRC, f), f);
+  for (const f of vendorEntries()) add(path.join(ROOT, f), f);
   return entries;
 }
 
@@ -257,6 +285,15 @@ function main() {
     const dest = path.join(dir, path.basename(out));
     fs.copyFileSync(out, dest);
     console.log(`已复制到 ${dest}，重启网易云生效`);
+    /*
+     * 1.0 改名前叫 western-katakana：老包留着会和新的同时注音（一行两个 ruby）。
+     * 安装时顺手删掉，免得每次都要提醒"记得卸载旧版"。
+     */
+    const legacy = path.join(dir, "western-katakana.plugin");
+    if (fs.existsSync(legacy)) {
+      fs.unlinkSync(legacy);
+      console.log(`已删除改名前的老包 ${legacy}`);
+    }
   }
 }
 

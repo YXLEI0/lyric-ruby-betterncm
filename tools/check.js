@@ -90,6 +90,7 @@ console.log("[0/7] 运行时版本");
     "tests/langs.test.js",
     "tests/sljfaq-words.test.js",
     "tests/cjk.test.js",
+    "tests/furigana.test.js",
     "tests/dict.test.js",
     "tests/annotate.test.js",
     "tests/correct.test.js",
@@ -98,7 +99,6 @@ console.log("[0/7] 运行时版本");
     "tests/learn.test.js",
     "tests/promote.test.js",
     "tests/integration.test.js",
-    "tests/patch.test.js",
   ];
   const missing = TEST_FILES.filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missing.length) fail("测试文件不存在：" + missing.join(", "));
@@ -288,11 +288,11 @@ if (manifest) {
 
 console.log("[3/7] 注入清单");
 // 顺序表和 build 共用一份（tools/inject-order.js），别在这里再抄一遍
-const { WANT_ORDER } = require("./inject-order");
+const { WANT_ORDER, injectPath } = require("./inject-order");
 if (manifest && manifest.injects && manifest.injects.Main) {
   const files = manifest.injects.Main.map((i) => i.file);
   for (const f of files) {
-    if (!fs.existsSync(path.join(SRC, f))) fail("注入的文件不存在：" + f);
+    if (!fs.existsSync(injectPath(ROOT, SRC, f))) fail("注入的文件不存在：" + f);
     if (!/\.m?js$/.test(f)) fail("注入文件必须以 .js 结尾：" + f);
   }
   if (files.join(",") !== WANT_ORDER.join(",")) fail(`注入顺序不对：${files.join(" -> ")}`);
@@ -518,7 +518,7 @@ console.log("[4.9/7] 汉字读音表");
 console.log("[5/7] 元信息与仓库地址");
 const MANIFEST = manifest || {};
 const EXPECTED_OWNER = "YXLEI0";
-const EXPECTED_REPO = "western-katakana-betterncm";
+const EXPECTED_REPO = "lyric-ruby-betterncm";
 if (MANIFEST.author && MANIFEST.author !== EXPECTED_OWNER) {
   warn(`manifest.author 是「${MANIFEST.author}」，与预期维护者（${EXPECTED_OWNER}）不一致`);
 }
