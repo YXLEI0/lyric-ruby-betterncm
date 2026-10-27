@@ -2455,18 +2455,45 @@
   }
 
   /**
+   * 这一行该不该换日文字体。
+   *
+   * 判据按"这一行的文字长什么样"来，不按选择器猜：
+   *   - 有假名 -> 日文行，换
+   *   - 罗马音 / 中文翻译那一类（class 已经是这几种）-> 不换
+   *   - 没有汉字（纯拉丁 = 罗马音行）-> 不换
+   *   - 有汉字但明显是中文（core/cn-line.js 判）-> 不换
+   *   - 其余（纯汉字日文行，比如 `東京`）-> 换
+   *
+   * 为什么改成按内容判：NCM 的歌词页把"原文 / 罗马音 / 翻译"渲染成**兄弟节点**，
+   * 它们全都匹配同一批歌词选择器 —— 只按选择器过滤，翻译行照样被换成日文字体，
+   * 中文按日文字形渲染很难看。按内容判，翻译行没有假名、又被判成中文，自然就跳过了。
+   */
+  function wantsJapaneseFont(el) {
+    var t = "";
+    try {
+      t = el.textContent || "";
+    } catch (e) {
+      return false;
+    }
+    if (!t) return false;
+    if (RE_KANA_ANY.test(t)) return true;
+    if (fontSkipped(el)) return false;
+    if (!/[\u4E00-\u9FFF]/.test(t)) return false;
+    if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(t)) return false;
+    return true;
+  }
+
+  /**
    * 把字体写进区域元素的内联样式；family 为空 = 撤掉我们写过的那些。
    *
-   * 目标是"注音层认得出的歌词行"，不只是已经注过音的行 —— 日语歌里的纯汉字行、
-   * 关掉振假名的行，字体也得换（JapaneseFonts 就是整页换）。
-   * 但罗马音行 / 中文翻译行要跳过：那是给中文和罗马字看的，换成日文字体只会更难看。
+   * 真机上只有内联样式压得过播放页自己的规则（面板预览也是内联，所以预览一直有效）；
+   * 目标不只包括"已经注过音的行"：日语歌里的纯汉字行、关掉振假名的行，字体也得换。
    */
   function applyJapaneseFontInline(family) {
     var targets = [];
     var seen = [];
     function add(el) {
       if (!el || el.nodeType !== 1 || !el.style) return;
-      if (fontSkipped(el)) return;
       if (seen.indexOf(el) >= 0) return;
       seen.push(el);
       targets.push(el);
@@ -2485,10 +2512,18 @@
     } catch (e2) {
       /* 同上 */
     }
+    // 以前写过、现在不该写的元素（换行 / 语言变了 / 关掉开关）也要能撤掉
+    try {
+      var marked = document.querySelectorAll("[data-wk-font]");
+      for (var m = 0; m < marked.length; m++) add(marked[m]);
+    } catch (e3) {
+      /* 同上 */
+    }
     for (var k = 0; k < targets.length; k++) {
       var el = targets[k];
+      var want = !!family && wantsJapaneseFont(el);
       try {
-        if (family) {
+        if (want) {
           var now = el.style.getPropertyValue("font-family");
           var pri = el.style.getPropertyPriority("font-family");
           if (now !== family || pri !== "important") el.style.setProperty("font-family", family, "important");
@@ -2497,7 +2532,7 @@
           el.style.removeProperty("font-family");
           el.removeAttribute("data-wk-font");
         }
-      } catch (e3) {
+      } catch (e4) {
         /* 单个元素写不进去不影响其它行 */
       }
     }

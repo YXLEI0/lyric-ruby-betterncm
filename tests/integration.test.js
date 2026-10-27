@@ -3648,6 +3648,32 @@ test("日文字体不碰罗马音行和中文翻译行", async () => {
   );
   assert.strictEqual(romaji.style.getPropertyValue("font-family"), "", "罗马音行不许换：" + romaji.getAttribute("style"));
   assert.strictEqual(trans.style.getPropertyValue("font-family"), "", "翻译行不许换：" + trans.getAttribute("style"));
+
+  /*
+   * 真机上的另一种形态（NCM 3.x 播放页）：原文和翻译是**兄弟节点**，
+   * 而且都匹配同一批歌词选择器（`ul.lyric li p`）。只按选择器过滤挡不住，
+   * 得按内容判：翻译行没有假名、又判成中文，所以不换。
+   */
+  const SIBLING = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>夕暮れは悲しいまま</p></li>
+  <li class="line"><p>夕阳西下 还是面带悲伤</p></li>
+  <li class="line"><p>目を細めたら</p></li>
+</ul></div></div>
+</body></html>`;
+  const env2 = bootPlugin(SIBLING, { config: { online: false, llmEnabled: false } });
+  await env2.runLoad();
+  await sleep(300);
+  const ps = env2.document.querySelectorAll("ul.lyric li p");
+  assert.ok(
+    ps[0].style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0,
+    "日文行要换：" + ps[0].getAttribute("style")
+  );
+  assert.strictEqual(ps[1].style.getPropertyValue("font-family"), "", "兄弟节点里的中文翻译行不许换：" + ps[1].getAttribute("style"));
+  assert.ok(
+    ps[2].style.getPropertyValue("font-family").indexOf("Yu Gothic UI") >= 0,
+    "后面的日文行照旧要换：" + ps[2].getAttribute("style")
+  );
 });
 
 test("日语歌词换日文字体：内联样式（真机生效的那条）+ 样式表兜底", async () => {
