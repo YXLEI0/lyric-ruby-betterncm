@@ -133,6 +133,53 @@ test("振假名：同一行第二次直接命中缓存", () => {
   assert.strictEqual(calls, 2, "清缓存之后要重新分词");
 });
 
+test("按行修正：fixes 只对这一行生效（同一个词换个句子可以不一样）", () => {
+  /*
+   * 同一个词在不同句子里读音不同（解 と / かい / ほど、明日 あした / あす），
+   * 所以修正不是全局词表，而是调用方按"这一行"算好再传进来。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 明日: "アス", 解: "カイ", 好き: "スキ" }));
+
+  // 这一行里 明日 读 あした
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("明日も", { fixes: { 明日: "あした" } }), (t) => [t.text, t.kana]),
+    [["明日", "あした"]],
+    "这一行按修正读"
+  );
+  // 换一行、不带修正：回到词典读音
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("明日は雨"), (t) => [t.text, t.kana]),
+    [["明日", "あした"]],
+    "没带修正就用词典（词典本身把 明日 读 あした）"
+  );
+  // 同一行里 解 可以读 と
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("解けない", { fixes: { 解: "と" } }), (t) => [t.text, t.kana]),
+    [["解", "と"]],
+    "按修正读"
+  );
+
+  // 片假名写法：用户填平假名也会跟着切成片假名
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("明日も", { fixes: { 明日: "あした" }, kana: "katakana" }), (t) => [t.text, t.kana]),
+    [["明日", "アシタ"]],
+    "写法要跟着模式转"
+  );
+});
+
+test("按行修正：长词优先，重叠的短词不重复注", () => {
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 大: "ダイ", 好き: "スキ", 大好き: "ダイスキ" }));
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("大好き", { fixes: { 大: "おお", 大好き: "だいすき" } }), (t) => [t.text, t.kana]),
+    [["大好き", "だいすき"]],
+    "长词压过短词，且只注一次"
+  );
+});
+
 test("振假名：真的读出 IPADIC 的读音（kuromoji + vendor/dict）", async () => {
   const ctx = newWindow();
   const W = ctx.window;

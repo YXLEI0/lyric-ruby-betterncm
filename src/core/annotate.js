@@ -1016,7 +1016,7 @@
       var extras = null;
       if (typeof extraTokens === "function") {
         try {
-          extras = extraTokens(text, context);
+          extras = extraTokens(text, context, hostMaybe);
         } catch (e) {
           extras = null;
         }

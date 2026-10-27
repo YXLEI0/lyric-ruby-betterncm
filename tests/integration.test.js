@@ -3866,6 +3866,95 @@ test("日文字体不碰罗马音行和中文翻译行", async () => {
   assert.strictEqual(card.style.getPropertyValue("font-family"), "", "容器本身不许写字体（否则三行一起变）");
 });
 
+test("词典读不出的汉字交给大模型（按整句问，答案是平假名）", async () => {
+  /*
+   * IPADIC 对生词给不出读音（`謎` 这种在歌词里很常见），以前整段留白。
+   * 现在把这种词连整句一起交给大模型：kind=ja 的条目，模型按语境给平假名，
+   * 答案按「词 + 这句」缓存（不做全局词表 —— 换个句子读音可能就不一样）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>謎のまま</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: {
+      online: false,
+      llmEnabled: true,
+      llmKey: "sk-test",
+      llmEndpoint: "https://api.example.com/v1/chat/completions",
+    },
+    fetch: function (url, init) {
+      const content = JSON.parse(init.body).messages[0].content;
+      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
+      asked.push({ items: items, prompt: content.slice(0, 400) });
+      const out = {};
+      items.forEach((it, i) => {
+        out[String(i + 1)] = "なぞ";
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ の: "ノ", まま: "ママ" }));
+  await env.runLoad();
+  await sleep(1500);
+
+  assert.ok(asked.length >= 1, "读不出来的汉字要问模型：" + JSON.stringify(asked.map((a) => a.items)));
+  const first = asked[0].items[0];
+  assert.strictEqual(first.w, "謎", "问的是那个读不出来的词：" + JSON.stringify(first));
+  assert.strictEqual(first.kind, "ja", "要标成日语汉字条目：" + JSON.stringify(first));
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs, [["謎", "なぞ"]], "模型给的读音要注上去：" + p.innerHTML);
+});
+
+test("面板里填了按句的读音修正：只有那一行变，别的行照旧", async () => {
+  /*
+   * 同一个词在不同句子里读音不同，所以规则必须带"作用范围"：
+   *   明日も抱きしめて => 明日=あした
+   * 只对包含这句原文的行生效。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日も抱きしめて</p></li>
+  <li class="line"><p>明日は晴れる</p></li>
+</ul></div></div>
+</body></html>`;
+
+  const env = bootPlugin(HTML, {
+    dev: true,
+    config: {
+      online: false,
+      llmEnabled: false,
+      furiganaOverrides: "明日も抱きしめて => 明日=あした",
+    },
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 明日: "アス", 抱きしめて: "ホウ", は: "ハ", 晴れる: "ハレル" }));
+  await env.runLoad();
+  await sleep(300);
+
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const read = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.strictEqual(read(ps[0])[0][1], "あした", "这一行按修正读：" + ps[0].innerHTML);
+  // 另一行没命中范围：用词典读音（明日 词典给 あした，所以这里换个词更能说明问题）
+  assert.ok(read(ps[1]).length >= 1, "另一行照旧要注音：" + ps[1].innerHTML);
+
+  // 面板里能看到、能清空
+  const root = env.listeners.config[0]();
+  const ta = root.querySelector('[data-k="furiganaOverrides"]');
+  assert.ok(ta, "面板里要有自定义读音输入框");
+  assert.ok(ta.value.indexOf("明日も抱きしめて") >= 0, "要显示当前内容：" + ta.value);
+  assert.ok(root.querySelector('[data-a="ovClear"]'), "要有清空按钮");
+});
+
 test("日语歌词换日文字体：只写在原文行的内联样式上", async () => {
   /*
    * 中文 Windows 上「微软雅黑」会把日文汉字按中文写法渲染（直 / 骨 / 今 的笔画都不同），
@@ -4892,7 +4981,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["外观", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "自定义读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });

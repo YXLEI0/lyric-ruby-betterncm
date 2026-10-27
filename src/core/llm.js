@@ -56,6 +56,7 @@
   var DEFAULT_MODEL = "deepseek-chat";
 
   // 只认纯片假名（含长音符与小写 ャュョッ 那一带）
+  var RE_JA_KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC]+$/;
   var RE_KATAKANA = /^[\u30A1-\u30F6\u30FC]+$/;
 
   /**
@@ -97,6 +98,7 @@
   function promptFor(items) {
     var rows = [];
     var hasOpts = false;
+    var hasJa = false;
     for (var i = 0; i < items.length; i++) {
       var row = { i: items[i].i, w: items[i].w, line: items[i].line || items[i].w };
       /*
@@ -108,6 +110,12 @@
         row.opts = items[i].opts;
         row.kind = "han";
         hasOpts = true;
+      }
+      // 日语汉字：让模型按这句的语境给读音（可以带官方音译当参考）
+      if (items[i].kind === "ja") {
+        row.kind = "ja";
+        hasJa = true;
+        if (items[i].romaji) row.romaji = items[i].romaji;
       }
       rows.push(row);
     }
@@ -135,6 +143,11 @@
       "汉语拼音（zh ジ、x シ、q チ、liú リュウ）、俄语（Отчизну オチズヌ、Виват ヴィヴァト、" +
       "Анастасия アナスタシヤ）、希腊语（Θάλασσα サラッサ、ουρανός ウラノス）；\n" +
       "8. 严格输出一个 JSON 对象，**键是 i 字段的值**（数字，写成字符串也行），值是片假名，不要多余字段。\n" +
+      (hasJa
+        ? "10. 条目里带 kind=\"ja\" 的是**日语歌词里的汉字词**（w 是汉字）：请给出它在这句里的日语读音，" +
+          "写成平假名；如果给了 romaji 字段（官方音译），以它为准，别按单个汉字的常见读法硬套。" +
+          "例：w=\"明日\"、line=\"明日も君と\" → あした；w=\"解\"、line=\"解けない\" → と。\n"
+        : "") +
       (hasOpts
         ? "9. 条目里带 kind=\"han\" 的是**中文歌词里的多音字**（w 是一个汉字）：opts 是它允许的读音，" +
           "请从 opts 里挑一个最符合这一句语境的，**原样返回那个字符串**；都不合适就返回空字符串 \"\"。\n" +
@@ -631,7 +644,14 @@
       // 提示词里的条目：下标 i 用来对齐响应（同一个词在两句里不会互相覆盖）
       var items = [];
       for (var j = 0; j < batch.length; j++) {
-        items.push({ i: j + 1, w: batch[j].word, line: batch[j].context, opts: batch[j].opts });
+        items.push({
+          i: j + 1,
+          w: batch[j].word,
+          line: batch[j].context,
+          opts: batch[j].opts,
+          kind: batch[j].extra && batch[j].extra.kind,
+          romaji: batch[j].extra && batch[j].extra.romaji,
+        });
       }
 
       inflight = true;
@@ -790,7 +810,7 @@
          */
         var why = null;
         if (!said) why = "模型没给";
-        else if (!RE_KATAKANA.test(said)) why = "不是纯片假名";
+        else if ((item.kind || (item.extra && item.extra.kind)) === "ja" ? !RE_JA_KANA.test(said) : !RE_KATAKANA.test(said)) why = "不是假名";
         else if (said.length > 14) why = "太长了（>14）";
         /*
          * 多音字那一档只收"候选里的那个"：候选是构建期算出来的，模型自己造的读音
@@ -966,7 +986,7 @@
      *                        （read リード/レッド、人名地名、D/N/A 这类记号）。
      *                        不传就退化成"只看这个词"，行为与以前一致。
      */
-    function lookup(word, line, opts) {
+    function lookup(word, line, opts, extra) {
       var key = cacheKeyOf(word, line);
       if (!key) return null;
       var rec = mem.get(key);
@@ -980,7 +1000,7 @@
        * （没配 key / 退避中 / 配置还没读进来），而"这个词要过"是长期的。
        * 有了它，sweep() 才有机会把"注音那一刻没问上"的词补回来。
        */
-      remember(word, key, contextKey(line), opts);
+      remember(word, key, contextKey(line), opts, extra);
       if (!canAsk()) {
         /*
          * 这一层暂时不可用。退避到期要排一次补问 —— 不然那些词要等页面重扫
@@ -995,11 +1015,11 @@
     }
 
     /** 记一条 wanted（同一个 key 只记一次）；表太长时先瘦身 */
-    function remember(word, key, context, opts) {
+    function remember(word, key, context, opts, extra) {
       var have = wanted.get(key);
       if (have) return have;
       if (wanted.size >= WANT_MAX) pruneWanted();
-      var item = { key: key, word: keyOf(word), context: context, opts: opts || null, tries: 0, lastAt: 0 };
+      var item = { key: key, word: keyOf(word), context: context, opts: opts || null, extra: extra || null, tries: 0, lastAt: 0 };
       wanted.set(key, item);
       return item;
     }
@@ -1032,7 +1052,7 @@
       item.tries++;
       item.lastAt = Date.now();
       queued.add(item.key);
-      queue.push({ key: item.key, word: item.word, context: item.context, opts: item.opts });
+      queue.push({ key: item.key, word: item.word, context: item.context, opts: item.opts, extra: item.extra });
       schedule(queue.length >= cfg.batchSize ? 0 : FLUSH_DELAY_MS);
       return true;
     }
@@ -1215,10 +1235,10 @@
        * 但等它可用时（配置里补了 key / 退避结束）我们应该主动补问，
        * 而不是等页面重扫 —— 页面不重扫就再也没人问它了，那个词会一直停在规则层。
        */
-      want: function (word, line, opts) {
+      want: function (word, line, opts, extra) {
         var key = cacheKeyOf(word, line);
         if (!key || mem.has(key)) return false;
-        remember(word, key, contextKey(line), opts);
+        remember(word, key, contextKey(line), opts, extra);
         return true;
       },
       flush: flush,

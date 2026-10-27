@@ -196,20 +196,34 @@
     // 只有数字的行也要注（kuromoji 不给阿拉伯数字读音，由 core/numbers.js 补）
     if (!d.core.hasKanji(s) && !/[0-9]/.test(s)) return null;
     var kana = (opts && opts.kana) || "hiragana";
-    var key = cacheKey(s, kana);
+    var key = cacheKey(s, kana) + "\u0001" + fixesKey(opts && opts.fixes);
     var hit = cache.get(key);
     if (hit) return hit.length ? hit : null;
     /*
      * 分词直接用原文。中文行（含简体字）不会走到这里 —— main.js 按行分流，
      * 中文行走中文读音那档（core/cjk.js），日文行才进来查日语读音。
      */
+    /*
+     * 这一行专用的读音修正（调用方按行算好再传进来）。
+     *
+     * 刻意**不做全局词表**：同一个词在不同句子里读音就不一样
+     * （解 と / かい / ほど，明日 あした / あす），钉死一个必然出错。
+     * 所以修正只对"这一行"生效，键是行文本里的词。
+     */
+    var fixed = fixesIn(s, (opts && opts.fixes) || null, kana);
     var segs = null;
     try {
       segs = d.core.tokensToSegments(d.tokenizer.tokenize(s), { kana: kana });
     } catch (e) {
       segs = null;
     }
-    var out = [];
+    var out = fixed.slice();
+    function coveredByFixed(a, b) {
+      for (var q = 0; q < fixed.length; q++) {
+        if (fixed[q].start < b && a < fixed[q].end) return true;
+      }
+      return false;
+    }
     if (segs && segs.length) {
       for (var i = 0; i < segs.length; i++) {
         var seg = segs[i];
@@ -221,6 +235,7 @@
         // 底字取原文那一段（位置一一对应），读音来自换过写法的分词结果
         var text0 = s.substr(at, seg.text.length);
         if (!text0) continue;
+        if (coveredByFixed(at, at + text0.length)) continue; // 用户已经指定了这段怎么读
         out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
       }
     }
@@ -260,6 +275,164 @@
     return out.length ? out : null;
   }
 
+  /**
+   * 这一行里"该问模型"的汉字段：(a) 词典没给出读音，(b) 读音跟官方音译对不上。
+   *
+   * @param {string} text 一行原文
+   * @param {string} [romaji] 同一行的官方音译（NCM 的罗马音层），没有就不比较
+   * @param {{kana?:string}} [opts]
+   * @returns {Array<{text:string,start:number,end:number,why:string}>}
+   */
+  function candidates(text, romaji, opts) {
+    var s = String(text == null ? "" : text);
+    if (!s) return [];
+    var d = deps();
+    if (!d.core || !d.tokenizer) return [];
+    var kana = (opts && opts.kana) || "hiragana";
+    var toks = tokens(s, { kana: kana }) || [];
+    var out = [];
+    /*
+     * (a) 没读音：把这一行里所有汉字段找出来，看有没有被 tokens() 覆盖 ——
+     * kuromoji 对生词给不出读音，那一段就整段空着。
+     */
+    var re = /[\u4E00-\u9FFF\u3005]+/g;
+    var m;
+    while ((m = re.exec(s))) {
+      var a = m.index;
+      var b = a + m[0].length;
+      var covered = false;
+      for (var i = 0; i < toks.length; i++) {
+        if (toks[i].start < b && a < toks[i].end) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) out.push({ text: m[0], start: a, end: b, why: "no-reading" });
+    }
+    /*
+     * (b) 跟音译对不上：用官方的罗马音推一遍读音，跟词典给的比。
+     * 只比"两边都读得出来"的段 —— 一边空的交给 (a)。
+     */
+    if (romaji && d.core.romajiToKana && d.core.segmentsFromReading) {
+      var rk = null;
+      try {
+        rk = d.core.romajiToKana(String(romaji));
+      } catch (e) {
+        rk = null;
+      }
+      if (rk) {
+        var derived = null;
+        try {
+          derived = d.core.segmentsFromReading(s, rk, d.core.tokensToSegments(d.tokenizer.tokenize(s), { kana: kana }), { kana: kana });
+        } catch (e2) {
+          derived = null;
+        }
+        if (derived && derived.length) {
+          for (var q = 0; q < derived.length; q++) {
+            var seg = derived[q];
+            if (!seg || !seg.rt) continue;
+            var at = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
+            if (at < 0) continue;
+            var mine = null;
+            for (var t = 0; t < toks.length; t++) {
+              if (toks[t].start === at) {
+                mine = toks[t];
+                break;
+              }
+            }
+            if (!mine) continue;
+            if (sameReading(mine.kana, seg.rt)) continue;
+            out.push({ text: mine.text, start: mine.start, end: mine.end, why: "romaji-mismatch" });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /** 两边读音比一下：长音、促音、浊音的写法差异不算"对不上" */
+  function sameReading(a, b) {
+    var norm = function (x) {
+      return String(x == null ? "" : x)
+        .replace(/[\u30A1-\u30F6]/g, function (c) {
+          return String.fromCharCode(c.charCodeAt(0) - 0x60);
+        })
+        .replace(/ー/g, "")
+        .replace(/っ/g, "")
+        .replace(/[\u3099\u309A]/g, "");
+    };
+    var x = norm(a);
+    var y = norm(b);
+    if (!x || !y) return false;
+    return x === y || x.indexOf(y) >= 0 || y.indexOf(x) >= 0;
+  }
+
+  /** 平假名 / 片假名互转（用户两种写法都可能填） */
+  function toKanaMode(kana, mode) {
+    var t = String(kana == null ? "" : kana);
+    if (mode === "katakana") {
+      return t.replace(/[\u3041-\u3096]/g, function (c) {
+        return String.fromCharCode(c.charCodeAt(0) + 0x60);
+      });
+    }
+    return t.replace(/[\u30A1-\u30F6]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0x60);
+    });
+  }
+
+  /** {词: 读音} -> 稳定的字符串（进缓存键） */
+  function fixesKey(fixes) {
+    if (!fixes) return "";
+    var keys = [];
+    for (var k in fixes) if (Object.prototype.hasOwnProperty.call(fixes, k)) keys.push(k);
+    keys.sort();
+    var out = "";
+    for (var i = 0; i < keys.length; i++) out += keys[i] + "=" + fixes[keys[i]] + ";";
+    return out;
+  }
+
+  /**
+   * 把"这一行的读音修正"套到行文本上：长的词先匹配，重叠的跳过。
+   * @param {string} s 行文本
+   * @param {Object} fixes {词: 假名}
+   * @param {string} mode hiragana | katakana
+   */
+  function fixesIn(s, fixes, mode) {
+    var out = [];
+    if (!fixes) return out;
+    var list = [];
+    for (var k in fixes) if (Object.prototype.hasOwnProperty.call(fixes, k)) list.push([k, fixes[k]]);
+    list.sort(function (a, b) {
+      return b[0].length - a[0].length;
+    });
+    var taken = [];
+    for (var i = 0; i < list.length; i++) {
+      var word = list[i][0];
+      var kana = String(list[i][1] || "").trim();
+      if (!word || !kana) continue;
+      var from = 0;
+      while (from <= s.length - word.length) {
+        var at = s.indexOf(word, from);
+        if (at < 0) break;
+        from = at + 1;
+        var clash = false;
+        for (var t = 0; t < taken.length; t++) {
+          if (taken[t][0] < at + word.length && at < taken[t][1]) {
+            clash = true;
+            break;
+          }
+        }
+        if (clash) continue;
+        taken.push([at, at + word.length]);
+        out.push({ text: word, start: at, end: at + word.length, kana: toKanaMode(kana, mode), kind: "override" });
+      }
+    }
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return out;
+  }
+
   function clearCache() {
     cache.clear();
   }
@@ -272,6 +445,7 @@
     status: status,
     tokens: tokens,
     clearCache: clearCache,
+    candidates: candidates,
     /** 给测试用：直接塞一个分词器 */
     setTokenizer: function (tokenizer) {
       state.tokenizer = tokenizer;

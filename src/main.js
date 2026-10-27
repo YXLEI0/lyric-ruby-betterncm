@@ -201,6 +201,8 @@
     // 日语汉字振假名：默认开（装了本插件就是要看读音）；平假名是日语歌词的惯例
     furigana: true,
     furiganaKana: "hiragana",
+    // 自定义读音：一行一条 `底字=假名`（面板里「高级设置 → 自定义读音」）
+    furiganaOverrides: "",
     // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
     jpnFont: true,
     jpnFontFamily: JP_FONT_DEFAULT,
@@ -2175,15 +2177,111 @@
   }
 
   /**
+   * 面板「自定义读音」的规则。
+   *
+   * 一行一条：`原句片段 => 词=读音`
+   *   明日も君と歩く => 明日=あした
+   *   解けない方程式 => 解=と
+   *
+   * 为什么必须带"作用范围"：同一个词在不同句子里读音就不一样
+   * （解 と / かい / ほど、明日 あした / あす / みょうにち），
+   * 所以**不做全局词表映射** —— 规则只在"这一行包含这段原文"时生效。
+   */
+  function parseFuriganaRules(text) {
+    var rules = [];
+    var lines = String(text == null ? "" : text).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/^\s+/, "").replace(/\s+$/, "");
+      if (!line || line.charAt(0) === "#") continue;
+      var m = /^(.+?)\s*(?:=\s*>|→|->)\s*(.+)$/.exec(line);
+      if (!m) continue; // 没有作用范围的规则直接忽略（免得又变成全局映射）
+      var scope = m[1].replace(/\s+$/, "");
+      var rest = /^([^=:\uFF1A\t]+)[=:\uFF1A\t]+(.+)$/.exec(m[2]);
+      if (!scope || !rest) continue;
+      var word = rest[1].replace(/\s+$/, "");
+      var kana = rest[2].replace(/^\s+/, "").replace(/\s+$/, "");
+      if (!word || !kana) continue;
+      rules.push({ scope: scope, word: word, kana: kana });
+    }
+    return rules;
+  }
+
+  /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
+  function furiganaFixes(line, text, host) {
+    var fixes = {};
+    var rules = parseFuriganaRules(config.furiganaOverrides);
+    for (var i = 0; i < rules.length; i++) {
+      if (line.indexOf(rules[i].scope) < 0) continue;
+      fixes[rules[i].word] = rules[i].kana;
+    }
+    /*
+     * 模型的答案不在本地词表里，而是"这句歌词 + 这个词"的缓存 ——
+     * 同一句里问过就带上，换一句重新问（读数本来就可能不同）。
+     */
+    if (llmAvailable() && state.llm && state.llm.lookup && typeof WKFurigana !== "undefined" && WKFurigana.candidates) {
+      var list = null;
+      try {
+        list = WKFurigana.candidates(text, romajiOf(host), {
+          kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
+        });
+      } catch (e) {
+        list = null;
+      }
+      var extra = { kind: "ja", romaji: romajiOf(host) || "" };
+      for (var j = 0; list && j < list.length; j++) {
+        var word = list[j].text;
+        if (Object.prototype.hasOwnProperty.call(fixes, word)) continue; // 手填的优先
+        var got = null;
+        try {
+          got = state.llm.lookup(word, line, null, extra);
+        } catch (e2) {
+          got = null;
+        }
+        if (got) {
+          fixes[word] = got;
+          continue;
+        }
+        try {
+          state.llm.want(word, line, null, extra);
+        } catch (e3) {
+          /* 记不上不影响注音 */
+        }
+      }
+    }
+    return fixes;
+  }
+
+  /** 同一条歌词的音译层（RNP / NCM 都可能把罗马音放在兄弟节点里） */
+  function romajiOf(host) {
+    var box = host && host.parentNode;
+    for (var depth = 0; box && depth < 2; depth++) {
+      var kids = box.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var el = kids[i];
+        if (el === host) continue;
+        var cn = typeof el.className === "string" ? el.className : "";
+        if (/romaji|romanized/i.test(cn)) return el.textContent || "";
+      }
+      box = box.parentNode;
+    }
+    return "";
+  }
+
+  /**
    * 日语行的振假名 token：汉字片段交给 core/furigana.js（kuromoji + IPADIC）。
    *
    * 词典是懒加载的：这一趟读不到就返回 null，等 onReady 触发重扫时再补上。
    * 面板里关掉之后一条都不产出（现有注音由 rescan 里的 restore 撤掉）。
    */
-  function furiganaTokens(s) {
+  function furiganaTokens(s, context, host) {
     if (config.furigana === false) return null;
     if (typeof WKFurigana === "undefined") return null;
-    var out = WKFurigana.tokens(s, { kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana" });
+    var line = context || s;
+    var fixes = furiganaFixes(line, s, host);
+    var out = WKFurigana.tokens(s, {
+      kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
+      fixes: fixes,
+    });
     return out && out.length ? out : null;
   }
 
@@ -2251,10 +2349,10 @@
    * 把 原文 + 罗马音 + 中文翻译 塞进同一个元素，拿 context 去判会读到同一块里的中文翻译，
    * 于是日文原文被当成中文、逐字注上普通话读音（真机现象：`妄想感傷代償連盟` 上面是 ワンシャン…）。
    */
-  function extraTokens(text, context) {
+  function extraTokens(text, context, host) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    if (lineLooksJapanese(s)) return furiganaTokens(s);
+    if (lineLooksJapanese(s)) return furiganaTokens(s, context, host);
     return cjkTokens(s, context);
   }
 
@@ -2688,6 +2786,7 @@
       "#lyric-ruby-config .wk-row { margin: 3px 0; }" +
       "#lyric-ruby-config .wk-hint { opacity: .65; font-size: 12px; line-height: 1.5; }" +
       "#lyric-ruby-config input[type=text], #lyric-ruby-config input[type=password] { width: 300px; padding: 2px 6px; }" +
+      "#lyric-ruby-config textarea { width: 320px; padding: 4px 6px; font-family: inherit; font-size: 13px; line-height: 1.5; vertical-align: top; }" +
       "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
       "#lyric-ruby-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
       "#lyric-ruby-config .wk-preview { background: linear-gradient(darkslategray 0%, midnightblue 100%); color: #fff; }" +
@@ -2749,6 +2848,13 @@
       '<span style="color:#e8a33d">■ 英文规则</span>　' +
       '<span style="color:#c07ce8">■ 大模型</span>　' +
       '<span style="color:#e0629a">■ 免费接口</span>　淡显 = 暂定值</div>' +
+      "<h3>自定义读音</h3>" +
+      '<div class="wk-row"><label>一行一条 <code>原句片段 =&gt; 词=读音</code>（按句生效，同一个词换个句子可以填不同的）<br>' +
+      '<textarea data-k="furiganaOverrides" rows="5" spellcheck="false" ' +
+      'placeholder="明日も君と歩く => 明日=あした\n解けない方程式 => 解=と"></textarea></label></div>' +
+      '<div class="wk-row"><button data-a="ovClear">清空</button> <span data-v="ovState"></span></div>' +
+      '<div class="wk-hint">只对日语歌词的振假名生效；命中的词整条替换，优先级高于词典和分词。<br>' +
+      '平假名 / 片假名写法都可以，会跟着面板上的「振假名写法」自动转换</div>' +
       "<h3>范围</h3>" +
       '<div class="wk-row"><label>标注范围 <select data-k="scope">' +
       '<option value="all">歌词 + 播放栏 (默认)</option>' +
@@ -3199,7 +3305,7 @@
       refreshLearned();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana", "furiganaOverrides"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
@@ -3261,6 +3367,13 @@
             }
             rescan();
           } else if (NEEDS_RESCAN.indexOf(key) >= 0) {
+            // 自定义读音改了要先灌进振假名层，再重扫才会用新读音
+            if (key === "furiganaOverrides") {
+              if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+              var cnt = parseFuriganaRules(config.furiganaOverrides).length;
+              var state0 = root.querySelector('[data-v="ovState"]');
+              if (state0) state0.textContent = cnt ? "已生效 " + cnt + " 条" : "没有规则";
+            }
             rescan();
           } else if (NEEDS_FONT.indexOf(key) >= 0) {
             // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次样式表
@@ -3317,6 +3430,15 @@
             setTimeout(function () {
               b.textContent = "重置";
             }, 1500);
+          } else if (what === "ovClear") {
+            config.furiganaOverrides = "";
+            var ta = root.querySelector('[data-k="furiganaOverrides"]');
+            if (ta) ta.value = "";
+            saveConfig();
+            if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+            var st = root.querySelector('[data-v="ovState"]');
+            if (st) st.textContent = "已清空";
+            rescan();
           } else if (what === "retry") {
             // 两层一起清：免费接口那些"查过、没有"的，和模型那些"问过但没收下"的
             var n = state.corrector ? state.corrector.retryMisses() : 0;
@@ -3570,7 +3692,14 @@
              * 汉字 / 谚文也不沉淀：多音字的读音取决于那一句（行 ハン / シン），
              * 钉成词级词条之后别的句子一定会读错。它们本来就是"每句问一次"。
              */
-            if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) return;
+            if (typeof WKCJK !== "undefined" && (WKCJK.hasHan(word) || WKCJK.hasHangul(word))) {
+              /*
+               * 日语歌词里汉字的振假名答案：同样不沉淀成词级词条（同一个词不同句读法不同），
+               * 但要让这一屏重扫一次 —— 答案在「词 + 这句」的缓存里，重扫时会用上。
+               */
+              if (RE_KANA_ANY.test(line || "") || songLooksJapanese()) schedule(0);
+              return;
+            }
             var local = state.reader ? state.reader.read(word) : null;
             if (!local || !local.kana) return;
             if (isTwoWayShort(word, local.kana)) return;
@@ -3626,6 +3755,8 @@
           }
         },
       });
+      // 自定义读音是按行匹配的，不用在这里灌；清一次缓存即可
+      if (WKFurigana.clearCache) WKFurigana.clearCache();
     }
 
     state.annotator = WKAnnotate.createAnnotator({
