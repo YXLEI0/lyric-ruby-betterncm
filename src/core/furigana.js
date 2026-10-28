@@ -428,6 +428,21 @@
        * 左边的符号也算这个词的底字：∞回(なんかい) 里 ∞ 是符号、回 才是汉字，
        * 但唱的是 なんかい —— 只给 回 注音会剩一个光秃秃的 ∞（用户报的就是这个）。
        */
+      /*
+       * 括号读音只贴在**最后那个词**上，不是前面一整串汉字：
+       * `一度嘲笑(わら)` 该读 いちど + わら（vendor 会把 一度嘲笑 整串都注成 わら）。
+       * 判据：底字取最后 min(汉字数, 假名拍数) 个字 —— わら 两拍 → 嘲笑 两个字；
+       * セカイ 三拍 → 舞台 两个字（不足时取全部）。
+       */
+      var kanaLen = pm[2].length;
+      var narrow = Math.min(pWord.length, kanaLen);
+      if (narrow > 0 && narrow < pWord.length) {
+        var shift = pWord.length - narrow;
+        wAt += shift;
+        wEnd = wAt + narrow;
+        pWord = pWord.slice(shift);
+      }
+
       var symStart = wAt;
       while (symStart > 0 && /[\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/.test(s.charAt(symStart - 1))) symStart--;
       // 紧贴着写的那种 vendor 已经处理过（它会给一个 hide 片段），别再插一遍
@@ -439,15 +454,21 @@
         }
       }
       if (vendorDone) {
-        // 括号那段 vendor 已经藏好了，这里只把左边的符号并进底字
-        if (symStart < wAt) {
-          for (var ve = 0; ve < out.length; ve++) {
-            if (out[ve].start === wAt && out[ve].end === wEnd && !out[ve].hide) {
-              out[ve].start = symStart;
-              out[ve].text = s.slice(symStart, wEnd);
-              break;
-            }
-          }
+        /*
+         * 括号那段 vendor 已经藏好了。这里只把底字收窄 / 并符号：
+         * vendor 会把括号前面的**一整串**汉字都注成这个读音
+         * （`一度嘲笑(わら)` → 一度嘲笑 わら），收窄到最后那个词（嘲笑 わら）；
+         * 左边紧挨着符号时并进来（`∞回(なんかい)` → ∞回 なんかい）。
+         */
+        for (var ve = 0; ve < out.length; ve++) {
+          var tv = out[ve];
+          if (!tv || tv.hide) continue;
+          if (tv.end !== wEnd || tv.start > wAt) continue;
+          var startNew = wAt;
+          if (symStart < wAt) startNew = symStart;
+          tv.start = startNew;
+          tv.text = s.slice(startNew, wEnd);
+          break;
         }
         continue;
       }

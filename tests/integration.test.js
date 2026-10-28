@@ -5911,11 +5911,11 @@ test("整行只有一个全大写词（MWAH!）也要注音", async () => {
   assert.strictEqual(env.document.querySelectorAll("ul.lyric li p")[1].querySelectorAll("ruby").length, 0, "翻译行不许注");
 });
 
-test("就地编辑器：合并之后能拆开（手动切词）、也能取消合并", async () => {
+test("就地编辑器：合并、斜杠切词、取消合并", async () => {
   /*
-   * 合并按钮只解决"合成一个词"；合错了 / 想改切分就得有反过来的一手。
-   *   「拆」= 手动切词：底字=读音，空格分开（例 嘲=あざ 笑=わら）
-   *   「↺」= 取消合并 / 恢复默认：把这一处的修改删掉，回到词典切的
+   * 合并按钮只解决合成一个词；反过来那一手改成在读音里写斜杠：
+   *   段数 = 从这一处往后覆盖的字数，空段 = 那个字并入前一个字，- = 那个字留空。
+   * 右下角那个 ↺ = 取消合并 / 恢复默认。
    */
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
@@ -5951,32 +5951,32 @@ test("就地编辑器：合并之后能拆开（手动切词）、也能取消�
   await sleep(400);
   assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "合并之后：" + p.innerHTML);
 
-  // 拆开：直接按字拆成两个空壳，再手动合并回来
+  // 斜杠切词
   dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
   await sleep(40);
-  click("拆");
+  type("あざ/わら");
   await sleep(400);
-  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "拆开之后不该有注音：" + p.innerHTML);
-  assert.strictEqual(p.querySelectorAll(".wk-blank").length, 2, "拆成两个可点击的空壳：" + p.innerHTML);
+  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "斜杠切开：" + p.innerHTML);
 
-  // 从空壳里合并回来
+  // 空段 = 并入前一个字
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  type("あざ/");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["嘲笑", "あざ"]], "空段并入前一个字：" + p.innerHTML);
+
+  // 减号 = 那个字留空
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  type("-/わら");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["笑", "わら"]], "减号留空：" + p.innerHTML);
+  assert.ok(p.querySelector(".wk-blank"), "留空的那个字要有可点击的壳：" + p.innerHTML);
+
+  // ↺ 取消合并 / 恢复默认
   dbl(p.querySelector(".wk-blank"));
-  await sleep(40);
-  click("→");
-  await sleep(20);
-  type("あざわら");
-  await sleep(400);
-  assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "从空壳合并回来：" + p.innerHTML);
-
-  // 用 ↺ 取消合并
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
   await sleep(40);
   click("↺");
   await sleep(400);
-  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "取消合并要回到词典切的：" + p.innerHTML);
-  assert.deepStrictEqual(
-    (JSON.parse(env.window.localStorage.getItem("lyric-ruby.config")) || {}).furiganaLineSpans,
-    {},
-    "取消合并之后不该留数据"
-  );
+  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "取消之后回到词典切的：" + p.innerHTML);
 });

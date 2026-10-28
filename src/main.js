@@ -2351,8 +2351,8 @@
     box.type = "text";
     box.className = "wk-edit";
     box.value = current;
-    box.placeholder = "回车保存｜清空=恢复默认｜- = 留空";
-    box.title = "回车保存；清空输入框 = 恢复词典读音；输入 - = 这一处不注音";
+    box.placeholder = "回车保存｜清空=恢复默认｜- = 留空｜斜杠=切词（いち/ど/わら/）";
+    box.title = "回车保存；清空=恢复词典读音；- = 这一处不注音；斜杠按字切词（例 いち/ど/わら/，空段=并入前一个字）";
     box.style.fontSize = "14px";
     box.style.padding = "2px 6px";
     box.style.width = Math.max(80, (current.length + 4) * 14) + "px";
@@ -2390,31 +2390,6 @@
     wrap.appendChild(box);
     wrap.appendChild(makeMergeBtn(1, "→"));
 
-    /*
-     * 「拆」：手动切词 —— 把当前这个词拆成几段，每段自己一个读音。
-     * 输入框里写 `底字=读音`，空格分开（例如 嘲=あざ 笑=わら）。
-     * 「↺」：取消合并 / 恢复默认 —— 把这一处的修改删掉，回到词典切的。
-     */
-    var splitBtn = document.createElement("button");
-    splitBtn.type = "button";
-    splitBtn.textContent = "拆";
-    splitBtn.title = "手动切词：底字=读音，空格分开（例 嘲=あざ 笑=わら）";
-    splitBtn.style.fontSize = "12px";
-    splitBtn.addEventListener("mousedown", function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      /*
-       * 直接把这个词按字拆开：每个字一条，读音先留空（页面上是虚线的壳，双击就能填），
-       * 之后想怎么合再手动合并。
-       */
-      var parts = [];
-      for (var si = 0; si < span.word.length; si++) {
-        parts.push({ at: span.at + si, word: span.word.charAt(si), kana: "" });
-      }
-      closeEditor();
-      saveInlineSpans(lineText, parts, span.at, span.at + span.word.length);
-    });
-    wrap.appendChild(splitBtn);
 
     var resetBtn = document.createElement("button");
     resetBtn.type = "button";
@@ -2452,6 +2427,45 @@
          *             等于这一处再也改不回来（用户报的就是这个）；
          *   减号 - -> 留空（这一处不注音，给 帷帳 とばり 这种当て字用）。
          */
+        /*
+         * 斜杠语法（手动切词）：把读音按字分成几段，用 / 隔开。
+         *   `一度嘲笑` 输 `いち/ど/わら/` → 一=いち / 度=ど / 嘲+笑=わら
+         *     （段数 = 字数；某一段空 = 那个字并入前一段组成一个词）
+         *   某一段写 `-` = 那个字留空不注音
+         */
+        if (v.indexOf("/") >= 0) {
+          /*
+           * 斜杠切词：**段数 = 从这一处往后覆盖的字数**，每段对应一个字。
+           *   `嘲笑` 输 `あざ/わら`     → 嘲=あざ / 笑=わら
+           *   `嘲笑` 输 `あざ/`        → 笑 并入前一个字 → 嘲笑=あざ
+           *   `嘲笑` 输 `-/わら`       → 嘲 留空 / 笑=わら
+           *   `一度嘲笑` 输 `いち/ど/わら/` → 一=いち / 度=ど / 嘲笑=わら
+           * （所以不一定要先把词合并起来，直接连前后的字一起写也行）
+           */
+          var segsIn = v.split("/");
+          var charsN = segsIn.length;
+          var baseWord = lineText.substr(span.at, charsN);
+          if (charsN > 1 && baseWord.length === charsN) {
+            var built = [];
+            for (var ci = 0; ci < charsN; ci++) {
+              var partK = String(segsIn[ci] == null ? "" : segsIn[ci]).replace(/\s+/g, "");
+              var chOne = baseWord.charAt(ci);
+              if (!partK) {
+                // 空段：这个字并进前一段，组成一个词
+                if (built.length) built[built.length - 1].word += chOne;
+                else built.push({ at: span.at + ci, word: chOne, kana: "" });
+                continue;
+              }
+              if (partK === "-" || partK === "\u2212" || partK === "\uFF0D") {
+                built.push({ at: span.at + ci, word: chOne, kana: "" });
+                continue;
+              }
+              built.push({ at: span.at + ci, word: chOne, kana: partK });
+            }
+            if (built.length) saveInlineSpans(lineText, built, span.at, span.at + charsN);
+            return;
+          }
+        }
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {
@@ -2783,6 +2797,45 @@
    * 改一处等于把这一行里所有同字都改了（真机现象：只想把 辛辛 改 からがら，
    * 结果两个 辛 全变）。启动时把它迁成按位置的写法：每个出现位置各存一条。
    */
+  /**
+   * 一次性清掉老版本留下的「就地改读音」缓存。
+   *
+   * 1.13 之前行文本的算法不一样（带罗马音 / 翻译 / 缩进），那些条目现在根本对不上任何一行；
+   * 用户看到的是「这里为什么没注音」，而界面上又看不出来是旧数据挡住的。
+   * 清一次就好（用 flag 记住），之后的修改一条都不动。
+   */
+  function purgeStaleInlineFixes() {
+    var FLAG = "lyric-ruby.spans.purge2";
+    try {
+      if (typeof localStorage === "undefined") return;
+      if (localStorage.getItem(FLAG)) return;
+      localStorage.setItem(FLAG, "1");
+    } catch (e) {
+      return;
+    }
+    var had = 0;
+    try {
+      if (config.furiganaLineSpans && typeof config.furiganaLineSpans === "object") {
+        for (var k in config.furiganaLineSpans) {
+          if (Object.prototype.hasOwnProperty.call(config.furiganaLineSpans, k)) had++;
+        }
+      }
+      if (config.furiganaLineFixes && typeof config.furiganaLineFixes === "object") {
+        for (var k2 in config.furiganaLineFixes) {
+          if (Object.prototype.hasOwnProperty.call(config.furiganaLineFixes, k2)) had++;
+        }
+      }
+    } catch (e2) {
+      had = 0;
+    }
+    if (!had) return;
+    config.furiganaLineSpans = {};
+    config.furiganaLineFixes = {};
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    log("清掉 " + had + " 条老版本留下的就地读音缓存（算法已经变了，那些条目对不上现在的行）");
+  }
+
   function migrateLineFixes() {
     var old = config.furiganaLineFixes;
     if (!old || typeof old !== "object") return;
@@ -4870,6 +4923,7 @@
       if (WKFurigana.clearCache) WKFurigana.clearCache();
     }
 
+    purgeStaleInlineFixes();
     migrateLineFixes();
     installInlineEditor();
 
