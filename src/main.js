@@ -2586,12 +2586,37 @@
     return rules;
   }
 
-  /** 这一行按**位置**存的修正（就地编辑器写的）：[[起点, 底字, 读音], ...] */
+  /**
+   * 这一行按**位置**存的修正（就地编辑器写的）：[[起点, 底字, 读音], ...]
+   *
+   * 兼容老数据：1.13 之前存键用的是"区域整块文字"（RNP 里夹着罗马音、翻译、缩进），
+   * 和现在用的原文对不上。这里退一步按"包含"找一遍，并把起点按前缀长度平移回去 ——
+   * 用户改过的读音不该因为一次修 bug 全丢。
+   */
   function lineSpans(line) {
     var map = config.furiganaLineSpans;
     if (!map || typeof map !== "object") return null;
     var list = map[line];
-    return list && list.length ? list : null;
+    if (list && list.length) return list;
+    for (var key in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, key) || key === line) continue;
+      var at0 = key.indexOf(line);
+      if (at0 < 0) continue;
+      var raw = map[key];
+      if (!raw || !raw.length) continue;
+      var shifted = [];
+      for (var i = 0; i < raw.length; i++) {
+        var sp = raw[i];
+        if (!sp) continue;
+        var at = (typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10)) - at0;
+        var word = String(sp[1] == null ? "" : sp[1]);
+        if (!(at >= 0) || !word) continue;
+        if (line.substr(at, word.length) !== word) continue;
+        shifted.push([at, word, String(sp[2] == null ? "" : sp[2])]);
+      }
+      if (shifted.length) return shifted;
+    }
+    return null;
   }
 
   /**
@@ -2619,7 +2644,8 @@
           var at = text.indexOf(w, from);
           if (at < 0) break;
           from = at + 1;
-          if (kana) list.push([at, w, kana]);
+          // 空读音 = 留空，也要迁移（以前这里跳过了，老用户的留空全丢了）
+          list.push([at, w, kana]);
         }
       }
       if (list.length) spans[text] = list;
@@ -3616,7 +3642,9 @@
       "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
       "#lyric-ruby-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
       "#lyric-ruby-config .wk-preview { background: linear-gradient(darkslategray 0%, midnightblue 100%); color: #fff; }" +
-      "#lyric-ruby-config .wk-pv-line { font-size: 22px; line-height: 2.1; white-space: pre-line; }" +
+      "#lyric-ruby-config .wk-pv-line { font-size: 22px; line-height: 2.3; }" +
+      "#lyric-ruby-config .wk-pv-line.wk-pv-dim { font-size: 17px; line-height: 2.5; }" +
+      "#lyric-ruby-config .wk-preview rt.wk-rt { font-size: 55%; line-height: 1.1; }" +
       "#lyric-ruby-config .wk-pv-bold { font-weight: bold; }" +
       "#lyric-ruby-config .wk-pv-dim { font-size: 18px; opacity: .75; }" +
       "#lyric-ruby-config .wk-llm-state { margin: 2px 0; }" +
@@ -3970,13 +3998,19 @@
           bold: true,
         },
         {
-          // 第三行：英文句子（顺便说明"西文字母也照旧注片假名"，而且是整句的语境）
-          text: "Excuse me. Can you tell me how much the shirt is?\nYes, it's nine fifteen.",
+          // 第三、四行：英文句子（顺便说明"西文字母也照旧注片假名"）。
+          // 拆成两行而不是用换行：一句一行，注音不会挤在折行的地方。
+          text: "Excuse me. Can you tell me how much the shirt is?",
           rubies: [
             ["Excuse", "エクスキューズ"],
-            ["Can", "キャン"],
-            ["tell", "テル"],
             ["shirt", "シャツ"],
+          ],
+          bold: false,
+          dim: true,
+        },
+        {
+          text: "Yes, it's nine fifteen.",
+          rubies: [
             ["Yes", "イエス"],
             ["nine", "ナイン"],
             ["fifteen", "フィフティーン"],
@@ -4500,51 +4534,78 @@
     return false;
   }
 
-  /** 把两个按钮停靠到原生工具条里，样式跟原生按钮一致 */
+  /**
+   * 把两个按钮停靠到原生工具条里。
+   *
+   * 三个要点（都是真机上踩出来的）：
+   *   1. **放最前面**：RNP 那一列是 译 / 音 / 逐字 竖排，插在 译 后面会把 音 挤下去，
+   *      看着像"夹在中间"；用户要的是放在上面。
+   *   2. **克隆原生元素**：直接 cloneNode(false) 一个原生按钮，class / 标签 / 结构全一样，
+   *      样式自然一致；自己写一套样式怎么调都差一点。
+   *   3. **点击走 document 的捕获阶段**：原生工具条那一块会 stopPropagation，
+   *      按钮上挂的 click 收不到（真机现象"按钮根本点不动"）。
+   */
   function dockBar(anchor) {
     var parent = anchor.parentNode;
     if (!parent) return false;
-    var cls = typeof anchor.className === "string" ? anchor.className : "";
-    // 别把"选中/禁用"这类状态类抄过来
-    cls = cls.replace(/(^|\s)(active|selected|on|off|disabled|checked|current|hover)(?=\s|$)/g, " ").replace(/\s+/g, " ").trim();
     var vertical = dockIsVertical(parent);
     var bar = document.createElement("span");
     bar.className = "wk-bar wk-bar-docked";
     bar.setAttribute("data-wk-ui", "1");
     bar.setAttribute("data-wk-vert", vertical ? "1" : "0");
     bar.style.cssText = vertical
-      ? "display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:4px;"
-      : "display:inline-flex;align-items:center;gap:2px;margin-left:6px;vertical-align:middle;";
-    var b1 = barButton(vertical ? "注" : "注音", "toggle");
-    var b2 = barButton(vertical ? "重" : "重置", "reset");
-    b1.title = "开关注音";
-    b2.title = "重置本首（清掉这一首里改过的读音）";
-    [b1, b2].forEach(function (b) {
-      if (cls) b.className = cls;
-      /*
-       * 抄 class 是为了跟原生按钮同一副样子，但原生样式不一定给颜色 / 尺寸 ——
-       * 真机上出现过"按钮在 DOM 里、屏幕上看不见"（继承到透明色或被压成 0 宽）。
-       * 关键几条用 important 钉住，保证它看得见、点得到。
-       */
-      b.style.cssText =
-        "display:inline-flex;align-items:center;justify-content:center;" +
-        "min-width:18px;min-height:18px;margin:2px;padding:2px 4px;box-sizing:border-box;" +
-        "font-size:11px;line-height:1.2;font-family:inherit;white-space:nowrap;cursor:pointer;" +
-        "border-radius:6px;border:1px solid rgba(255,255,255,.35);" +
-        "background:rgba(20,26,38,.55);color:#fff;";
+      ? "display:flex;flex-direction:column;align-items:center;gap:4px;"
+      : "display:inline-flex;align-items:center;gap:2px;margin-right:6px;vertical-align:middle;";
+    try {
+      bar.style.setProperty("pointer-events", "auto", "important");
+    } catch (e0) {
+      /* 老引擎不支持就算了 */
+    }
+
+    function makeBtn(label, act, title) {
+      var b = null;
       try {
-        b.style.setProperty("color", "#fff", "important");
-        b.style.setProperty("background-color", "rgba(20,26,38,.55)", "important");
+        b = anchor.cloneNode(false); // 浅克隆：标签 / class / 属性都一样，样式自然一致
+      } catch (e1) {
+        b = null;
+      }
+      if (!b || b.nodeType !== 1) {
+        b = document.createElement("button");
+        b.type = "button";
+        var cls = typeof anchor.className === "string" ? anchor.className : "";
+        cls = cls.replace(/(^|\s)(active|selected|on|off|disabled|checked|current|hover)(?=\s|$)/g, " ");
+        if (cls) b.className = cls.trim();
+      }
+      // 原生按钮上那些"点了会干什么"的标记别抄过来
+      ["data-wk-act", "role", "tabindex", "aria-pressed", "aria-checked", "aria-selected", "id", "for"].forEach(function (a) {
+        try {
+          b.removeAttribute(a);
+        } catch (e2) {
+          /* 没有就算了 */
+        }
+      });
+      b.setAttribute("data-wk-act", act);
+      b.textContent = label;
+      b.title = title;
+      try {
+        b.style.setProperty("cursor", "pointer", "important");
+        b.style.setProperty("pointer-events", "auto", "important");
         b.style.setProperty("opacity", "1", "important");
         b.style.setProperty("visibility", "visible", "important");
-      } catch (e2) {
-        /* 老引擎不支持就算了 */
+      } catch (e3) {
+        /* 同上 */
       }
-    });
+      return b;
+    }
+
+    var b1 = makeBtn(vertical ? "注" : "注音", "toggle", "开关注音");
+    var b2 = makeBtn(vertical ? "重" : "重置", "reset", "重置本首（清掉这一首里改过的读音）");
     bar.appendChild(b1);
     bar.appendChild(b2);
+
     try {
-      parent.insertBefore(bar, anchor.nextSibling);
+      // 放最前面（用户点名要"放上面"）
+      parent.insertBefore(bar, parent.firstChild);
       lyricBar = bar;
       return true;
     } catch (e) {
@@ -4609,34 +4670,7 @@
     } catch (e) {
       /* 拿不到样式也没关系，工具条会跟着内容流走 */
     }
-    bar.addEventListener("click", function (ev) {
-      var t = ev.target;
-      var act = t && t.getAttribute ? t.getAttribute("data-wk-act") : "";
-      if (!act) return;
-      // 别让网易云把这次点击当成"跳到这一句"
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (act === "toggle") {
-        config.enabled = !config.enabled;
-        saveConfig();
-        if (config.enabled) enable();
-        else disable();
-        updateLyricBar();
-        notifyConfigUI();
-      } else if (act === "reset") {
-        var n = resetSongReadings();
-        var btn = t;
-        var old = btn.textContent;
-        btn.textContent = n ? "已重置" : "没有改动";
-        setTimeout(function () {
-          try {
-            btn.textContent = old;
-          } catch (e2) {
-            /* 按钮没了就算了 */
-          }
-        }, 1200);
-      }
-    });
+    // 点击统一由 document 的捕获阶段处理（见 onBarClickCapture）
     try {
       host.appendChild(bar);
       lyricBar = bar;
@@ -4682,6 +4716,55 @@
     rescan();
     notifyConfigUI();
     return removed;
+  }
+
+  /*
+   * 工具条的点击统一在 document 的**捕获阶段**处理。
+   *
+   * 为什么：原生工具条那一块（RNP / 网易云自己的）会在 mousedown / click 上
+   * stopPropagation，挂在按钮自己身上的监听收不到 —— 真机现象就是"按钮点不动"。
+   * 捕获阶段在它们之前跑，然后我们把这次事件吃掉，歌词也不会被"跳到这一句"。
+   */
+  function onBarClickCapture(ev) {
+    var t = ev.target;
+    var actEl = null;
+    try {
+      actEl = t && t.closest ? t.closest("[data-wk-act]") : null;
+    } catch (e) {
+      actEl = null;
+    }
+    if (!actEl) return;
+    var act = actEl.getAttribute("data-wk-act");
+    if (!act) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+    var btn = actEl;
+    if (act === "toggle") {
+      config.enabled = !config.enabled;
+      saveConfig();
+      if (config.enabled) enable();
+      else disable();
+      updateLyricBar();
+      notifyConfigUI();
+    } else if (act === "reset") {
+      var n = resetSongReadings();
+      var old = btn.textContent;
+      btn.textContent = "✓";
+      setTimeout(function () {
+        try {
+          btn.textContent = old;
+        } catch (e2) {
+          /* 按钮没了就算了 */
+        }
+      }, 1200);
+      if (n === 0) log("重置本首：这一首没有改过的读音");
+    }
+  }
+  try {
+    document.addEventListener("click", onBarClickCapture, true);
+  } catch (eBarEvt) {
+    /* 挂不上就退回浮动条自己的监听 */
   }
 
   // ------------------------------------------------------------ 生命周期

@@ -5168,8 +5168,6 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
       ["良", "い"],
       ["散歩", "さんぽ"],
       ["Excuse", "エクスキューズ"],
-      ["Can", "キャン"],
-      ["tell", "テル"],
       ["shirt", "シャツ"],
       ["Yes", "イエス"],
       ["nine", "ナイン"],
@@ -5179,7 +5177,7 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
   );
 
   const lines = [...preview.querySelectorAll(".wk-pv-line")];
-  assert.strictEqual(lines.length, 3, "三行示例");
+  assert.strictEqual(lines.length, 4, "四行示例（第 3 / 4 行是英文两句）");
   assert.ok(lines[1].classList.contains("wk-pv-bold"), "第二行加粗（JapaneseFonts 的样式）");
   // 底字要把 rt 去掉再比：textContent 会把注音一起算进来
   const plain = (el) => {
@@ -5189,11 +5187,8 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
   };
   assert.strictEqual(plain(lines[0]), "天気が良いから", "示例句 1");
   assert.strictEqual(plain(lines[1]), "散歩しましょう", "示例句 2");
-  assert.strictEqual(
-    plain(lines[2]),
-    "Excuse me. Can you tell me how much the shirt is?\nYes, it's nine fifteen.",
-    "示例句 3（英文两句）"
-  );
+  assert.strictEqual(plain(lines[2]), "Excuse me. Can you tell me how much the shirt is?", "示例句 3");
+  assert.strictEqual(plain(lines[3]), "Yes, it's nine fifteen.", "示例句 4");
 
   // 切成片假名写法：预览跟着变
   const kata = bootPlugin(NCM_HTML, { dev: true, config: { furiganaKana: "katakana" } });
@@ -5210,8 +5205,6 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
       ["良", "イ"],
       ["散歩", "サンポ"],
       ["Excuse", "エクスキューズ"],
-      ["Can", "キャン"],
-      ["tell", "テル"],
       ["shirt", "シャツ"],
       ["Yes", "イエス"],
       ["nine", "ナイン"],
@@ -5756,6 +5749,7 @@ test("歌词页的工具条：开关注音 / 重置本首（默认页和 RNP 都
   const toggle = bar.querySelector('[data-wk-act="toggle"]');
   const reset = bar.querySelector('[data-wk-act="reset"]');
   assert.ok(toggle && reset, "两个按钮都要在");
+  assert.ok(env.window.document.querySelector(".wk-bar"), "工具条要在页面上");
 
   // 关掉注音：注音全撤，按钮文字跟着变
   toggle.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -5814,8 +5808,9 @@ test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认�
   const rnpTools = rnp.document.querySelector(".rnp-lyrics-tools");
   const rnpBar = rnpTools.querySelector(".wk-bar");
   assert.ok(rnpBar, "按钮要停靠在 RNP 的原生那一栏里：" + rnpTools.outerHTML);
-  const rnpBtns = Array.from(rnpBar.querySelectorAll("button"));
+  const rnpBtns = Array.from(rnpBar.querySelectorAll("[data-wk-act]"));
   assert.deepStrictEqual(rnpBtns.map((b) => b.textContent), ["注音", "重置"], "停靠版用短标签");
+  assert.strictEqual(rnpBar.parentNode.firstChild, rnpBar, "要放在那一栏的最上面");
   assert.ok(
     rnpBtns.every((b) => b.className.indexOf("tool-btn") >= 0),
     "样式要跟原生按钮一样（抄它的 class）：" + rnpBtns.map((b) => b.className).join(",")
@@ -5835,10 +5830,11 @@ test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认�
   await sleep(900);
   const vertBar = vert.document.querySelector(".rnp-lyrics-tools .wk-bar");
   assert.ok(vertBar, "竖排工具条也要停靠：" + vert.document.querySelector(".rnp-lyrics-tools").outerHTML);
-  const vertBtns = Array.from(vertBar.querySelectorAll("button"));
+  const vertBtns = Array.from(vertBar.querySelectorAll("[data-wk-act]"));
   assert.deepStrictEqual(vertBtns.map((b) => b.textContent), ["注", "重"], "竖排用单字，别把那一列撑开");
-  assert.strictEqual(vertBtns[0].style.color, "rgb(255, 255, 255)", "按钮颜色要钉住（不然继承到透明色就看不见）");
-  assert.ok(vertBtns[0].style.minWidth === "18px", "给个最小尺寸，别被压成 0 宽");
+  assert.strictEqual(vertBtns[0].tagName, "SPAN", "克隆原生元素（样式才会一模一样）");
+  assert.ok(vertBtns[0].className.indexOf("tool-btn") >= 0, "class 跟原生的一样：" + vertBtns[0].className);
+  assert.strictEqual(vertBar.parentNode.firstChild, vertBar, "要放在那一列的最上面");
 
   const NCM = `<!doctype html><html><head></head><body>
 <div class="m-lyric">
@@ -5853,7 +5849,7 @@ test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认�
   const ncmBar = ncmTools.querySelector(".wk-bar");
   assert.ok(ncmBar, "默认页要跟音译/翻译那一栏放一起：" + ncmTools.outerHTML);
   assert.ok(
-    Array.from(ncmBar.querySelectorAll("button")).some((b) => b.className.indexOf("lyric-tool-btn") >= 0),
+    Array.from(ncmBar.querySelectorAll("[data-wk-act]")).some((b) => b.className.indexOf("lyric-tool-btn") >= 0),
     "样式同样抄原生的"
   );
 });

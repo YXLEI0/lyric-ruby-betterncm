@@ -235,11 +235,12 @@ test("振假名：数字 + 假名只注数字那一段（1つ ひとつ，つ �
   });
 
   const one = W.WKFurigana.tokens("1つ");
-  assert.deepStrictEqual(Array.from(one, (t) => [t.text, t.kana, t.start, t.end]), [["1", "ひとつ", 0, 1]], "つ 不许被注：" + JSON.stringify(one));
+  // 底字只留数字，读音也把尾巴那一截（つ）截掉：1 = ひと（和 一 = ひと 同一个规矩）
+  assert.deepStrictEqual(Array.from(one, (t) => [t.text, t.kana, t.start, t.end]), [["1", "ひと", 0, 1]], "つ 不许被注：" + JSON.stringify(one));
 
   // 全角数字也要认（以前整行直接返回 null）
   const zen = W.WKFurigana.tokens("３つの");
-  assert.deepStrictEqual(Array.from(zen, (t) => [t.text, t.kana]), [["３", "みっつ"]], "全角数字：" + JSON.stringify(zen));
+  assert.deepStrictEqual(Array.from(zen, (t) => [t.text, t.kana]), [["３", "みっ"]], "全角数字也要截尾巴：" + JSON.stringify(zen));
 
   // 数字 + 汉字：底字不截
   const ni = W.WKFurigana.tokens("2人で");
@@ -409,10 +410,56 @@ test("作词者的括号读音：中间夹空格也要采（舞台 (セカイ)�
     "中间有空格也要采括号里的读音：" + JSON.stringify(spaced)
   );
 
-  // 用户 / 模型指定过读音时，括号不抢
-  const fixed = Array.from(W.WKFurigana.tokens("舞台 (セカイ)", { fixes: { 舞台: "ぶたい" } }) || [], (t) => [
+  /*
+   * 优先级：用户就地改的（spans）> 作词者的括号读音 > 大模型 / 面板规则（fixes）> 词典。
+   * 真机事故：幕 (エンドロール) 里模型按罗马音答了 まく，把括号里的 エンドロール 顶掉了。
+   */
+  const byFix = Array.from(W.WKFurigana.tokens("舞台 (セカイ)", { fixes: { 舞台: "ぶたい" } }) || [], (t) => [
     t.text,
     t.kana || (t.hide ? "HIDE" : ""),
   ]);
-  assert.deepStrictEqual(fixed, [["舞台", "ぶたい"]], "指定过读音就不许括号覆盖：" + JSON.stringify(fixed));
+  assert.deepStrictEqual(byFix, [["舞台", "せかい"], [" (セカイ)", "HIDE"]], "括号读音要压过模型 / 规则：" + JSON.stringify(byFix));
+
+  const bySpan = Array.from(W.WKFurigana.tokens("舞台 (セカイ)", { spans: [[0, "舞台", "ぶたい"]] }) || [], (t) => [
+    t.text,
+    t.kana || (t.hide ? "HIDE" : ""),
+  ]);
+  assert.deepStrictEqual(bySpan, [["舞台", "ぶたい"]], "用户自己改的读音最优先：" + JSON.stringify(bySpan));
+});
+
+test("符号读音 / 括号读音带上左边的符号（∞回 なんかい、∞ むげん）", () => {
+  /*
+   * ∞ 这种符号 kuromoji 一个读音都不给。括号读音 `∞回(なんかい)` 要把它一起圈进去，
+   * 单独出现的 ∞ 也要有读音（むげん）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 回: "カイ", 不死: "フシ", 議: "ギ", 鳥: "トリ", 壊: "コワ" }));
+  const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+  assert.deepStrictEqual(
+    pairs("∞回(なんかい)オチても"),
+    [["∞回", "なんかい"], ["(なんかい)", "HIDE"]],
+    "∞ 要跟 回 一起注：" + JSON.stringify(pairs("∞回(なんかい)オチても"))
+  );
+  assert.deepStrictEqual(pairs("∞回"), [["∞", "むげん"], ["回", "かい"]], "单独的 ∞ 也要有读音：" + JSON.stringify(pairs("∞回")));
+});
+
+test("留空压过模型 / 面板规则给的读音", () => {
+  /*
+   * 用户把某一处留空（读音写成空串）之后，模型或面板规则给的读音也不许注回来 ——
+   * 不然屏幕上又冒出读音，留空等于没起作用（真机现象：留了空也不为空）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 人: "ヒト", 痛: "イタ" }));
+  const line = "痛みと怒れる人";
+  const at = line.indexOf("人");
+  const pairs = (opts) =>
+    Array.from(W.WKFurigana.tokens(line, opts) || [], (t) => [t.text, t.kana || "", !!t.blank]);
+  assert.deepStrictEqual(pairs({ spans: [[at, "人", ""]] }), [["痛", "いた", false], ["人", "", true]], "留空就只剩 blank：" + JSON.stringify(pairs({ spans: [[at, "人", ""]] })));
+  assert.deepStrictEqual(
+    pairs({ spans: [[at, "人", ""]], fixes: { 人: "ひと" } }),
+    [["痛", "いた", false], ["人", "", true]],
+    "模型给的读音也不许注回来：" + JSON.stringify(pairs({ spans: [[at, "人", ""]], fixes: { 人: "ひと" } }))
+  );
 });

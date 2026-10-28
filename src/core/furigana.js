@@ -252,6 +252,16 @@
           break;
         }
       }
+      /*
+       * 用户把这一处留空（读音写成空串）时，模型 / 面板规则给的读音也不许注回来 ——
+       * 不然屏幕上又冒出读音，留空等于没起作用（用户报的「留了空也不为空」）。
+       */
+      for (var sg = 0; !clashed && sg < suppressed.length; sg++) {
+        if (suppressed[sg][0] < fixed[f0].end && fixed[f0].start < suppressed[sg][1]) {
+          clashed = true;
+          break;
+        }
+      }
       if (!clashed) out.push(fixed[f0]);
     }
     for (var sp2 = 0; sp2 < spans.length; sp2++) out.push(spans[sp2]);
@@ -331,10 +341,24 @@
          * 汉字自己需要读音，截掉就漏标了。
          */
         var baseLen = text0.length;
+        var kanaCut = 0; // 尾巴上的假名有几个字，读音就要跟着截几个
         if (seg.num && seg.num.len > 0 && seg.num.len < baseLen) {
-          if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(text0.slice(seg.num.len))) baseLen = seg.num.len;
+          if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(text0.slice(seg.num.len))) {
+            baseLen = seg.num.len;
+            kanaCut = (seg.num.rt || "").length;
+          }
         }
         text0 = text0.slice(0, baseLen);
+        /*
+         * 读音也截掉尾巴那一截的假名：1つ 读 ひとつ，但底字只有 1，
+         * 注「ひとつ」会向两边溢出、盖到 つ 上面（用户报的就是这个）。
+         * 截完是 1 = ひと，和 一 = ひと 同一个规矩（送假名不注音）。
+         */
+        var rt0 = seg.rt;
+        if (kanaCut > 0 && rt0.length > kanaCut) {
+          var tailRt = rt0.slice(rt0.length - kanaCut);
+          if (seg.num && seg.num.rt && tailRt === seg.num.rt) rt0 = rt0.slice(0, rt0.length - kanaCut);
+        }
         if (!text0) continue;
         if (coveredByFixed(at, at + text0.length)) continue; // 用户已经指定了这段怎么读
         var gone = false;
@@ -345,7 +369,8 @@
           }
         }
         if (gone) continue; // 用户把这段的注音留空了
-        out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
+        if (!rt0) continue;
+        out.push({ text: text0, start: at, end: at + text0.length, kana: rt0, kind: "kanji" });
       }
     }
     /*
@@ -363,18 +388,23 @@
       var wAt = pm.index;
       var wEnd = wAt + pWord.length;
       var pEnd = pm.index + pm[0].length;
-      // 只看"用户 / 模型指定的读音"（fixed / spans），不看词典自己的切片
+      /*
+       * 只有"用户就地改过的"（spans）能让括号读音让位。
+       * 大模型 / 面板规则给的读音（fixed）要让位给括号 —— 真机现象：
+       * 幕 (エンドロール) 里模型按罗马音答了 まく，于是括号里的 エンドロール 被丢掉、
+       * 括号还留在屏幕上（用户报的"这个没被采用"）。
+       */
       var userFixed = false;
-      for (var uq = 0; uq < fixed.length; uq++) {
-        if (fixed[uq].start < wEnd && wAt < fixed[uq].end) {
-          userFixed = true;
-          break;
-        }
-      }
-      for (var uq2 = 0; !userFixed && uq2 < spans.length; uq2++) {
+      for (var uq2 = 0; uq2 < spans.length; uq2++) {
         if (spans[uq2].start < wEnd && wAt < spans[uq2].end) userFixed = true;
       }
       if (userFixed) continue;
+      /*
+       * 左边的符号也算这个词的底字：∞回(なんかい) 里 ∞ 是符号、回 才是汉字，
+       * 但唱的是 なんかい —— 只给 回 注音会剩一个光秃秃的 ∞（用户报的就是这个）。
+       */
+      var symStart = wAt;
+      while (symStart > 0 && /[\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/.test(s.charAt(symStart - 1))) symStart--;
       // 紧贴着写的那种 vendor 已经处理过（它会给一个 hide 片段），别再插一遍
       var vendorDone = false;
       for (var vq = 0; vq < out.length; vq++) {
@@ -383,20 +413,57 @@
           break;
         }
       }
-      if (vendorDone) continue;
+      if (vendorDone) {
+        // 括号那段 vendor 已经藏好了，这里只把左边的符号并进底字
+        if (symStart < wAt) {
+          for (var ve = 0; ve < out.length; ve++) {
+            if (out[ve].start === wAt && out[ve].end === wEnd && !out[ve].hide) {
+              out[ve].start = symStart;
+              out[ve].text = s.slice(symStart, wEnd);
+              break;
+            }
+          }
+        }
+        continue;
+      }
       /*
        * 覆盖掉词典给的那个读音（舞台 ぶたい）：作词者在括号里写的才是官方读法
        * （这个案子是 セカイ）。
        */
       var kept = [];
       for (var kq = 0; kq < out.length; kq++) {
-        if (out[kq].start < wEnd && wAt < out[kq].end) continue;
+        if (out[kq].start < wEnd && symStart < out[kq].end) continue;
         kept.push(out[kq]);
       }
       out = kept;
-      out.push({ text: pWord, start: wAt, end: wEnd, kana: toKanaMode(pm[2], kana), kind: "inline" });
+      out.push({
+        text: s.slice(symStart, wEnd),
+        start: symStart,
+        end: wEnd,
+        kana: toKanaMode(pm[2], kana),
+        kind: "inline",
+      });
       out.push({ text: s.substr(wEnd, pEnd - wEnd), start: wEnd, end: pEnd, hide: true, kind: "hide" });
     }
+    /*
+     * 符号读音：歌词里会直接唱出来的那几个（∞ むげん、〆 しめ）。
+     * kuromoji 对它们一个读音都不给，不给的话 ∞ 就光秃秃地晾在那儿。
+     */
+    for (var sy = 0; sy < s.length; sy++) {
+      var symKana = SYMBOL_READINGS[s.charAt(sy)];
+      if (!symKana) continue;
+      var symCovered = false;
+      for (var sc = 0; sc < out.length; sc++) {
+        if (out[sc].start <= sy && sy < out[sc].end) {
+          symCovered = true;
+          break;
+        }
+      }
+      if (symCovered) continue;
+      if (coveredByFixed(sy, sy + 1)) continue;
+      out.push({ text: s.charAt(sy), start: sy, end: sy + 1, kana: toKanaMode(symKana, kana), kind: "symbol" });
+    }
+
     /*
      * 用户把读音留空的那些位置也交出去：annotate 会给它包一层 <span class="wk-blank">，
      * 这样这一处还能双击改回来（以前什么都不插，改出去就回不来）。
@@ -626,6 +693,9 @@
     probeCache.set(ch, best);
     return best;
   }
+
+  /** 词典读不出来、但歌词里会唱的符号 */
+  var SYMBOL_READINGS = { "\u221E": "むげん", "\u3006": "しめ" };
 
   /** 平假名 / 片假名互转（用户两种写法都可能填） */
   function toKanaMode(kana, mode) {    var t = String(kana == null ? "" : kana);
