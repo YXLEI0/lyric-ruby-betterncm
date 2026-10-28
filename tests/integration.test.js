@@ -1778,6 +1778,13 @@ test("禁用后 DOM 完全还原并收走样式，重新启用又能标注", asy
   const stable = (root) => {
     const clone = root.cloneNode(true);
     const walk = (el) => {
+      /*
+       * 字体（font-family / data-wk-font）不参与比较：它是每轮按"当前哪些元素里有假名"
+       * 重新算的，首轮和重新启用后可能挂在内层不同的节点上（播放栏那个 <a> 就是），
+       * 功能上没区别。这里只比"注音结构 + 行高"。
+       */
+      if (el.hasAttribute && el.hasAttribute("data-wk-font")) el.removeAttribute("data-wk-font");
+      if (el.style && el.style.removeProperty) el.style.removeProperty("font-family");
       const attrs = [...el.attributes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const a of attrs) el.removeAttribute(a.name);
       for (const a of attrs) el.setAttribute(a.name, a.value);
@@ -5951,4 +5958,52 @@ test("就地改读音 / 留空：行文本按原文那层算（RNP 里带罗马�
   await sleep(500);
   assert.ok(find("1"), "填回来之后要重新注上：" + p.innerHTML);
   assert.strictEqual(find("1").querySelector(".wk-rt").textContent, "ひとつ");
+});
+
+test("读不出的汉字：问模型时带整句 + 前后句（单句准确率太低）", async () => {
+  /*
+   * 真机上"这个汉字读什么"几乎全靠模型，而歌词里一句话常常只是个短语（`霽れを待つ君`）。
+   * 只给这一句，模型看不到前后文，正确率明显偏低。现在条目里 además 带 prev / next。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>痛みと怒れる人 を喰らったらった</p></li>
+  <li class="line"><p>霽れを待つ君</p></li>
+  <li class="line"><p>じゃん！</p></li>
+</ul></div></body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
+    fetch: function (url, init) {
+      const content = JSON.parse(init.body).messages[0].content;
+      asked.push(content);
+      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
+      const out = {};
+      items.forEach((it, i) => {
+        out[String(i + 1)] = "は";
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  // 假分词器：表里没有的字等于"读不出来"（霽 就是），正好触发问模型
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ を: "ヲ", 喰: "ク", ら: "ラ", っ: "ッ", た: "タ", れ: "レ", 待: "マ", つ: "ツ", 君: "キミ", み: "ミ", と: "ト", る: "ル", じ: "ジ", ゃ: "ャ", ん: "ン" })
+  );
+  await env.runLoad();
+  await sleep(1800);
+
+  assert.ok(asked.length >= 1, "读不出的汉字要问模型");
+  const items = JSON.parse(asked[0].slice(asked[0].lastIndexOf("条目：") + 3));
+  const row = items.filter((x) => x.w === "霽")[0];
+  assert.ok(row, "要问 霽：" + JSON.stringify(items));
+  assert.strictEqual(row.line, "霽れを待つ君", "带上整句");
+  assert.strictEqual(row.prev, "痛みと怒れる人 を喰らったらった", "带上前一句：" + JSON.stringify(row));
+  assert.strictEqual(row.next, "じゃん！", "带上后一句：" + JSON.stringify(row));
+  assert.ok(asked[0].indexOf("prev / next") >= 0, "提示词要说明前后句怎么用");
+  assert.ok(asked[0].indexOf("不要给 zhōng") >= 0, "提示词要提醒别给中文读音");
 });

@@ -119,11 +119,13 @@
         row.kind = "han";
         hasOpts = true;
       }
-      // 日语汉字：让模型按这句的语境给读音（可以带官方音译当参考）
+      // 日语汉字：让模型按这句的语境给读音（可以带官方音译、前后句当参考）
       if (items[i].kind === "ja") {
         row.kind = "ja";
         hasJa = true;
         if (items[i].romaji) row.romaji = items[i].romaji;
+        if (items[i].prev) row.prev = items[i].prev;
+        if (items[i].next) row.next = items[i].next;
       }
       rows.push(row);
     }
@@ -152,9 +154,15 @@
       "Анастасия アナスタシヤ）、希腊语（Θάλασσα サラッサ、ουρανός ウラノス）；\n" +
       "8. 严格输出一个 JSON 对象，**键是 i 字段的值**（数字，写成字符串也行），值是片假名，不要多余字段。\n" +
       (hasJa
-        ? "10. 条目里带 kind=\"ja\" 的是**日语歌词里的汉字词**（w 是汉字）：请给出它在这句里的日语读音，" +
-          "写成平假名；如果给了 romaji 字段（官方音译），以它为准，别按单个汉字的常见读法硬套。" +
-          "例：w=\"明日\"、line=\"明日も君と\" → あした；w=\"解\"、line=\"解けない\" → と。\n"
+        ? "10. 条目里带 kind=\"ja\" 的是**日语歌词里的汉字词**（w 是汉字），请给出它在这句歌词里的日语读音：\n" +
+          "   - 只写平假名；不要汉字、不要罗马字、不要解释；\n" +
+          "   - **line 是它所在的整句**，prev / next 是前后各一句（有就一起看，歌词里一句常常只是个短语）；\n" +
+          "   - 有 romaji 字段（官方音译）时以它为准，别按单个汉字的常见读法硬套；\n" +
+          "   - 熟字训 / 当て字按整个词读：帷帳 とばり、今日 きょう、一人 ひとり、良ん よん；\n" +
+          "   - **这是日语读音，不是普通话**：不要给 zhōng / ジン 这种中文读音；\n" +
+          "   - 实在定不下来给空字符串 \"\"，不要猜。\n" +
+          "   例：w=\"明日\"、line=\"明日も君と\" → あした；w=\"解\"、line=\"解けない\" → と；" +
+          "w=\"良\"、line=\"in(良ん)\" → よ。\n"
         : "") +
       (hasOpts
         ? "9. 条目里带 kind=\"han\" 的是**中文歌词里的多音字**（w 是一个汉字）：opts 是它允许的读音，" +
@@ -670,6 +678,8 @@
           opts: batch[j].opts,
           kind: batch[j].extra && batch[j].extra.kind,
           romaji: batch[j].extra && batch[j].extra.romaji,
+          prev: batch[j].extra && batch[j].extra.prev,
+          next: batch[j].extra && batch[j].extra.next,
         });
       }
 

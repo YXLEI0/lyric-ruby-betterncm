@@ -2655,6 +2655,49 @@
     if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
   }
 
+  /*
+   * 整首的行列表（每轮扫描算一次）。
+   *
+   * 干什么用：问模型"这个汉字读什么"时，光给它所在的那一句还不够 ——
+   * 歌词里一句话常常只是一个短语（`良ん`、`人`），前后句才看得出这是哪首歌、
+   * 在念什么。真机上单句问的准确率明显偏低。
+   */
+  var songLinesCache = { gen: -1, lines: [] };
+  function songLines() {
+    if (songLinesCache.gen === songLangGen) return songLinesCache.lines;
+    var out = [];
+    try {
+      var regions = state.annotator ? state.annotator.findRegions("lyrics") : [];
+      for (var i = 0; i < regions.length; i++) {
+        var t = regionText(regions[i]);
+        if (t) out.push(t);
+      }
+    } catch (e) {
+      out = [];
+    }
+    songLinesCache = { gen: songLangGen, lines: out };
+    return out;
+  }
+
+  /** 这一句的前后各一句（拿不到就空串，提示词里会自动省略） */
+  function contextAround(line) {
+    var lines = songLines();
+    if (!lines.length || !line) return { prev: "", next: "" };
+    var idx = lines.indexOf(line);
+    if (idx < 0) {
+      for (var i = 0; i < lines.length; i++) {
+        var t = lines[i];
+        if (!t) continue;
+        if (t.indexOf(line) >= 0 || line.indexOf(t) >= 0) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx < 0) return { prev: "", next: "" };
+    return { prev: lines[idx - 1] || "", next: lines[idx + 1] || "" };
+  }
+
   /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
   function furiganaFixes(line, text, host) {
     var fixes = {};
@@ -2712,7 +2755,8 @@
       } catch (e) {
         list = null;
       }
-      var extra = { kind: "ja", romaji: romajiOf(host) || "" };
+      var around = contextAround(line);
+      var extra = { kind: "ja", romaji: romajiOf(host) || "", prev: around.prev, next: around.next };
       for (var j = 0; list && j < list.length; j++) {
         var word = list[j].text;
         if (Object.prototype.hasOwnProperty.call(fixes, word)) continue; // 手填的优先
@@ -4447,6 +4491,13 @@
    */
   var lyricBar = null;
   var lyricBarAt = 0;
+  /*
+   * 停靠进原生工具条会被宿主（React）重渲染时冲掉 —— 真机现象：按钮出现一次，
+   * 下一首歌 / 下次重绘就没了。死磕不划算：连续被冲掉两次就改用浮动条，
+   * 浮动条是我们自己的节点，只在歌词容器被整体替换时才会消失。
+   */
+  var barMode = "dock"; // dock | float
+  var barLost = 0;
 
   function lyricPageHost() {
     var sels = [".m-lyric", ".rnp-lyrics", "[class^='rnp-lyrics']", "ul.lyric"];
@@ -4620,11 +4671,17 @@
       updateLyricBar();
       return;
     }
+    if (lyricBar && !lyricBar.isConnected) {
+      // 被宿主冲掉了：记一次，连着两次就别再停靠了
+      barLost++;
+      if (barLost >= 2) barMode = "float";
+      lyricBar = null;
+    }
     /*
      * 优先停靠到原生工具条（用户点名要的：RNP 的 译/音/逐字、默认页的音译/翻译那一栏）。
      * 找不到才退回右上角的浮动条。
      */
-    if (now - lyricBarAt >= 500) {
+    if (barMode === "dock" && now - lyricBarAt >= 500) {
       var anchor = null;
       try {
         anchor = findNativeToggle();
@@ -4645,13 +4702,14 @@
     bar.className = "wk-bar";
     bar.setAttribute("data-wk-ui", "1");
     bar.style.cssText =
-      "position:absolute;right:2px;top:2px;z-index:30;display:flex;gap:4px;" +
-      "opacity:.45;transition:opacity .15s;user-select:none;";
+      "position:absolute;right:6px;top:6px;z-index:2147482000;display:flex;gap:4px;padding:3px 4px;" +
+      "border-radius:12px;background:rgba(18,22,32,.72);box-shadow:0 2px 10px rgba(0,0,0,.35);" +
+      "opacity:.92;transition:opacity .15s;user-select:none;pointer-events:auto;";
     bar.addEventListener("mouseenter", function () {
       bar.style.opacity = "1";
     });
     bar.addEventListener("mouseleave", function () {
-      bar.style.opacity = ".45";
+      bar.style.opacity = ".92";
     });
     bar.appendChild(barButton("注音 开", "toggle"));
     bar.appendChild(barButton("重置本首", "reset"));
