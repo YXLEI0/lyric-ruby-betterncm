@@ -725,13 +725,54 @@
      * 语（ゴ）物（モノ）这种单字读音拼起来是错的。有了起点，上层可以拿整行去分词，
      * 再把词的首字对回具体的节点。
      */
+    /** 一个区域里"原文"那部分：跳过注音本身、以及 RNP 的音译 / 翻译层 */
+    function originalTextOf(el) {
+      var out = "";
+      try {
+        var walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+          acceptNode: function () {
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        });
+        var node;
+        while ((node = walker.nextNode())) {
+          var skip = false;
+          for (var p = node.parentNode; p && p !== el.parentNode; p = p.parentNode) {
+            if (!p || p.nodeType !== 1) continue;
+            if (p.tagName === "RT" || p.tagName === "RP") {
+              skip = true;
+              break;
+            }
+            if (isAnnotationNode(p)) {
+              skip = true;
+              break;
+            }
+            if (p !== el && isSkippedRegion(p)) {
+              skip = true;
+              break;
+            }
+          }
+          if (skip) continue;
+          out += node.nodeValue || "";
+        }
+      } catch (e) {
+        return out;
+      }
+      return out;
+    }
+
     function markNodeOffsets(regions) {
       for (var i = 0; i < regions.length; i++) {
         var region = regions[i];
         if (!region || region.nodeType !== 1) continue;
+        /*
+         * 这一行的"原文"。**不能**直接用 visibleText(region)：RNP 的区域里包着
+         * -romaji / -translated 两层，visibleText 会把罗马音和中文翻译也算进来 ——
+         * 上层拿它判语种时，「今夜、」这种纯汉字行就会被翻译里的中文带偏。
+         */
         var lineText = "";
         try {
-          lineText = visibleText(region) || "";
+          lineText = originalTextOf(region);
         } catch (eLt) {
           lineText = "";
         }
@@ -2181,13 +2222,23 @@ function buildRuby(base, gloss, provisional, source) {
             skipped++;
             continue; // 注音在位、底字也是我们注的那句 —— 一个字节都不动
           }
-          noteChurn(
-            visibleNow,
-            idOf(hostEl),
-            typeof prior.at === "number" ? clock() - prior.at : ageOf(hostEl),
-            enclosingPeerLine(hostEl),
-            hostEl
-          );
+          /*
+           * 只有"这条记录本来存在"才算打架（我们的 ruby 被对方弄丢了）。
+           *
+           * 以前不判这一条：一个 host 里只要**部分**词注上了、另外几个词当时还没读音
+           * （词典读不出的 霽 / 掻，等大模型回来），那几个词每一轮都会走到这里记一次
+           * churn，几轮之后就进了"认输期"—— 模型的答案回来时那一行已经不再处理了，
+           * 表现就是「这个词一直空着」。
+           */
+          if (recHere) {
+            noteChurn(
+              visibleNow,
+              idOf(hostEl),
+              typeof prior.at === "number" ? clock() - prior.at : ageOf(hostEl),
+              enclosingPeerLine(hostEl),
+              hostEl
+            );
+          }
         }
 
         // 已经注过音的行：只有确认「需要动它」才动。

@@ -4058,10 +4058,11 @@ test("歌词界面里双击注音就能改：只改这一行，并落盘", async
   await sleep(500);
 
   const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  // 按**位置**存（起点 + 底字 + 读音）：行文本是键，同一个字出现两次时只改点中的那个
   assert.deepStrictEqual(
-    saved.furiganaLineFixes,
-    { "明日も君と": { 明日: "みょうにち" } },
-    "要按整行存：" + JSON.stringify(saved.furiganaLineFixes)
+    saved.furiganaLineSpans,
+    { "明日も君と": [[0, "明日", "みょうにち"]] },
+    "要按整行 + 位置存：" + JSON.stringify(saved.furiganaLineSpans)
   );
 
   const p0 = env.document.querySelectorAll("ul.lyric li p")[0];
@@ -5475,4 +5476,200 @@ test("大模型切词没开时：一句都不发，也不影响普通振假名",
     asked.every((c) => c.indexOf("熟字训") < 0),
     "没开切词开关就不许发切词请求：" + asked.map((c) => c.slice(0, 40)).join(" | ")
   );
+});
+
+test("就地改读音只改点中的那一处（同一行两个相同的字不会一起变）", async () => {
+  /*
+   * 真机现象：`誰だって魂辛辛` 里只想把后面两个 辛 读成 からがら，
+   * 结果改一处整行的 辛 全变了 —— 以前按"词"存（furiganaLineFixes[行] = {词: 读音}）。
+   * 现在按**位置**存（起点 + 底字），只影响点中的那一个。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>誰だって魂辛辛</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 誰: "ダレ", 魂: "タマシイ", 辛: "カラシ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const first = p.querySelectorAll("ruby.wk-ruby")[2]; // 誰 / 魂 / 辛 / 辛
+  assert.strictEqual(first.childNodes[0].nodeValue, "辛", "取到第一个 辛：" + p.innerHTML);
+  first.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击后要弹输入框");
+  box.value = "からしさ";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(saved.furiganaLineSpans, { 誰だって魂辛辛: [[5, "辛", "からしさ"]] }, "只存这一处：" + JSON.stringify(saved.furiganaLineSpans));
+
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    pairs,
+    [["誰", "だれ"], ["魂", "たましい"], ["辛", "からしさ"], ["辛", "からし"]],
+    "只有点中的那个变：" + p.innerHTML
+  );
+});
+
+test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら", async () => {
+  /*
+   * 熟字训 / 叠字符常常被切开注（辛 + 辛、日 + 々），用户要能把它们合成一个词。
+   * 编辑器里两个按钮：← 和左边那个合并，→ 和右边那个合并。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>誰だって魂辛辛</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 誰: "ダレ", 魂: "タマシイ", 辛: "カラシ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const rubies = p.querySelectorAll("ruby.wk-ruby");
+  const first = rubies[2];
+  assert.strictEqual(first.childNodes[0].nodeValue, "辛");
+  first.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击后要弹输入框");
+  const right = Array.from(env.document.querySelectorAll(".wk-edit-box button")).pop();
+  assert.ok(right, "要有合并按钮");
+  right.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await sleep(20);
+  assert.strictEqual(box.value, "からしからし", "合并后输入框里是两个读音拼起来：" + box.value);
+  box.value = "からがら";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(600);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(saved.furiganaLineSpans, { 誰だって魂辛辛: [[5, "辛辛", "からがら"]] }, "按位置存整段：" + JSON.stringify(saved.furiganaLineSpans));
+
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["誰", "だれ"], ["魂", "たましい"], ["辛辛", "からがら"]], "合成一个注音：" + p.innerHTML);
+});
+
+test("统一行距：RNP 的三层里只改原文那一层", async () => {
+  /*
+   * RNP 一个区域是 `div.rnp-lyrics-line`，里面装着 -original / -romaji / -translated。
+   * 行高写在区域上，罗马音和翻译那两行也会跟着变（真机现象：音译/翻译行忽宽忽窄）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line">
+  <div class="rnp-lyrics-line-original">いざなった clover へ</div>
+  <div class="rnp-lyrics-line-romaji">i za na tta clover</div>
+  <div class="rnp-lyrics-line-translated">走向那株四叶草</div>
+</div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(400);
+  const orig = env.document.querySelector(".rnp-lyrics-line-original");
+  const romaji = env.document.querySelector(".rnp-lyrics-line-romaji");
+  const trans = env.document.querySelector(".rnp-lyrics-line-translated");
+  assert.strictEqual(orig.style.getPropertyValue("line-height"), "1.6", "原文行要固定行高：" + orig.getAttribute("style"));
+  assert.strictEqual(romaji.style.getPropertyValue("line-height"), "", "音译行不许改：" + romaji.getAttribute("style"));
+  assert.strictEqual(trans.style.getPropertyValue("line-height"), "", "翻译行不许改：" + trans.getAttribute("style"));
+});
+
+test("词典读不出的汉字：探出读音（掻 か）、探不出的交给大模型（霽 は）", async () => {
+  /*
+   * 以前这类字整段留白（真机现象：「掻鳴らせ」的 掻、「霽れを待つ君」的 霽 一直空着）。
+   * 现在两层兜底：
+   *   1. 离线：拿这个字去喂"字 + 送假名"，几种写法读音一致就注（掻く / 掻き → か）；
+   *   2. 在线：探不出来的（词典里根本没有这个字的词）按整句问大模型。
+   * 两层都不成的话才留白。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>掻鳴らせ、</p></li>
+  <li class="line"><p>霽れを待つ君</p></li>
+</ul></div></div></body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: {
+      online: false,
+      llmEnabled: true,
+      llmKey: "sk-test",
+      llmEndpoint: "https://api.example.com/v1/chat/completions",
+    },
+    fetch: function (url, init) {
+      const content = JSON.parse(init.body).messages[0].content;
+      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
+      asked.push(items);
+      const out = {};
+      items.forEach((it, i) => {
+        out[String(i + 1)] = it.w === "霽" ? "は" : "な";
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 鳴らせ: "ナラセ", 待つ: "マツ", 君: "キミ", を: "ヲ" }));
+  await env.runLoad();
+  await sleep(1600);
+
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const ruby = (p, word) => {
+    const hit = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === word);
+    return hit.length ? hit[0].querySelector(".wk-rt").textContent : null;
+  };
+  // 1. 假分词器里没有 掻：离线照样注不上（探读音要真词典），但一定要问模型
+  assert.ok(asked.length >= 1, "读不出的汉字要问模型：" + JSON.stringify(asked));
+  const words = [].concat.apply([], asked).map((x) => x.w);
+  assert.ok(words.indexOf("霽") >= 0, "要问 霽：" + JSON.stringify(words));
+  assert.strictEqual(ruby(ps[1], "霽"), "は", "模型给的读音要注上去：" + ps[1].innerHTML);
+});
+
+test("RNP：一行三层时语种按原文判，不按翻译（今夜、不该被当成中文）", async () => {
+  /*
+   * RNP 一个区域是 `div.rnp-lyrics-line`，里面装着 -original / -romaji / -translated。
+   * 以前取区域文字时把三层都算了进去 —— 纯汉字的日语行里混进了中文翻译，
+   * 整首被投票成中文歌，`今夜、` 被按普通话注成 ジンイェ（真机现象）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric">
+  <div class="rnp-lyrics-line">
+    <div class="rnp-lyrics-line-original">今夜、</div>
+    <div class="rnp-lyrics-line-romaji">ko n ya、</div>
+    <div class="rnp-lyrics-line-translated">今夜，</div>
+  </div>
+  <div class="rnp-lyrics-line">
+    <div class="rnp-lyrics-line-original">きょうのよる</div>
+    <div class="rnp-lyrics-line-romaji">ki yo u no yo ru</div>
+    <div class="rnp-lyrics-line-translated">今天的夜晚</div>
+  </div>
+  <div class="rnp-lyrics-line">
+    <div class="rnp-lyrics-line-original">しずかに</div>
+    <div class="rnp-lyrics-line-romaji">shi zu ka ni</div>
+    <div class="rnp-lyrics-line-translated">安静地</div>
+  </div>
+</div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 今夜: "コンヤ", の: "ノ", よる: "ヨル" }));
+  await env.runLoad();
+  await sleep(500);
+  const orig = env.document.querySelector(".rnp-lyrics-line-original");
+  const pairs = Array.from(orig.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["今夜", "こんや"]], "今夜 要读日语：" + orig.innerHTML);
+  // 罗马音行 / 翻译行一个注音都不许有
+  assert.strictEqual(env.document.querySelector(".rnp-lyrics-line-romaji").querySelectorAll("ruby").length, 0, "罗马音行不许注");
+  assert.strictEqual(env.document.querySelector(".rnp-lyrics-line-translated").querySelectorAll("ruby").length, 0, "翻译行不许注");
 });

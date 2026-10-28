@@ -209,8 +209,11 @@
     furiganaKana: "hiragana",
     // 自定义读音：一行一条 `底字=假名`（面板里「高级设置 → 自定义读音」）
     furiganaOverrides: "",
-    // 歌词界面里就地改的读音：{ 整行原文: { 词: 假名 } }（按行，不做全局词表）
+    // 歌词界面里就地改的读音（老版本，按词；启动时迁到下面那套）
     furiganaLineFixes: {},
+    // 就地改的读音（按位置）：{ 整行原文: [[起点, 底字, 假名], ...] }
+    // 按位置存才能"只改这一处"—— 同一行里两个相同的字不会一起变
+    furiganaLineSpans: {},
     // 统一行距：有注音的行和没注音的行一样高（给整行一个固定 line-height）
     uniformLineHeight: true,
     // 统一行距用的行高（有注音/没注音都按它）
@@ -2147,23 +2150,55 @@
     return el;
   }
 
-  function saveInlineFix(lineText, word, kana) {
+  function saveInlineFix(lineText, at, word, kana) {
     if (!lineText || !word) return;
-    var map = config.furiganaLineFixes;
-    if (!map || typeof map !== "object") map = config.furiganaLineFixes = {};
-    if (!map[lineText]) map[lineText] = {};
-    if (kana) map[lineText][word] = kana;
-    else if (map[lineText]) {
-      delete map[lineText][word];
-      if (!Object.keys(map[lineText]).length) delete map[lineText];
+    var map = config.furiganaLineSpans;
+    if (!map || typeof map !== "object") map = config.furiganaLineSpans = {};
+    var list = map[lineText];
+    if (!list || !list.length) list = [];
+    /*
+     * 按**位置**存：同一个字在一行里出现两次时，用户只想改其中一处
+     * （`魂辛辛` 的 辛辛 是 からがら）。以前是按"词"存的，改一处等于整行同字全改。
+     */
+    var next = [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i][0] !== at) next.push(list[i]);
     }
+    next.push([at, word, kana || ""]);
+    if (next.length) map[lineText] = next;
+    else delete map[lineText];
     saveConfig();
     if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
     rescan();
   }
 
-  function openEditor(rubyEl) {
-    if (!rubyEl || !rubyEl.parentNode) return;
+  /**
+   * 一个注音在**整行**里的起点（就地编辑按位置存，靠它定位）。
+   *
+   * 走一遍行内文本节点：`<rt>` / `<rp>` 是注音不是原文，跳过；走到这个 ruby 的
+   * 底字节点时累计的长度就是起点。
+   */
+  function rubyOffset(rubyEl, lineEl) {
+    if (!rubyEl || !lineEl) return -1;
+    var base = rubyEl.firstChild;
+    var total = 0;
+    var walker = document.createTreeWalker(lineEl, 4, null, false); // 4 = SHOW_TEXT
+    var node;
+    while ((node = walker.nextNode())) {
+      var p = node.parentNode;
+      if (p && p.nodeType === 1) {
+        if (p.tagName === "RT" || p.tagName === "RP") continue;
+        var cn = typeof p.className === "string" ? p.className : "";
+        if (/(^|\s)wk-rt(\s|$)/.test(cn) || /(^|\s)wk-hide(\s|$)/.test(cn)) continue;
+      }
+      if (node === base) return total;
+      total += (node.nodeValue || "").length;
+    }
+    return -1;
+  }
+
+  /** 一个 ruby 的底字 + 读音 */
+  function rubyParts(rubyEl) {
     var word = "";
     try {
       word = rubyEl.childNodes[0] ? rubyEl.childNodes[0].nodeValue || "" : "";
@@ -2172,29 +2207,106 @@
     }
     if (!word) word = rubyEl.textContent || "";
     var rt = rubyEl.querySelector(".wk-rt");
-    var current = rt ? rt.textContent || "" : "";
+    return { word: word, kana: rt ? rt.textContent || "" : "" };
+  }
+
+  /** 和这个 ruby 紧挨着的下一个注音（中间只允许空白的文本 / 空的 span） */
+  function adjacentRuby(rubyEl, dir) {
+    var n = rubyEl ? (dir < 0 ? rubyEl.previousSibling : rubyEl.nextSibling) : null;
+    for (var guard = 0; n && guard < 6; guard++) {
+      if (n.nodeType === 1) {
+        var cn = typeof n.className === "string" ? n.className : "";
+        if (/(^|\s)wk-ruby(\s|$)/.test(cn)) return n;
+        if (n.textContent && String(n.textContent).replace(/\s+/g, "")) return null;
+      } else if (n.nodeType === 3) {
+        if (String(n.nodeValue || "").replace(/\s+/g, "")) return null;
+      } else {
+        return null;
+      }
+      n = dir < 0 ? n.previousSibling : n.nextSibling;
+    }
+    return null;
+  }
+
+  function openEditor(rubyEl) {
+    if (!rubyEl || !rubyEl.parentNode) return;
+    var parts = rubyParts(rubyEl);
+    var word = parts.word;
+    var current = parts.kana;
+    if (!word) return;
     var lineEl = lineElementOf(rubyEl);
     var lineText = lineTextOf(lineEl);
+    var startAt = rubyOffset(rubyEl, lineEl);
+
+    /*
+     * 要存的"底字 + 起点"。默认就是这一个 ruby；点了「合并」之后变成两个相邻注音
+     * 合起来的那一段（`辛` + `辛` → `辛辛` からがら、`日` + `々` → `日々` ひび）。
+     */
+    var span = { at: startAt, word: word };
 
     closeEditor();
+    var wrap = document.createElement("div");
+    wrap.className = "wk-edit-box";
+    wrap.setAttribute("data-wk-edit", "1");
+    wrap.style.position = "fixed";
+    wrap.style.zIndex = "99999";
+    wrap.style.background = "rgba(20,24,32,.92)";
+    wrap.style.padding = "4px 6px";
+    wrap.style.borderRadius = "6px";
+    wrap.style.boxShadow = "0 2px 10px rgba(0,0,0,.45)";
+    wrap.style.fontSize = "13px";
+    wrap.style.display = "flex";
+    wrap.style.gap = "4px";
+    wrap.style.alignItems = "center";
+
     var box = document.createElement("input");
     box.type = "text";
-    box.value = current;
     box.className = "wk-edit";
-    box.setAttribute("data-wk-edit", "1");
-    box.style.position = "fixed";
-    box.style.zIndex = "99999";
+    box.value = current;
     box.style.fontSize = "14px";
     box.style.padding = "2px 6px";
     box.style.width = Math.max(80, (current.length + 4) * 14) + "px";
+
+    // 合并左边 / 合并右边：把相邻的那个注音并进来，底字和读音一起改
+    function makeMergeBtn(dir, label) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.style.fontSize = "12px";
+      b.title = dir < 0 ? "和左边那个注音合成一个词" : "和右边那个注音合成一个词";
+      b.addEventListener("mousedown", function (ev) {
+        ev.preventDefault(); // 别让输入框失焦
+        ev.stopPropagation();
+        var other = adjacentRuby(rubyEl, dir);
+        if (!other) {
+          b.disabled = true;
+          return;
+        }
+        var a = dir < 0 ? rubyParts(other) : parts;
+        var z = dir < 0 ? parts : rubyParts(other);
+        var aAt = rubyOffset(dir < 0 ? other : rubyEl, lineEl);
+        var bAt = rubyOffset(dir < 0 ? rubyEl : other, lineEl);
+        var at = Math.min(aAt, bAt);
+        if (!(at >= 0)) return;
+        var joined = lineText.substr(at, a.word.length + z.word.length);
+        if (!joined) return;
+        span = { at: at, word: joined };
+        box.value = a.kana + z.kana;
+        box.select();
+      });
+      return b;
+    }
+    wrap.appendChild(makeMergeBtn(-1, "←"));
+    wrap.appendChild(box);
+    wrap.appendChild(makeMergeBtn(1, "→"));
+
     try {
       var r = rubyEl.getBoundingClientRect();
-      box.style.left = Math.max(4, r.left) + "px";
-      box.style.top = Math.max(4, r.top - 30) + "px";
+      wrap.style.left = Math.max(4, r.left) + "px";
+      wrap.style.top = Math.max(4, r.top - 34) + "px";
     } catch (e2) {
-      /* 拿不到位置就放左上角 */
-      box.style.left = "20px";
-      box.style.top = "20px";
+      wrap.style.left = "20px";
+      wrap.style.top = "20px";
     }
     box.addEventListener("keydown", function (ev) {
       var k = ev.key || "";
@@ -2203,8 +2315,8 @@
         ev.stopPropagation();
         var v = String(box.value || "").replace(/^\s+/, "").replace(/\s+$/, "");
         closeEditor();
-        // 回车：有内容就存读音；清空则"留空"（这一行不给这个词注音），不是撤销
-        if (v !== current) saveInlineFix(lineText, word, v);
+        // 回车：有内容就存读音；清空则"留空"（这一行不给这一段注音），不是撤销
+        if (v !== current || span.word !== word) saveInlineFix(lineText, span.at, span.word, v);
       } else if (k === "Escape") {
         ev.preventDefault();
         closeEditor();
@@ -2214,8 +2326,8 @@
     box.addEventListener("blur", function () {
       setTimeout(closeEditor, 0);
     });
-    (document.body || document.documentElement).appendChild(box);
-    editingEl = box;
+    (document.body || document.documentElement).appendChild(wrap);
+    editingEl = wrap;
     try {
       box.focus();
       box.select();
@@ -2429,12 +2541,60 @@
     return rules;
   }
 
+  /** 这一行按**位置**存的修正（就地编辑器写的）：[[起点, 底字, 读音], ...] */
+  function lineSpans(line) {
+    var map = config.furiganaLineSpans;
+    if (!map || typeof map !== "object") return null;
+    var list = map[line];
+    return list && list.length ? list : null;
+  }
+
+  /**
+   * 老版本的「就地改读音」是按词存的（`furiganaLineFixes[整行] = {词: 读音}`），
+   * 改一处等于把这一行里所有同字都改了（真机现象：只想把 辛辛 改 からがら，
+   * 结果两个 辛 全变）。启动时把它迁成按位置的写法：每个出现位置各存一条。
+   */
+  function migrateLineFixes() {
+    var old = config.furiganaLineFixes;
+    if (!old || typeof old !== "object") return;
+    var lines = [];
+    for (var line in old) if (Object.prototype.hasOwnProperty.call(old, line)) lines.push(line);
+    if (!lines.length) return;
+    var spans = config.furiganaLineSpans;
+    if (!spans || typeof spans !== "object") spans = config.furiganaLineSpans = {};
+    for (var i = 0; i < lines.length; i++) {
+      var text = lines[i];
+      var words = old[text];
+      var list = spans[text] || [];
+      for (var w in words) {
+        if (!Object.prototype.hasOwnProperty.call(words, w)) continue;
+        var kana = String(words[w] == null ? "" : words[w]);
+        var from = 0;
+        while (w && from <= text.length - w.length) {
+          var at = text.indexOf(w, from);
+          if (at < 0) break;
+          from = at + 1;
+          if (kana) list.push([at, w, kana]);
+        }
+      }
+      if (list.length) spans[text] = list;
+    }
+    config.furiganaLineFixes = {};
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+  }
+
   /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
   function furiganaFixes(line, text, host) {
     var fixes = {};
     /*
      * 最高优先级：用户在歌词界面里就地改的（双击注音改的那份）。
-     * 键是"整行原文"，所以只对这一行生效 —— 同一个词换个句子照样用词典。
+     *
+     * 两套存法都认：
+     *   - `furiganaLineSpans[整行] = [[起点, 底字, 读音], ...]`（现在用的，按位置 ——
+     *     同一个字在一行里出现两次时只改点中的那一个）；
+     *   - `furiganaLineFixes[整行] = {词: 读音}`（老版本，按词 —— 改一处整行同字全改，
+     *     启动时已经迁成上面那套，这里留着只是兜底）。
      */
     var inline = config.furiganaLineFixes;
     if (inline && typeof inline === "object" && Object.prototype.hasOwnProperty.call(inline, line)) {
@@ -2527,11 +2687,16 @@
    * 词典是懒加载的：这一趟读不到就返回 null，等 onReady 触发重扫时再补上。
    * 面板里关掉之后一条都不产出（现有注音由 rescan 里的 restore 撤掉）。
    */
-  function furiganaTokens(s, context, host, offset) {
+  function furiganaTokens(s, context, host, offset, lineText) {
     if (config.furigana === false) return null;
     if (typeof WKFurigana === "undefined") return null;
-    var line = context || s;
+    /*
+     * 用哪段文字当"整行"：优先注音层算好的 __wkLineText（只含原文、不含翻译层），
+     * 它比 context 可靠 —— 逐字歌词里 context 可能就退化成一个字。
+     */
+    var line = lineText && lineText.length > s.length ? lineText : context || s;
     var fixes = furiganaFixes(line, s, host);
+    var spans = lineSpans(line);
     /*
      * 逐字歌词：一行被拆成"一个字一个节点"，这个节点的起点是 offset。
      * 按整行分词，再把**词的第一个字**对回这个节点 —— 只注一次，读音是整词的
@@ -2541,6 +2706,7 @@
       var whole = WKFurigana.tokens(line, {
         kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
         fixes: fixes,
+        spans: spans,
       });
       if (!whole || !whole.length) return null;
       var mine = [];
@@ -2564,6 +2730,7 @@
     var out = WKFurigana.tokens(s, {
       kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
       fixes: fixes,
+      spans: spans,
     });
     return out && out.length ? out : null;
   }
@@ -2635,7 +2802,7 @@
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset);
+    if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset, lineText);
     return cjkTokens(s, context);
   }
 
@@ -2659,8 +2826,13 @@
      * 于是中文行里的 `害` 会被读成 がい。
      */
     if (typeof offset === "number" && s.length <= 4) {
-      var line = lineText || "";
-      if (!line || line.length <= s.length) line = context || "";
+      /*
+       * 优先用注音层算好的整行原文（\`__wkLineText\`，只含原文）；
+       * 只有它拿不到时才退到 context —— context 可能是"原文 + 罗马音 + 翻译"
+       * 混在一起的容器，拿它判语种会被翻译里的中文带偏（真机现象：RNP 的
+       * 「今夜、」被按普通话注成 ジンイェ）。
+       */
+      var line = lineText || context || "";
       if (line && line.length > s.length) return lineLooksJapanese(line);
     }
     return lineLooksJapanese(s);
@@ -2703,11 +2875,66 @@
    */
   function regionText(region) {
     try {
-      if (region && state.annotator && state.annotator.textOf) return state.annotator.textOf(region) || "";
-      return region ? region.textContent || "" : "";
+      if (!region) return "";
+      var whole = state.annotator && state.annotator.textOf ? state.annotator.textOf(region) || "" : region.textContent || "";
+      /*
+       * RNP 的一个区域是 \`div.rnp-lyrics-line\`，里面装着 -original / -romaji / -translated 三层。
+       * 整块取文字会把**罗马音和中文翻译**也算成这一行的原文 ——
+       * 于是「今夜、」这种纯汉字日语行的判据里混进了中文翻译，整首被投票成中文歌，
+       * 行也被按普通话注成 ジンイェ（真机现象）。
+       * 这里和注音层用同一套"跳过哪些子层"的判据，只取原文。
+       */
+      var hasSkip = false;
+      try {
+        var kids = region.querySelectorAll ? region.querySelectorAll("[class]") : [];
+        for (var i = 0; i < kids.length; i++) {
+          if (fontSkipped(kids[i])) {
+            hasSkip = true;
+            break;
+          }
+        }
+      } catch (e0) {
+        hasSkip = false;
+      }
+      if (!hasSkip) return whole;
+      return originalText(region);
     } catch (e) {
       return "";
     }
+  }
+
+  /** 区域里"原文"那部分（跳过音译 / 翻译层和注音本身） */
+  function originalText(region) {
+    var out = "";
+    try {
+      var walker = document.createTreeWalker(region, 4, null, false); // 4 = SHOW_TEXT
+      var node;
+      while ((node = walker.nextNode())) {
+        var p = node.parentNode;
+        var skipped = false;
+        for (var q = p; q && q !== region.parentNode; q = q.parentNode) {
+          if (!q || q.nodeType !== 1) continue;
+          if (q.tagName === "RT" || q.tagName === "RP") {
+            skipped = true;
+            break;
+          }
+          var cn = typeof q.className === "string" ? q.className : "";
+          if (/(^|\s)wk-rt(\s|$)/.test(cn) || /(^|\s)wk-hide(\s|$)/.test(cn)) {
+            skipped = true;
+            break;
+          }
+          if (q !== region && fontSkipped(q)) {
+            skipped = true;
+            break;
+          }
+        }
+        if (skipped) continue;
+        out += node.nodeValue || "";
+      }
+    } catch (e) {
+      return out;
+    }
+    return out;
   }
 
   function songLooksJapanese() {
@@ -2929,18 +3156,29 @@
       segRescanTimer = null;
       var want = segRescanPending;
       segRescanPending = {};
-      if (!config.enabled || !config.llmSegment || !state.annotator || !state.annotator.rescanRegions) return;
+      if (!config.enabled || !state.annotator || !state.annotator.rescanRegions) return;
       var regions = [];
       try {
         regions = state.annotator.findRegions("lyrics");
       } catch (e) {
         return;
       }
+      /*
+       * 按"包含"匹配就够了：调用方给的可能是宿主可见原文（RNP 里带罗马音 / 翻译），
+       * 和区域原文不是逐字节相等。宁可多重扫一行，也别漏掉那一行。
+       */
       var hit = [];
       for (var j = 0; j < regions.length; j++) {
         var t = regionText(regions[j]);
         if (!t) continue;
-        if (Object.prototype.hasOwnProperty.call(want, t)) hit.push(regions[j]);
+        for (var k2 in want) {
+          if (!Object.prototype.hasOwnProperty.call(want, k2)) continue;
+          if (!k2) continue;
+          if (t.indexOf(k2) >= 0 || k2.indexOf(t) >= 0) {
+            hit.push(regions[j]);
+            break;
+          }
+        }
       }
       if (!hit.length) return;
       try {
@@ -3027,6 +3265,31 @@
       if (own && wantsJapaneseFont(el, own)) {
         out.push(el);
         return; // 这一层就是原文行，不再往下
+      }
+      for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c);
+    }
+    walk(root);
+    return out;
+  }
+
+  /**
+   * 找出"每一行原文"的最内层元素（行距写在这上面）。
+   *
+   * 为什么不能直接写在**区域**上：RNP 一个区域是 `div.rnp-lyrics-line`，
+   * 里面装着 `-original` / `-romaji` / `-translated` 三层 —— 给区域写 line-height，
+   * 罗马音和翻译那两行也会跟着变（真机现象：音译/翻译行的行距也被改了）。
+   * 所以往下钻到"自己有直接文本、又不是音译/翻译层"的那一层。
+   */
+  function lineTargets(root) {
+    var out = [];
+    function walk(el) {
+      if (!el || el.nodeType !== 1) return;
+      if (fontSkipped(el)) return; // -romaji / -translated / 占位行
+      var own = ownText(el);
+      // 只有空白（换行 / 缩进）不算"这一层是原文行"，继续往下钻
+      if (own && own.replace(/\s+/g, "")) {
+        out.push(el);
+        return; // 这一层就是一行原文，不再往下
       }
       for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c);
     }
@@ -3174,6 +3437,19 @@
       }
     }
     if (!list) list = [];
+    /*
+     * 区域 -> 真正的"原文行"那一层（RNP 的区域包着 romaji / translated 三层，
+     * 写在这上面那两行也会跟着变）。这一步只是往下钻一层，很便宜。
+     */
+    if (list.length) {
+      var leaves = [];
+      for (var li0 = 0; li0 < list.length; li0++) {
+        var sub = lineTargets(list[li0]);
+        if (!sub.length) continue;
+        for (var sj = 0; sj < sub.length; sj++) leaves.push(sub[sj]);
+      }
+      list = leaves;
+    }
     if (!want) {
       // 关掉开关：把写过的内联行高全撤掉，然后什么都不加
       clearLineHeights();
@@ -4188,7 +4464,12 @@
                * 日语歌词里汉字的振假名答案：同样不沉淀成词级词条（同一个词不同句读法不同），
                * 但要让这一屏重扫一次 —— 答案在「词 + 这句」的缓存里，重扫时会用上。
                */
-              if (RE_KANA_ANY.test(line || "") || songLooksJapanese()) schedule(0);
+              /*
+               * 只重扫那一行。为什么不能只 schedule(0)：这个词所在的文本节点
+               * 可能已经因为"同行别的词注上了"而有了记录，增量 pass 会整条跳过它 ——
+               * 模型刚给的读音永远上不了屏（真机现象：霽 / 掻 一直空着）。
+               */
+              if (RE_KANA_ANY.test(line || "") || songLooksJapanese()) scheduleSegRescan([line]);
               return;
             }
             var local = state.reader ? state.reader.read(word) : null;
@@ -4258,6 +4539,7 @@
       if (WKFurigana.clearCache) WKFurigana.clearCache();
     }
 
+    migrateLineFixes();
     installInlineEditor();
 
     state.annotator = WKAnnotate.createAnnotator({

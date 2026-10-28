@@ -197,7 +197,12 @@
     // 全角数字（１２３）同样算 —— 歌词里经常是全角的
     if (!d.core.hasKanji(s) && !/[0-9\uFF10-\uFF19]/.test(s)) return null;
     var kana = (opts && opts.kana) || "hiragana";
-    var key = cacheKey(s, kana) + "\u0001" + fixesKey(opts && opts.fixes);
+    var key =
+      cacheKey(s, kana) +
+      "\u0001" +
+      fixesKey(opts && opts.fixes) +
+      "\u0002" +
+      spansKey(opts && opts.spans);
     var hit = cache.get(key);
     if (hit) return hit.length ? hit : null;
     /*
@@ -213,6 +218,16 @@
      */
     var fixed = fixesIn(s, (opts && opts.fixes) || null, kana);
     var suppressed = suppressedIn(s, opts && opts.fixes);
+    /*
+     * 就地编辑器按**位置**存的那几条（`[[起点, 底字, 读音], ...]`）。
+     *
+     * 为什么要按位置：同一个字在一行里出现两次时，用户只想改其中一处
+     * （`魂辛辛` 里 辛辛 是 からがら，不是 からし + からし）。按"词"存的话
+     * 改一处等于把这一行里所有相同的字都改了。
+     */
+    var spans = spansIn(s, opts && opts.spans, kana);
+    // 按位置存的"留空"（编辑器里把读音清空）也要并进 suppressed
+    suppressed = suppressed.concat(spansSuppressedIn(s, opts && opts.spans));
     var segs = null;
     /*
      * 全角数字先折成半角再分词（长度一一对应，下标不用换算）。
@@ -228,10 +243,21 @@
     } catch (e) {
       segs = null;
     }
-    var out = fixed.slice();
+    var out = [];
+    for (var f0 = 0; f0 < fixed.length; f0++) {
+      var clashed = false;
+      for (var sp = 0; sp < spans.length; sp++) {
+        if (spans[sp].start < fixed[f0].end && fixed[f0].start < spans[sp].end) {
+          clashed = true;
+          break;
+        }
+      }
+      if (!clashed) out.push(fixed[f0]);
+    }
+    for (var sp2 = 0; sp2 < spans.length; sp2++) out.push(spans[sp2]);
     function coveredByFixed(a, b) {
-      for (var q = 0; q < fixed.length; q++) {
-        if (fixed[q].start < b && a < fixed[q].end) return true;
+      for (var q = 0; q < out.length; q++) {
+        if (out[q].start < b && a < out[q].end) return true;
       }
       return false;
     }
@@ -250,7 +276,36 @@
           }
           continue;
         }
-        if (!seg.rt) continue; // 没有读音的片段（标点 / 假名 / 拉丁）不注
+        if (!seg.rt) {
+          /*
+           * 词典对这几个字一个读音都没给（表外字 / 生词：掻 / 謎 / 轍）。
+           * 逐字探一次：拿这个字去喂"字 + 送假名"的各种写法，看词典给出的读音里
+           * 有没有一致的 —— `掻く` `掻き` 都读 か，就按 か 注。
+           *
+           * 为什么值得做：这类字以前整段留白（真机现象：「掻鳴らせ」的 掻 一直空着），
+           * 而它们恰恰是歌词里最需要注音的那批字。宁可给出一个一致的猜测，
+           * 也不要在屏幕上空着。探不出来的（霽 / 燦 这种词典里根本没有的）仍然留白，
+           * 交给大模型（见 candidates 的 no-reading）。
+           */
+          var nat = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
+          if (nat >= 0 && seg.text) {
+            for (var pc = 0; pc < seg.text.length; pc++) {
+              var ch = seg.text.charAt(pc);
+              if (!/[\u4E00-\u9FFF\u3005]/.test(ch)) continue;
+              if (coveredByFixed(nat + pc, nat + pc + 1)) continue;
+              var pr = probeKanjiReading(ch);
+              if (!pr) continue;
+              out.push({
+                text: s.substr(nat + pc, 1),
+                start: nat + pc,
+                end: nat + pc + 1,
+                kana: toKanaMode(pr, kana),
+                kind: "probe",
+              });
+            }
+          }
+          continue; // 没有读音的片段（标点 / 假名 / 拉丁）不注
+        }
         // at 是这一片段在整行里的起点；长度按底字算
         var at = typeof seg.at === "number" ? seg.at : s.indexOf(seg.text);
         if (at < 0) continue;
@@ -344,23 +399,41 @@
     var toks = tokens(s, { kana: kana }) || [];
     var out = [];
     /*
-     * (a) 没读音：把这一行里所有汉字段找出来，看有没有被 tokens() 覆盖 ——
-     * kuromoji 对生词给不出读音，那一段就整段空着。
+     * (a) 没读音：**逐字**看有没有被 tokens() 覆盖。
+     *
+     * 为什么按字不按整段：`掻鳴らせ` 里 鳴 有读音、掻 没有，整段比的话"有交集=覆盖"，
+     * 掻 就被判成"已经注过了"，永远不会去问模型（真机现象：掻 一直空着）。
+     * 连着的几个没读音的字合成一条（`謎謎` 问一次就够）。
      */
-    var re = /[\u4E00-\u9FFF\u3005]+/g;
+    var re = /[\u4E00-\u9FFF\u3005]/g;
     var m;
+    var run = null;
     while ((m = re.exec(s))) {
       var a = m.index;
-      var b = a + m[0].length;
+      var b = a + 1;
       var covered = false;
       for (var i = 0; i < toks.length; i++) {
-        if (toks[i].start < b && a < toks[i].end) {
+        if (toks[i].start <= a && a < toks[i].end) {
           covered = true;
           break;
         }
       }
-      if (!covered) out.push({ text: m[0], start: a, end: b, why: "no-reading" });
+      if (covered) {
+        if (run) {
+          out.push(run);
+          run = null;
+        }
+        continue;
+      }
+      if (run && run.end === a) {
+        run.end = b;
+        run.text = s.slice(run.start, b);
+      } else {
+        if (run) out.push(run);
+        run = { text: m[0], start: a, end: b, why: "no-reading" };
+      }
     }
+    if (run) out.push(run);
     /*
      * (b) 跟音译对不上：用官方的罗马音推一遍读音，跟词典给的比。
      * 只比"两边都读得出来"的段 —— 一边空的交给 (a)。
@@ -419,9 +492,57 @@
     return x === y || x.indexOf(y) >= 0 || y.indexOf(x) >= 0;
   }
 
+  /*
+   * 单个汉字的读音：拿它去喂"字 + 送假名"的几种写法，看词典给出的一不一致。
+   *
+   * 只用来兜"词典对这个字在**这一行**里给不出读音"那种情况（表外字 / 生词）。
+   * 例：掻 单独 IPADIC 没有读音，但 掻く / 掻き 都是 か → 取 か。
+   * 探不出来（霽 / 燦 这种词典里根本没有的）返回 null，留给大模型。
+   *
+   * 结论按字缓存（探一次要分词十来次，别每轮都做）。
+   */
+  var probeCache = new Map();
+  var PROBE_TAILS = ["く", "き", "る", "れ", "す", "つ", "う", "い", "む"];
+  function probeKanjiReading(ch) {
+    if (!ch) return null;
+    if (probeCache.has(ch)) return probeCache.get(ch);
+    var d = deps();
+    var best = null;
+    if (d.core && d.tokenizer) {
+      var counts = {};
+      for (var i = 0; i < PROBE_TAILS.length; i++) {
+        var segs = null;
+        try {
+          segs = d.core.tokensToSegments(d.tokenizer.tokenize(ch + PROBE_TAILS[i]), { kana: "katakana" });
+        } catch (e) {
+          segs = null;
+        }
+        if (!segs) continue;
+        for (var j = 0; j < segs.length; j++) {
+          var sg = segs[j];
+          if (!sg || !sg.rt) continue;
+          if (!sg.text || sg.text.charAt(0) !== ch) continue;
+          // 读音必须是纯假名、而且短（一个字最多三拍）
+          if (!/^[\u30A1-\u30F6\u30FC]{1,3}$/.test(sg.rt)) continue;
+          counts[sg.rt] = (counts[sg.rt] || 0) + 1;
+        }
+      }
+      var bestN = 0;
+      for (var k in counts) {
+        if (Object.prototype.hasOwnProperty.call(counts, k) && counts[k] > bestN) {
+          bestN = counts[k];
+          best = k;
+        }
+      }
+      // 至少两种写法一致才算数（只命中一种可能只是那个词的特例）
+      if (bestN < 2) best = null;
+    }
+    probeCache.set(ch, best);
+    return best;
+  }
+
   /** 平假名 / 片假名互转（用户两种写法都可能填） */
-  function toKanaMode(kana, mode) {
-    var t = String(kana == null ? "" : kana);
+  function toKanaMode(kana, mode) {    var t = String(kana == null ? "" : kana);
     if (mode === "katakana") {
       return t.replace(/[\u3041-\u3096]/g, function (c) {
         return String.fromCharCode(c.charCodeAt(0) + 0x60);
@@ -440,6 +561,62 @@
     keys.sort();
     var out = "";
     for (var i = 0; i < keys.length; i++) out += keys[i] + "=" + fixes[keys[i]] + ";";
+    return out;
+  }
+
+  /** [[起点, 底字, 读音], ...] -> 稳定的字符串（进缓存键） */
+  function spansKey(spans) {
+    if (!spans || !spans.length) return "";
+    var parts = [];
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (!sp) continue;
+      parts.push(String(sp[0]) + ":" + String(sp[1]) + "=" + String(sp[2]));
+    }
+    parts.sort();
+    return parts.join(";");
+  }
+
+  /**
+   * 按位置存的修正：`[[起点, 底字, 读音], ...]`（就地编辑器写的）。
+   *
+   * 起点在整行里对不上（用户改了别的行 / 行文本变了）就整条丢掉 ——
+   * 宁可回到词典读音，也不要把读音安到错的位置上。
+   */
+  function spansIn(s, spans, mode) {
+    var out = [];
+    if (!spans || !spans.length) return out;
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (!sp) continue;
+      var at = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+      var word = String(sp[1] == null ? "" : sp[1]);
+      var kana = String(sp[2] == null ? "" : sp[2]).trim();
+      if (!(at >= 0) || !word) continue;
+      if (!kana) continue; // 空读音 = 留空，交给 suppress
+      if (s.substr(at, word.length) !== word) continue; // 位置对不上：这条作废
+      out.push({ text: word, start: at, end: at + word.length, kana: toKanaMode(kana, mode), kind: "inline" });
+    }
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return out;
+  }
+
+  /** 按位置存的"留空"条目占的区间（读音写成空串 = 这一段不注音） */
+  function spansSuppressedIn(s, spans) {
+    var out = [];
+    if (!spans || !spans.length) return out;
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (!sp) continue;
+      var at = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+      var word = String(sp[1] == null ? "" : sp[1]);
+      var kana = String(sp[2] == null ? "" : sp[2]).trim();
+      if (!(at >= 0) || !word || kana) continue;
+      if (s.substr(at, word.length) !== word) continue;
+      out.push([at, at + word.length]);
+    }
     return out;
   }
 

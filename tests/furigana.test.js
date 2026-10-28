@@ -295,3 +295,78 @@ test("振假名：真的读出 IPADIC 的读音（kuromoji + vendor/dict）", as
     "東京 とうきょう / 空 そら：" + JSON.stringify(t2)
   );
 });
+
+test("振假名：叠字符 々 整词注（日々 ひび）、数字+汉字整词读（一歩 / 万回 / 千切れる）", async () => {
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  W.WKFurigana.configure({ dicPath: path.join(ROOT, "vendor", "dict") });
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    W.WKFurigana.load(() => resolve(true));
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("词典加载超时"));
+      }
+    }, 50);
+  });
+
+  const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(pairs("日々"), [["日々", "ひび"]], "叠字符跟着整词注");
+  assert.deepStrictEqual(pairs("あとがきで日々"), [["日々", "ひび"]], "一行里也一样");
+  assert.deepStrictEqual(pairs("一歩"), [["一歩", "いっぽ"]], "一歩 いっぽ（不是 いちほ）");
+  assert.deepStrictEqual(pairs("万回"), [["万回", "まんかい"]], "万回 まんかい（不是 いちまんかい）");
+  assert.deepStrictEqual(pairs("一万回"), [["一万回", "いちまんかい"]], "一万回 不变");
+  assert.deepStrictEqual(pairs("千切れる"), [["千切", "ちぎ"]], "千切れる ちぎれる");
+});
+
+test("词典读不出的汉字：用「字 + 送假名」探读音（掻 か）", async () => {
+  /*
+   * 掻 单独的 IPADIC 词条没有读音，整段留白（真机现象：「掻鳴らせ」的 掻 一直空着）。
+   * 现在拿这个字去喂 掻く / 掻き / 掻る…，几种写法读音一致就按它注。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  W.WKFurigana.configure({ dicPath: path.join(ROOT, "vendor", "dict") });
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    W.WKFurigana.load(() => resolve(true));
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("词典加载超时"));
+      }
+    }, 50);
+  });
+  const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(pairs("掻鳴らせ"), [["掻", "か"], ["鳴", "な"]], "掻 要探出 か：" + JSON.stringify(pairs("掻鳴らせ")));
+  assert.deepStrictEqual(pairs("轍のあと"), [["轍", "わだち"]], "轍 わだち");
+});
