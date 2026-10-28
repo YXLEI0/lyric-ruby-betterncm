@@ -754,6 +754,8 @@
             }
           }
           if (skip) continue;
+          // 区域自己的缩进 / 换行（RNP 那种一层层 div 的写法）不算正文
+          if (node.parentNode === el && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
           out += node.nodeValue || "";
         }
       } catch (e) {
@@ -791,6 +793,8 @@
             var cn = typeof p.className === "string" ? p.className : "";
             if (/(^|\s)wk-(rt|hide)(\s|$)/.test(cn)) continue;
           }
+          // 和 originalTextOf 同一套规矩：区域直接的空白文本不占位置
+          if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
           node.__wkOffset = at;
           node.__wkLineText = lineText;
           at += (node.nodeValue || "").length;

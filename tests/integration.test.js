@@ -5167,8 +5167,13 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
       ["天気", "てんき"],
       ["良", "い"],
       ["散歩", "さんぽ"],
-      ["light", "ライト"],
-      ["clover", "クローバー"],
+      ["Excuse", "エクスキューズ"],
+      ["Can", "キャン"],
+      ["tell", "テル"],
+      ["shirt", "シャツ"],
+      ["Yes", "イエス"],
+      ["nine", "ナイン"],
+      ["fifteen", "フィフティーン"],
     ],
     "预览的示例读音（默认平假名）"
   );
@@ -5184,7 +5189,11 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
   };
   assert.strictEqual(plain(lines[0]), "天気が良いから", "示例句 1");
   assert.strictEqual(plain(lines[1]), "散歩しましょう", "示例句 2");
-  assert.strictEqual(plain(lines[2]), "ずっと light と clover", "示例句 3");
+  assert.strictEqual(
+    plain(lines[2]),
+    "Excuse me. Can you tell me how much the shirt is?\nYes, it's nine fifteen.",
+    "示例句 3（英文两句）"
+  );
 
   // 切成片假名写法：预览跟着变
   const kata = bootPlugin(NCM_HTML, { dev: true, config: { furiganaKana: "katakana" } });
@@ -5200,8 +5209,13 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
       ["天気", "テンキ"],
       ["良", "イ"],
       ["散歩", "サンポ"],
-      ["light", "ライト"],
-      ["clover", "クローバー"],
+      ["Excuse", "エクスキューズ"],
+      ["Can", "キャン"],
+      ["tell", "テル"],
+      ["shirt", "シャツ"],
+      ["Yes", "イエス"],
+      ["nine", "ナイン"],
+      ["fifteen", "フィフティーン"],
     ],
     "切成片假名之后预览也要跟着变"
   );
@@ -5807,6 +5821,25 @@ test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认�
     "样式要跟原生按钮一样（抄它的 class）：" + rnpBtns.map((b) => b.className).join(",")
   );
 
+  // 竖排的工具条（RNP 那种一列）：按钮改成单字，而且颜色 / 尺寸要钉住（真机上出现过看不见）
+  const VERT = `<!doctype html><html><head></head><body>
+<div class="rnp-lyrics">
+  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-original">いざなった clover へ</div></div>
+  <div class="rnp-lyrics-tools" style="display:flex;flex-direction:column;">
+    <span class="tool-btn">译</span><span class="tool-btn">音</span><span class="tool-btn">逐字</span>
+  </div>
+</div></body></html>`;
+  const vert = bootPlugin(VERT, { config: { online: false, llmEnabled: false } });
+  vert.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ" }));
+  await vert.runLoad();
+  await sleep(900);
+  const vertBar = vert.document.querySelector(".rnp-lyrics-tools .wk-bar");
+  assert.ok(vertBar, "竖排工具条也要停靠：" + vert.document.querySelector(".rnp-lyrics-tools").outerHTML);
+  const vertBtns = Array.from(vertBar.querySelectorAll("button"));
+  assert.deepStrictEqual(vertBtns.map((b) => b.textContent), ["注", "重"], "竖排用单字，别把那一列撑开");
+  assert.strictEqual(vertBtns[0].style.color, "rgb(255, 255, 255)", "按钮颜色要钉住（不然继承到透明色就看不见）");
+  assert.ok(vertBtns[0].style.minWidth === "18px", "给个最小尺寸，别被压成 0 宽");
+
   const NCM = `<!doctype html><html><head></head><body>
 <div class="m-lyric">
   <ul class="lyric"><li class="line"><p>いざなった clover へ</p></li></ul>
@@ -5867,4 +5900,59 @@ test("留空之后还能点回来：留空的那一段包一层壳，双击就�
   ]);
   assert.deepStrictEqual(pairs, [["明日", "あす"], ["君", "きみ"]], "填回来要生效：" + p.innerHTML);
   assert.strictEqual(p.querySelector(".wk-blank"), null, "填回来之后别再留壳");
+});
+
+test("就地改读音 / 留空：行文本按原文那层算（RNP 里带罗马音和翻译也不影响）", async () => {
+  /*
+   * RNP 一个区域里包着 original / romaji / translated。以前就地改读音存的是
+   * 整块 textContent（含罗马音和翻译），和注音时用的那一行**对不上**：
+   * 改完看不到效果、留空之后读音又回来（用户报的就是这个）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="rnp-lyrics">
+  <div class="rnp-lyrics-line">
+    <div class="rnp-lyrics-line-original">たった1つの音をかき鳴らす</div>
+    <div class="rnp-lyrics-line-romaji">ta tta hi to tsu no o to wo ka ki na ra su</div>
+    <div class="rnp-lyrics-line-translated">奏响着同样的声音</div>
+  </div>
+</div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    perCharTokenizer({ 1: "ヒトツ", 音: "オト", 鳴: "ナ", た: "タ", っ: "ッ", の: "ノ", を: "ヲ", か: "カ", き: "キ", ら: "ラ", す: "ス" })
+  );
+  await env.runLoad();
+  await sleep(500);
+
+  const p = env.document.querySelector(".rnp-lyrics-line-original");
+  const find = (word) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === word)[0] || null;
+  const one = find("1");
+  assert.ok(one, "要先注上 1：" + p.innerHTML);
+  one.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击要弹输入框");
+  box.value = "-";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(
+    saved.furiganaLineSpans,
+    { たった1つの音をかき鳴らす: [[3, "1", ""]] },
+    "行文本只含原文、起点也只数原文：" + JSON.stringify(saved.furiganaLineSpans)
+  );
+  assert.strictEqual(find("1"), null, "留空之后不许再有 1 的注音：" + p.innerHTML);
+  const blank = p.querySelector(".wk-blank");
+  assert.ok(blank, "留空处要有可点击的壳：" + p.innerHTML);
+
+  // 从壳里填回来
+  blank.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box2 = env.document.querySelector("input.wk-edit");
+  box2.value = "ひとつ";
+  box2.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+  assert.ok(find("1"), "填回来之后要重新注上：" + p.innerHTML);
+  assert.strictEqual(find("1").querySelector(".wk-rt").textContent, "ひとつ");
 });

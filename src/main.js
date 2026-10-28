@@ -2132,7 +2132,14 @@
   }
 
   function lineTextOf(el) {
+    /*
+     * 必须和注音层用**同一个口径**：只取原文那层（RNP 的区域里还包着 -romaji / -translated，
+     * 整块 textContent 会把它们也算进来）。以前这里是 textOf(区域) 的全文，
+     * 于是就地改的读音存进了一个和注音时对不上的键 —— 改完 / 留空都不生效
+     * （真机现象：输入 - 之后读音又回来了）。
+     */
     try {
+      if (el && el.getAttribute && el.getAttribute("data-wk-region") === "1") return regionText(el);
       if (state.annotator && state.annotator.textOf) return state.annotator.textOf(el) || "";
     } catch (e) {
       /* 退回到 textContent */
@@ -2198,6 +2205,21 @@
         if (/(^|\s)wk-rt(\s|$)/.test(cn) || /(^|\s)wk-hide(\s|$)/.test(cn)) continue;
       }
       if (node === base) return total;
+      // 区域自己的缩进 / 换行不算位置（和 regionText 同一套规矩）
+      if (node.parentNode === lineEl && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
+      /*
+       * 只数"原文"那层的字：音译 / 翻译层（fontSkipped）和注音（rt）都不算，
+       * 否则 RNP 里算出来的起点会多出几十个字符，存的修正对不上任何一行。
+       */
+      var skippedLayer = false;
+      for (var q = p; q && q !== lineEl; q = q.parentNode) {
+        if (!q || q.nodeType !== 1) continue;
+        if (q !== lineEl && fontSkipped(q)) {
+          skippedLayer = true;
+          break;
+        }
+      }
+      if (skippedLayer) continue;
       total += (node.nodeValue || "").length;
     }
     return -1;
@@ -2717,7 +2739,15 @@
      * 用哪段文字当"整行"：优先注音层算好的 __wkLineText（只含原文、不含翻译层），
      * 它比 context 可靠 —— 逐字歌词里 context 可能就退化成一个字。
      */
-    var line = lineText && lineText.length > s.length ? lineText : context || s;
+    /*
+     * 整行文本：优先用注音层算好的 __wkLineText（只含原文），
+     * 它就算和这一段一样长也要用它 —— 退到 context 的话，RNP 里那串
+     * "原文 + 罗马音 + 翻译"会被当成整行，偏移量全对不上，整行反而注不出来。
+     */
+    var line = "";
+    if (lineText && lineText.length >= s.length) line = lineText;
+    else if (context && context.length > s.length) line = context;
+    if (!line) line = s;
     var fixes = furiganaFixes(line, s, host);
     var spans = lineSpans(line);
     /*
@@ -2958,6 +2988,7 @@
           }
         }
         if (skipped) continue;
+        if (node.parentNode === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
         out += node.nodeValue || "";
       }
     } catch (e) {
@@ -3585,7 +3616,7 @@
       "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
       "#lyric-ruby-config .wk-preview-trans { margin-top: 2px; font-size: 14px; opacity: .6; }" +
       "#lyric-ruby-config .wk-preview { background: linear-gradient(darkslategray 0%, midnightblue 100%); color: #fff; }" +
-      "#lyric-ruby-config .wk-pv-line { font-size: 22px; line-height: 2.1; }" +
+      "#lyric-ruby-config .wk-pv-line { font-size: 22px; line-height: 2.1; white-space: pre-line; }" +
       "#lyric-ruby-config .wk-pv-bold { font-weight: bold; }" +
       "#lyric-ruby-config .wk-pv-dim { font-size: 18px; opacity: .75; }" +
       "#lyric-ruby-config .wk-llm-state { margin: 2px 0; }" +
@@ -3939,8 +3970,17 @@
           bold: true,
         },
         {
-          text: "ずっと light と clover",
-          rubies: [["light", "ライト"], ["clover", "クローバー"]],
+          // 第三行：英文句子（顺便说明"西文字母也照旧注片假名"，而且是整句的语境）
+          text: "Excuse me. Can you tell me how much the shirt is?\nYes, it's nine fifteen.",
+          rubies: [
+            ["Excuse", "エクスキューズ"],
+            ["Can", "キャン"],
+            ["tell", "テル"],
+            ["shirt", "シャツ"],
+            ["Yes", "イエス"],
+            ["nine", "ナイン"],
+            ["fifteen", "フィフティーン"],
+          ],
           bold: false,
           dim: true,
         },
@@ -4403,10 +4443,13 @@
   function updateLyricBar() {
     if (!lyricBar || !lyricBar.isConnected) return;
     var docked = /docked/.test(lyricBar.className || "");
+    var vert = docked && lyricBar.getAttribute("data-wk-vert") === "1";
     var t = lyricBar.querySelector('[data-wk-act="toggle"]');
-    if (t) t.textContent = docked ? (config.enabled ? "注音" : "注音关") : config.enabled ? "注音 开" : "注音 关";
+    if (t) {
+      t.textContent = vert ? "注" : docked ? (config.enabled ? "注音" : "注音关") : config.enabled ? "注音 开" : "注音 关";
+    }
     var r = lyricBar.querySelector('[data-wk-act="reset"]');
-    if (r) r.textContent = docked ? "重置" : "重置本首";
+    if (r) r.textContent = vert ? "重" : docked ? "重置" : "重置本首";
   }
 
   /*
@@ -4446,22 +4489,57 @@
     return null;
   }
 
-  /** 把两个按钮停靠到原生工具条里，样式跟着原生按钮走 */
+  /** 原生那一栏是不是竖着排的（RNP 的 译/音/逐字 就是一列） */
+  function dockIsVertical(parent) {
+    try {
+      var cs = window.getComputedStyle ? window.getComputedStyle(parent) : null;
+      if (cs && /column/.test(cs.flexDirection || "")) return true;
+    } catch (e) {
+      /* 拿不到样式就当横排 */
+    }
+    return false;
+  }
+
+  /** 把两个按钮停靠到原生工具条里，样式跟原生按钮一致 */
   function dockBar(anchor) {
     var parent = anchor.parentNode;
     if (!parent) return false;
     var cls = typeof anchor.className === "string" ? anchor.className : "";
     // 别把"选中/禁用"这类状态类抄过来
     cls = cls.replace(/(^|\s)(active|selected|on|off|disabled|checked|current|hover)(?=\s|$)/g, " ").replace(/\s+/g, " ").trim();
+    var vertical = dockIsVertical(parent);
     var bar = document.createElement("span");
     bar.className = "wk-bar wk-bar-docked";
     bar.setAttribute("data-wk-ui", "1");
-    bar.style.cssText = "display:inline-flex;align-items:center;gap:2px;margin-left:6px;vertical-align:middle;";
-    var b1 = barButton("注音", "toggle");
-    var b2 = barButton("重置", "reset");
+    bar.setAttribute("data-wk-vert", vertical ? "1" : "0");
+    bar.style.cssText = vertical
+      ? "display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:4px;"
+      : "display:inline-flex;align-items:center;gap:2px;margin-left:6px;vertical-align:middle;";
+    var b1 = barButton(vertical ? "注" : "注音", "toggle");
+    var b2 = barButton(vertical ? "重" : "重置", "reset");
+    b1.title = "开关注音";
+    b2.title = "重置本首（清掉这一首里改过的读音）";
     [b1, b2].forEach(function (b) {
       if (cls) b.className = cls;
-      b.style.cssText = "margin:0 2px;padding:0 2px;font-size:inherit;line-height:inherit;cursor:pointer;border:0;background:transparent;color:inherit;font-family:inherit;";
+      /*
+       * 抄 class 是为了跟原生按钮同一副样子，但原生样式不一定给颜色 / 尺寸 ——
+       * 真机上出现过"按钮在 DOM 里、屏幕上看不见"（继承到透明色或被压成 0 宽）。
+       * 关键几条用 important 钉住，保证它看得见、点得到。
+       */
+      b.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;" +
+        "min-width:18px;min-height:18px;margin:2px;padding:2px 4px;box-sizing:border-box;" +
+        "font-size:11px;line-height:1.2;font-family:inherit;white-space:nowrap;cursor:pointer;" +
+        "border-radius:6px;border:1px solid rgba(255,255,255,.35);" +
+        "background:rgba(20,26,38,.55);color:#fff;";
+      try {
+        b.style.setProperty("color", "#fff", "important");
+        b.style.setProperty("background-color", "rgba(20,26,38,.55)", "important");
+        b.style.setProperty("opacity", "1", "important");
+        b.style.setProperty("visibility", "visible", "important");
+      } catch (e2) {
+        /* 老引擎不支持就算了 */
+      }
     });
     bar.appendChild(b1);
     bar.appendChild(b2);
