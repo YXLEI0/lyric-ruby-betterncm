@@ -55,7 +55,11 @@
    * @returns {string|null} 片假名读音；认不出来返回 null
    */
   function reading(value) {
-    var d = String(value == null ? "" : value).replace(/[^0-9]/g, "");
+    // 全角数字（１２３）也要认：歌词里很常见
+    var d = String(value == null ? "" : value).replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+    d = d.replace(/[^0-9]/g, "");
     if (!d) return null;
     // 去掉前导 0；全是 0 就是「ゼロ」
     d = d.replace(/^0+/, "");
@@ -87,7 +91,7 @@
     scan: function (text) {
       var s = String(text == null ? "" : text);
       var out = [];
-      var re = /[0-9]+/g;
+      var re = /[0-9\uFF10-\uFF19]+/g;
       var m;
       while ((m = re.exec(s))) out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
       return out;

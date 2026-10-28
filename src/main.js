@@ -205,6 +205,8 @@
     furiganaOverrides: "",
     // 歌词界面里就地改的读音：{ 整行原文: { 词: 假名 } }（按行，不做全局词表）
     furiganaLineFixes: {},
+    // 统一行距：有注音的行和没注音的行一样高（给整行一个固定 line-height）
+    uniformLineHeight: true,
     // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
     jpnFont: true,
     jpnFontFamily: JP_FONT_DEFAULT,
@@ -2193,8 +2195,8 @@
         ev.stopPropagation();
         var v = String(box.value || "").replace(/^\s+/, "").replace(/\s+$/, "");
         closeEditor();
-        if (v && v !== current) saveInlineFix(lineText, word, v);
-        else if (!v) saveInlineFix(lineText, word, ""); // 清空 = 撤销这条
+        // 回车：有内容就存读音；清空则"留空"（这一行不给这个词注音），不是撤销
+        if (v !== current) saveInlineFix(lineText, word, v);
       } else if (k === "Escape") {
         ev.preventDefault();
         closeEditor();
@@ -2594,6 +2596,7 @@
        */
       updateSongScope();
       updateJapaneseFont();
+      updateLineHeight();
       var regions = null;
       if (config.scope === "lyrics") regions = state.annotator.findRegions("lyrics");
       else if (config.scope === "titles") regions = state.annotator.findRegions("titles");
@@ -2904,6 +2907,46 @@
     jpFontCss = want ? "inline" : "";
   }
 
+  /**
+   * 统一行距。
+   *
+   * 有注音的行会被 <rt> 撑高一点，于是"唱到那行时整块歌词往上跳"。
+   * 只靠 rt 的 line-height 归零不够（不同歌词插件对行高的写法不一样），
+   * 干脆给**每一行**一个固定的 line-height：有注音、没注音一样高。
+   * 值取 2.2 —— 够放下一行 55% 的注音，又不会把行拉得太开。
+   */
+  var lineHeightCss = null;
+  function updateLineHeight() {
+    var want = config.uniformLineHeight !== false;
+    var css = "";
+    if (want) {
+      var sels =
+        typeof state.annotator !== "undefined" && state.annotator && state.annotator.lyricSelectors
+          ? state.annotator.lyricSelectors()
+          : ["ul.lyric li p", ".rnp-lyrics-line-original"];
+      var parts = ["[data-wk-region]"];
+      for (var i = 0; i < sels.length; i++) parts.push(sels[i]);
+      css = parts.join(",\n") + " { line-height: 2.2 !important; }";
+    }
+    if (css === lineHeightCss) return;
+    lineHeightCss = css;
+    try {
+      var el = document.getElementById("lyric-ruby-lineheight");
+      if (!css) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        return;
+      }
+      if (!el) {
+        el = document.createElement("style");
+        el.id = "lyric-ruby-lineheight";
+        (document.head || document.documentElement).appendChild(el);
+      }
+      el.textContent = css;
+    } catch (e) {
+      /* 挂不上不影响注音 */
+    }
+  }
+
   function updateStyles() {
     if (typeof WKAnnotate !== "undefined" && WKAnnotate.applyStyles) {
       WKAnnotate.applyStyles(document, {
@@ -2978,6 +3021,7 @@
       "<h3>外观</h3>" +
       '<div class="wk-row"><label>注音字号 <input type="range" data-k="rtSize" min="30" max="120" step="1"> <span data-v="rtSize"></span></label></div>' +
       '<div class="wk-row"><label>注音不透明度 <input type="range" data-k="rtOpacity" min="10" max="100" step="1"> <span data-v="rtOpacity"></span></label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="uniformLineHeight"> 统一行距（有注音/没注音一样高）</label></div>' +
       '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label> ' +
       '<button data-a="fontReset">重置</button> <span data-v="fontReset"></span></div>' +
       '<div class="wk-hint">填字体名（逗号分隔多个），只对日语歌生效；清空 = 用默认</div>' +
@@ -3450,6 +3494,7 @@
     var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana", "furiganaOverrides"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
+    var NEEDS_LINEHEIGHT = ["uniformLineHeight"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
 
     var inputs = root.querySelectorAll("[data-k]");
@@ -3517,6 +3562,9 @@
               if (state0) state0.textContent = cnt ? "已生效 " + cnt + " 条" : "没有规则";
             }
             rescan();
+          } else if (NEEDS_LINEHEIGHT.indexOf(key) >= 0) {
+            lineHeightCss = null;
+            updateLineHeight();
           } else if (NEEDS_FONT.indexOf(key) >= 0) {
             // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次样式表
             jpFontCss = null;

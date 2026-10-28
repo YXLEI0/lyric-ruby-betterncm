@@ -169,6 +169,21 @@ test("按行修正：fixes 只对这一行生效（同一个词换个句子可�
   );
 });
 
+test("按行修正：读音写成空串 = 留空（这一行不给这个词注音）", () => {
+  /*
+   * 当て字（帷帳 とばり 这种）在某些句子里干脆不该注音 ——
+   * 面板 / 就地编辑器把读音写成空串就表示"留空"。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 帷: "トバリ", 帳: "チョウ" }));
+  assert.deepStrictEqual(
+    Array.from(W.WKFurigana.tokens("帷帳の奥", { fixes: { 帷: "" } }), (t) => [t.text, t.kana]),
+    [["帳", "ちょう"]],
+    "留空的词不注，其余照旧：" + JSON.stringify(W.WKFurigana.tokens("帷帳の奥", { fixes: { 帷: "" } }))
+  );
+});
+
 test("按行修正：长词优先，重叠的短词不重复注", () => {
   const ctx = newWindow();
   const W = ctx.window;

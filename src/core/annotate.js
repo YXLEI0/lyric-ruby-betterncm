@@ -186,8 +186,15 @@
    */
   var RE_PLACEHOLDER = /(?:纯音乐|純音楽|请欣赏|請欣賞|暂无歌词|暫無歌詞|此歌曲为纯音乐|此歌曲為純音樂|instrumental)/i;
 
+  /*
+   * 歌词站的"信息行"：`滚动歌词贡献者：Tiy - 21`、`翻译贡献者：…`、`歌词贡献者` 这类。
+   * 它们挂在歌词列表里，但不是歌词，一个字都不该注（真机上被逐字注了日语读音）。
+   */
+  var RE_INFO_LINE = /(?:贡献者|貢獻者|滚动歌词|滾動歌詞|歌词校对|歌詞校對|翻译君|翻譯君)/;
+
   function isPlaceholderLine(t) {
-    return RE_PLACEHOLDER.test(String(t == null ? "" : t));
+    var s = String(t == null ? "" : t);
+    return RE_PLACEHOLDER.test(s) || RE_INFO_LINE.test(s);
   }
 
   /** 这一行是不是制作信息 / 署名 / 版权编号（几种写法都认） */
@@ -2164,7 +2171,18 @@ function buildRuby(base, gloss, provisional, source) {
         // 单个字母的节点也要看（逐字歌词、别的插件拆行时 `T氏` 的 T 就是这种），
         // 只把"连一个可读词都没有"的短节点挡掉
         if (!text) continue;
-        if (text.length < 2 && !matcher.hasReadable(text)) continue;
+        /*
+         * 太短的节点一般跳过（"连一个可读词都没有"）。
+         * 但逐字歌词把每个字拆成独立文本节点：单个汉字 / 假名 / 谚文也是有效的注音单位，
+         * 不能因为长度 1 就丢掉 —— 否则逐字模式下只有"空格前那一个字"能被注音。
+         */
+        if (
+          text.length < 2 &&
+          !matcher.hasReadable(text) &&
+          !/[\u3041-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3\uFF10-\uFF19]/.test(text)
+        ) {
+          continue;
+        }
         if (isCreditText(text)) continue; // 制作信息行跳过
         /*
          * 占位行（纯音乐曲目那句 `纯音乐，请欣赏`，以及 `暂无歌词` 这类提示）：

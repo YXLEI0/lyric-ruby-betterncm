@@ -211,6 +211,7 @@
      * 所以修正只对"这一行"生效，键是行文本里的词。
      */
     var fixed = fixesIn(s, (opts && opts.fixes) || null, kana);
+    var suppressed = suppressedIn(s, opts && opts.fixes);
     var segs = null;
     try {
       segs = d.core.tokensToSegments(d.tokenizer.tokenize(s), { kana: kana });
@@ -247,6 +248,14 @@
         var text0 = s.substr(at, seg.text.length);
         if (!text0) continue;
         if (coveredByFixed(at, at + text0.length)) continue; // 用户已经指定了这段怎么读
+        var gone = false;
+        for (var q2 = 0; q2 < suppressed.length; q2++) {
+          if (suppressed[q2][0] < at + text0.length && at < suppressed[q2][1]) {
+            gone = true;
+            break;
+          }
+        }
+        if (gone) continue; // 用户把这段的注音留空了
         out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
       }
     }
@@ -266,6 +275,14 @@
           }
         }
         if (covered) continue;
+        var numGone = false;
+        for (var q3 = 0; q3 < suppressed.length; q3++) {
+          if (suppressed[q3][0] < run.end && run.start < suppressed[q3][1]) {
+            numGone = true;
+            break;
+          }
+        }
+        if (numGone) continue;
         var numKana = WKNumbers.reading(run.text);
         if (!numKana) continue;
         out.push({
@@ -420,7 +437,8 @@
     for (var i = 0; i < list.length; i++) {
       var word = list[i][0];
       var kana = String(list[i][1] || "").trim();
-      if (!word || !kana) continue;
+      if (!word) continue;
+      if (!kana) continue; // 空读音 = 留空，交给调用方按 suppress 处理
       var from = 0;
       while (from <= s.length - word.length) {
         var at = s.indexOf(word, from);
@@ -441,6 +459,25 @@
     out.sort(function (a, b) {
       return a.start - b.start;
     });
+    return out;
+  }
+
+  /** fixes 里"值为空"的词 = 这一行不要注音，返回它们占的区间 */
+  function suppressedIn(s, fixes) {
+    var out = [];
+    if (!fixes) return out;
+    for (var k in fixes) {
+      if (!Object.prototype.hasOwnProperty.call(fixes, k)) continue;
+      if (String(fixes[k] == null ? "" : fixes[k]).trim()) continue;
+      if (!k) continue;
+      var from = 0;
+      while (from <= s.length - k.length) {
+        var at = s.indexOf(k, from);
+        if (at < 0) break;
+        from = at + 1;
+        out.push([at, at + k.length]);
+      }
+    }
     return out;
   }
 

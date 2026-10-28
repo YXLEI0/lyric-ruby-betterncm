@@ -3919,6 +3919,60 @@ test("词典读不出的汉字交给大模型（按整句问，答案是平假�
   assert.deepStrictEqual(pairs, [["謎", "なぞ"]], "模型给的读音要注上去：" + p.innerHTML);
 });
 
+test("逐字歌词：每个字一个文本节点时也要注音（不只空格前那个字）", async () => {
+  /*
+   * 真机现象：开了逐字歌词之后，只有空格前那一个字有读音，其它字都没有。
+   * 原因是注音层有个"太短的节点跳过"的判据（长度 1 且没有西文字母），
+   * 而逐字模式正是"一个字一个文本节点"。现在单个汉字 / 假名 / 全角数字都放行。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p><span>帷</span><span>帳</span><span>の</span><span>奥</span><span>か</span><span>ら</span></p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 帷: "トバリ", 帳: "チョウ", 奥: "オク", の: "ノ", か: "カ", ら: "ラ" })
+  );
+  await env.runLoad();
+  await sleep(300);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  assert.deepStrictEqual(pairs, ["帷", "帳", "奥"], "逐字节点要逐个注上：" + p.innerHTML);
+});
+
+test("全角数字要注音、信息行不许注音", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>６つの景色</p></li>
+  <li class="line"><p>滚动歌词贡献者：Tiy - 21</p></li>
+  <li class="line"><p>翻译贡献者：Tiy-21</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 景色: "ケシキ", の: "ノ", つ: "ツ" }));
+  await env.runLoad();
+  await sleep(300);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const nums = Array.from(ps[0].querySelectorAll("ruby.wk-ruby")).filter(
+    (r) => (r.childNodes[0].nodeValue || "").indexOf("６") >= 0
+  );
+  assert.strictEqual(nums.length, 1, "全角数字也要注音：" + ps[0].innerHTML);
+  for (let i = 1; i < 3; i++) {
+    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "信息行不许注音：" + ps[i].textContent);
+  }
+});
+
+test("统一行距：歌词行有固定 line-height 样式", async () => {
+  const env = bootPlugin(NCM_HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(250);
+  const style = env.document.getElementById("lyric-ruby-lineheight");
+  assert.ok(style, "要有统一行距的样式表");
+  assert.ok(/line-height:\s*2\.2/.test(style.textContent), "行高固定 2.2：" + style.textContent);
+  assert.ok(/ul\.lyric li p/.test(style.textContent), "要覆盖歌词选择器：" + style.textContent);
+});
+
 test("歌词界面里双击注音就能改：只改这一行，并落盘", async () => {
   /*
    * 用户要"直接在歌词界面选中改读音"：双击一个注音 -> 就地弹输入框 -> 回车保存。
