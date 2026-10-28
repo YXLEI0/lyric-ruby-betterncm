@@ -370,3 +370,16 @@ test("词典读不出的汉字：用「字 + 送假名」探读音（掻 か）"
   assert.deepStrictEqual(pairs("掻鳴らせ"), [["掻", "か"], ["鳴", "な"]], "掻 要探出 か：" + JSON.stringify(pairs("掻鳴らせ")));
   assert.deepStrictEqual(pairs("轍のあと"), [["轍", "わだち"]], "轍 わだち");
 });
+
+test("按行修正：数字 + 假名只注数字（fixes / spans 两种都成立）", () => {
+  /*
+   * 大模型切词 / 就地编辑器给的「1つ ひとつ」也要按同一条规矩截底字，
+   * 否则同一个 1つ 会出现两种注法（ひとつ 又盖到 つ 上面去）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 1: null, つ: "ツ", 音: "オト" }));
+  const pairs = (opts) => Array.from(W.WKFurigana.tokens("たった1つの音をか", opts) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(pairs({ fixes: { "1つ": "ひとつ" } }), [["1", "ひとつ"], ["音", "おと"]], "fixes 也要截");
+  assert.deepStrictEqual(pairs({ spans: [[3, "1つ", "ひとつ"]] }), [["1", "ひとつ"], ["音", "おと"]], "spans 也要截");
+});

@@ -2164,7 +2164,13 @@
     for (var i = 0; i < list.length; i++) {
       if (list[i] && list[i][0] !== at) next.push(list[i]);
     }
-    next.push([at, word, kana || ""]);
+    /*
+     * 三种写法：
+     *   有内容   -> 这一处按它读；
+     *   空字符串 -> 留空（这一处不注音）；
+     *   null     -> 删掉这一条（回到底层读音）。
+     */
+    if (kana !== null) next.push([at, word, kana || ""]);
     if (next.length) map[lineText] = next;
     else delete map[lineText];
     saveConfig();
@@ -2263,6 +2269,8 @@
     box.type = "text";
     box.className = "wk-edit";
     box.value = current;
+    box.placeholder = "回车保存｜清空=恢复默认｜- = 留空";
+    box.title = "回车保存；清空输入框 = 恢复词典读音；输入 - = 这一处不注音";
     box.style.fontSize = "14px";
     box.style.padding = "2px 6px";
     box.style.width = Math.max(80, (current.length + 4) * 14) + "px";
@@ -2315,8 +2323,21 @@
         ev.stopPropagation();
         var v = String(box.value || "").replace(/^\s+/, "").replace(/\s+$/, "");
         closeEditor();
-        // 回车：有内容就存读音；清空则"留空"（这一行不给这一段注音），不是撤销
-        if (v !== current || span.word !== word) saveInlineFix(lineText, span.at, span.word, v);
+        /*
+         * 回车三种：
+         *   有内容 -> 按它读；
+         *   清空   -> **恢复默认**（把这一处的修改删掉，回到词典读音）——
+         *             以前清空是"留空"，而留空之后这一处没有注音了，双击也就没了目标，
+         *             等于这一处再也改不回来（用户报的就是这个）；
+         *   减号 - -> 留空（这一处不注音，给 帷帳 とばり 这种当て字用）。
+         */
+        if (v === "-" || v === "\u2212" || v === "\uFF0D") {
+          saveInlineFix(lineText, span.at, span.word, "");
+        } else if (!v) {
+          if (span.word !== word || current) saveInlineFix(lineText, span.at, span.word, null);
+        } else if (v !== current || span.word !== word) {
+          saveInlineFix(lineText, span.at, span.word, v);
+        }
       } else if (k === "Escape") {
         ev.preventDefault();
         closeEditor();
@@ -2802,6 +2823,12 @@
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
+    // 我们自己的工具条（注音 开 / 重置本首）不注音
+    try {
+      if (host && host.closest && host.closest("[data-wk-ui]")) return null;
+    } catch (eUI) {
+      /* 老浏览器没有 closest：忽略 */
+    }
     if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset, lineText);
     return cjkTokens(s, context);
   }
@@ -3002,6 +3029,12 @@
         regions = state.annotator.findRegions("lyrics");
       }
       state.lastResult = state.annotator.pass(regions);
+      // 歌词页右上角的两个小按钮（开关 / 重置本首），容器换了就重建
+      try {
+        ensureLyricBar();
+      } catch (eBar) {
+        /* 工具条挂不上不影响注音 */
+      }
       // 行距用 pass 交回来的"原文行"，不再自己查一遍 DOM（见 updateLineHeight 的说明）
       updateLineHeight(state.lastResult && state.lastResult.lyricRegions);
       /*
@@ -4314,6 +4347,7 @@
 
   function notifyConfigUI() {
     try {
+      updateLyricBar();
       if (typeof plugin !== "undefined" && plugin.onConfig && !state.configRoot) {
         state.configRoot = buildConfigUI();
       }
@@ -4324,6 +4358,166 @@
     } catch (e) {
       /* 面板只是显示用，不能因为它把插件搞崩 */
     }
+  }
+
+  // ------------------------------------------------------------ 歌词页工具条
+
+  /*
+   * 歌词页右下角的两个小按钮：开关注音、重置本首的读音。
+   *
+   * 为什么要做在歌词页：插件设置面板要点进 BetterNCM 菜单，改读音 / 临时关掉注音
+   * 时来回跳很烦。默认页和 RNP 的容器不一样（`.m-lyric` / `.rnp-lyrics`），
+   * 两边都要挂上；容器换了（换页面 / RNP 重绘）就重建。
+   */
+  var lyricBar = null;
+  var lyricBarAt = 0;
+
+  function lyricPageHost() {
+    var sels = [".m-lyric", ".rnp-lyrics", "[class^='rnp-lyrics']", "ul.lyric"];
+    for (var i = 0; i < sels.length; i++) {
+      var el = null;
+      try {
+        el = document.querySelector(sels[i]);
+      } catch (e) {
+        el = null;
+      }
+      if (el && el.isConnected) return el;
+    }
+    return null;
+  }
+
+  function barButton(label, act) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("data-wk-act", act);
+    b.textContent = label;
+    b.style.cssText =
+      "font-size:12px;line-height:1;padding:3px 7px;border-radius:10px;cursor:pointer;" +
+      "border:1px solid rgba(255,255,255,.35);background:rgba(30,36,48,.55);color:#fff;" +
+      "font-family:inherit;white-space:nowrap;";
+    return b;
+  }
+
+  function updateLyricBar() {
+    if (!lyricBar || !lyricBar.isConnected) return;
+    var t = lyricBar.querySelector('[data-wk-act="toggle"]');
+    if (t) t.textContent = config.enabled ? "注音 开" : "注音 关";
+    var r = lyricBar.querySelector('[data-wk-act="reset"]');
+    if (r) r.textContent = "重置本首";
+  }
+
+  function ensureLyricBar() {
+    var now = Date.now();
+    if (lyricBar && lyricBar.isConnected) {
+      updateLyricBar();
+      return;
+    }
+    if (now - lyricBarAt < 1000) return; // 一秒查一次容器就够了
+    lyricBarAt = now;
+    var host = lyricPageHost();
+    if (!host) return;
+    var bar = document.createElement("div");
+    bar.className = "wk-bar";
+    bar.setAttribute("data-wk-ui", "1");
+    bar.style.cssText =
+      "position:absolute;right:2px;top:2px;z-index:30;display:flex;gap:4px;" +
+      "opacity:.45;transition:opacity .15s;user-select:none;";
+    bar.addEventListener("mouseenter", function () {
+      bar.style.opacity = "1";
+    });
+    bar.addEventListener("mouseleave", function () {
+      bar.style.opacity = ".45";
+    });
+    bar.appendChild(barButton("注音 开", "toggle"));
+    bar.appendChild(barButton("重置本首", "reset"));
+    /*
+     * 容器多半没有定位上下文，补一个 relative 才能把工具条固定在右上角。
+     * 只在我们确实插了工具条时补，而且记下原值，卸掉时还原。
+     */
+    try {
+      var pos = window.getComputedStyle ? window.getComputedStyle(host).position : "";
+      if (!pos || pos === "static") {
+        if (!host.getAttribute("data-wk-bar-pos")) {
+          host.setAttribute("data-wk-bar-pos", host.style.position || "");
+        }
+        host.style.position = "relative";
+      }
+    } catch (e) {
+      /* 拿不到样式也没关系，工具条会跟着内容流走 */
+    }
+    bar.addEventListener("click", function (ev) {
+      var t = ev.target;
+      var act = t && t.getAttribute ? t.getAttribute("data-wk-act") : "";
+      if (!act) return;
+      // 别让网易云把这次点击当成"跳到这一句"
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (act === "toggle") {
+        config.enabled = !config.enabled;
+        saveConfig();
+        if (config.enabled) enable();
+        else disable();
+        updateLyricBar();
+        notifyConfigUI();
+      } else if (act === "reset") {
+        var n = resetSongReadings();
+        var btn = t;
+        var old = btn.textContent;
+        btn.textContent = n ? "已重置" : "没有改动";
+        setTimeout(function () {
+          try {
+            btn.textContent = old;
+          } catch (e2) {
+            /* 按钮没了就算了 */
+          }
+        }, 1200);
+      }
+    });
+    try {
+      host.appendChild(bar);
+      lyricBar = bar;
+    } catch (e) {
+      lyricBar = null;
+    }
+  }
+
+  /**
+   * 重置**这一首**的读音：清掉这一首各行"就地改的读音"，并清掉振假名缓存重扫。
+   *
+   * 只动这一首：键是整行原文，所以只删这些行的条目；别的歌、面板里的通用规则、
+   * 大模型的缓存都不动（那些清起来要么误伤要么花钱）。
+   */
+  function resetSongReadings() {
+    var regions = [];
+    try {
+      regions = state.annotator ? state.annotator.findRegions("lyrics") : [];
+    } catch (e) {
+      regions = [];
+    }
+    var lines = {};
+    for (var i = 0; i < regions.length; i++) {
+      var t = regionText(regions[i]);
+      if (t) lines[t] = 1;
+    }
+    var spans = config.furiganaLineSpans || {};
+    var fixes = config.furiganaLineFixes || {};
+    var removed = 0;
+    for (var k in lines) {
+      if (!Object.prototype.hasOwnProperty.call(lines, k)) continue;
+      if (Object.prototype.hasOwnProperty.call(spans, k)) {
+        delete spans[k];
+        removed++;
+      }
+      if (Object.prototype.hasOwnProperty.call(fixes, k)) {
+        delete fixes[k];
+        removed++;
+      }
+    }
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    rescan();
+    notifyConfigUI();
+    return removed;
   }
 
   // ------------------------------------------------------------ 生命周期

@@ -5673,3 +5673,112 @@ test("RNP：一行三层时语种按原文判，不按翻译（今夜、不该�
   assert.strictEqual(env.document.querySelector(".rnp-lyrics-line-romaji").querySelectorAll("ruby").length, 0, "罗马音行不许注");
   assert.strictEqual(env.document.querySelector(".rnp-lyrics-line-translated").querySelectorAll("ruby").length, 0, "翻译行不许注");
 });
+
+test("就地编辑器：清空 = 恢复默认读音，输入 - 才留空", async () => {
+  /*
+   * 用户报的问题：把读音清空（留空）之后这一处没有注音了，双击也就没有目标 ——
+   * 这一处再也改不回来。现在清空 = 删掉这条修改、回到底层读音；
+   * 真要"这一处不注音"就输入一个减号。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日も君と</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const pairs = () =>
+    Array.from(env.document.querySelectorAll("ruby.wk-ruby")).map((r) => [
+      r.childNodes[0].nodeValue,
+      r.querySelector(".wk-rt").textContent,
+    ]);
+  const openAndSave = async (value) => {
+    const ruby = env.document.querySelector("ruby.wk-ruby");
+    ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    await sleep(40);
+    const box = env.document.querySelector("input.wk-edit");
+    assert.ok(box, "双击要弹输入框");
+    box.value = value;
+    box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await sleep(400);
+  };
+
+  assert.deepStrictEqual(pairs(), [["明日", "あした"], ["君", "きみ"]], "初始：" + pairs().join(","));
+
+  await openAndSave("みょうにち");
+  assert.deepStrictEqual(pairs(), [["明日", "みょうにち"], ["君", "きみ"]], "改过之后：" + pairs().join(","));
+
+  // 清空 -> 恢复默认（这一处还能再点开）
+  await openAndSave("");
+  assert.deepStrictEqual(pairs(), [["明日", "あした"], ["君", "きみ"]], "清空要回到默认读音：" + pairs().join(","));
+  const saved1 = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(saved1.furiganaLineSpans, {}, "清空之后不该留数据：" + JSON.stringify(saved1.furiganaLineSpans));
+
+  // 输入减号 -> 留空（这一处不注音）
+  await openAndSave("-");
+  assert.deepStrictEqual(pairs(), [["君", "きみ"]], "减号要留空：" + pairs().join(","));
+  const saved2 = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(saved2.furiganaLineSpans, { 明日も君と: [[0, "明日", ""]] }, "留空要按位置存：" + JSON.stringify(saved2.furiganaLineSpans));
+});
+
+test("歌词页的工具条：开关注音 / 重置本首（默认页和 RNP 都挂得上）", async () => {
+  /*
+   * 设置面板要点进 BetterNCM 菜单，临时关一下注音 / 清掉自己改的读音很麻烦。
+   * 歌词页右上角放两个小按钮，默认页（.m-lyric）和 RNP（.rnp-lyrics）都适配。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日も君と</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
+  await env.runLoad();
+  await sleep(500);
+
+  const bar = env.document.querySelector(".m-lyric .wk-bar");
+  assert.ok(bar, "默认歌词页要有工具条：" + env.document.body.innerHTML.slice(0, 200));
+  const toggle = bar.querySelector('[data-wk-act="toggle"]');
+  const reset = bar.querySelector('[data-wk-act="reset"]');
+  assert.ok(toggle && reset, "两个按钮都要在");
+
+  // 关掉注音：注音全撤，按钮文字跟着变
+  toggle.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await sleep(300);
+  assert.strictEqual(env.window.WK.config.enabled, false, "开关要真的关掉注音");
+  assert.strictEqual(toggle.textContent, "注音 关");
+  assert.strictEqual(env.document.querySelectorAll("ruby.wk-ruby").length, 0, "关掉之后不该有注音");
+  toggle.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(env.window.WK.config.enabled, true, "再点要开回来");
+  assert.ok(env.document.querySelectorAll("ruby.wk-ruby").length > 0, "开回来要重新注上");
+
+  // 重置本首：清掉这一首里改过的读音
+  env.window.WK.config.furiganaLineSpans = { 明日も君と: [[0, "明日", "あす"]] };
+  env.window.WK.state.annotator.restoreAll();
+  env.window.WK.state.annotator.pass(env.window.WK.state.annotator.findRegions("lyrics"));
+  const read = () => env.document.querySelector("ruby.wk-ruby .wk-rt").textContent;
+  assert.strictEqual(read(), "あす", "先改一处");
+  reset.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await sleep(500);
+  assert.strictEqual(read(), "あした", "重置之后回到词典读音：" + env.document.querySelector("ul.lyric li p").innerHTML);
+  assert.deepStrictEqual(
+    JSON.parse(env.window.localStorage.getItem("lyric-ruby.config")).furiganaLineSpans,
+    {},
+    "重置要把这一首的修改清干净"
+  );
+
+  // RNP：容器换了也要挂得上
+  const RNP = `<!doctype html><html><head></head><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line">
+  <div class="rnp-lyrics-line-original">明日も君と</div>
+  <div class="rnp-lyrics-line-romaji">a shi ta mo ki mi to</div>
+  <div class="rnp-lyrics-line-translated">明天也和你一起</div>
+</div></div></body></html>`;
+  const rnp = bootPlugin(RNP, { config: { online: false, llmEnabled: false } });
+  rnp.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
+  await rnp.runLoad();
+  await sleep(600);
+  assert.ok(rnp.document.querySelector(".rnp-lyrics .wk-bar"), "RNP 歌词页也要有工具条");
+});

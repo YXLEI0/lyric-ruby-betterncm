@@ -255,6 +255,22 @@
       if (!clashed) out.push(fixed[f0]);
     }
     for (var sp2 = 0; sp2 < spans.length; sp2++) out.push(spans[sp2]);
+    /*
+     * 数字 + 假名的修正（用户就地改的 / 大模型切词给的「1つ ひとつ」）：
+     * 底字只留数字，尾巴上的假名不进 ruby —— 和自动分词那条路同一个规矩，
+     * 否则同一个 1つ 会出现两种注法（ひとつ 又盖到 つ 上面去）。
+     */
+    for (var nk = 0; nk < out.length; nk++) {
+      var ntk = out[nk];
+      if (!ntk || ntk.hide) continue;
+      if (!/^[0-9\uFF10-\uFF19]/.test(ntk.text)) continue;
+      var cut = 0;
+      while (cut < ntk.text.length && /[0-9\uFF10-\uFF19]/.test(ntk.text.charAt(cut))) cut++;
+      if (cut > 0 && cut < ntk.text.length && !/[\u4E00-\u9FFF\u3005]/.test(ntk.text.slice(cut))) {
+        ntk.end = ntk.start + cut;
+        ntk.text = ntk.text.slice(0, cut);
+      }
+    }
     function coveredByFixed(a, b) {
       for (var q = 0; q < out.length; q++) {
         if (out[q].start < b && a < out[q].end) return true;
