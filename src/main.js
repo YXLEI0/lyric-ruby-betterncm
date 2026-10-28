@@ -2925,12 +2925,6 @@
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    // 我们自己的工具条（注音 开 / 重置本首）不注音
-    try {
-      if (host && host.closest && host.closest("[data-wk-ui]")) return null;
-    } catch (eUI) {
-      /* 老浏览器没有 closest：忽略 */
-    }
     if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset, lineText);
     return cjkTokens(s, context);
   }
@@ -3132,12 +3126,6 @@
         regions = state.annotator.findRegions("lyrics");
       }
       state.lastResult = state.annotator.pass(regions);
-      // 歌词页右上角的两个小按钮（开关 / 重置本首），容器换了就重建
-      try {
-        ensureLyricBar();
-      } catch (eBar) {
-        /* 工具条挂不上不影响注音 */
-      }
       // 行距用 pass 交回来的"原文行"，不再自己查一遍 DOM（见 updateLineHeight 的说明）
       updateLineHeight(state.lastResult && state.lastResult.lyricRegions);
       /*
@@ -4023,6 +4011,31 @@
      * 日文字体 一改，这里马上能看到效果 —— 相当于把两家的预览合成一个。
      * 第三行留一个西文词，提醒"西文字母也照旧注片假名"。
      */
+    /**
+     * 预览里的英文句子：逐个词取读音（只走本地那几层：词典 -> 字母名 -> 规则）。
+     *
+     * 为什么不在预览里写死几个词：用户看到的是「预览标不全」，而实际歌词是全的 ——
+     * 预览应该和真机一致。这里只取同步层，不会因为打开面板就去问模型。
+     */
+    function previewEnglishRubies(text) {
+      var out = [];
+      var re = /[A-Za-z][A-Za-z'\u2019-]*/g;
+      var m;
+      while ((m = re.exec(text))) {
+        var word = m[0];
+        var kana = null;
+        try {
+          var r0 = state.reader ? state.reader.read(word) : null;
+          if (r0 && r0.kana) kana = r0.kana;
+        } catch (e) {
+          kana = null;
+        }
+        if (!kana) continue;
+        out.push([word, kana]);
+      }
+      return out;
+    }
+
     function refreshPreview() {
       preview.innerHTML = "";
       var kata = config.furiganaKana === "katakana";
@@ -4042,23 +4055,16 @@
           bold: true,
         },
         {
-          // 第三、四行：英文句子（顺便说明"西文字母也照旧注片假名"）。
-          // 拆成两行而不是用换行：一句一行，注音不会挤在折行的地方。
+          // 第三、四行：英文句子 —— 读音按真实引擎现算（词典 / 字母名 / 规则），
+          // 不是手写一小撮，否则看起来「标不全」。
           text: "Excuse me. Can you tell me how much the shirt is?",
-          rubies: [
-            ["Excuse", "エクスキューズ"],
-            ["shirt", "シャツ"],
-          ],
+          rubies: previewEnglishRubies("Excuse me. Can you tell me how much the shirt is?"),
           bold: false,
           dim: true,
         },
         {
           text: "Yes, it's nine fifteen.",
-          rubies: [
-            ["Yes", "イエス"],
-            ["nine", "ナイン"],
-            ["fifteen", "フィフティーン"],
-          ],
+          rubies: previewEnglishRubies("Yes, it's nine fifteen."),
           bold: false,
           dim: true,
         },
@@ -4068,10 +4074,14 @@
         var row = document.createElement("div");
         row.className = "wk-pv-line" + (line.bold ? " wk-pv-bold" : "") + (line.dim ? " wk-pv-dim" : "");
         var pos = 0;
-        // 按出现顺序切：底字在 text 里的位置就是它自己的下标（示例都是简单句子）
-        var pieces = line.rubies.slice().sort(function (a, b) {
-          return line.text.indexOf(a[0]) - line.text.indexOf(b[0]);
-        });
+        /*
+           * 按 rubies 给的顺序（就是文本顺序）依次定位。
+           *
+           * 以前是「按 indexOf 排序，然后从 pos 往后找」：同一句里出现两次 `me` 时，
+           * 两次的 indexOf 都指向第一个 me，第二次找不到位置就被跳过，后面的词跟着乱/丢
+           * （用户看到的就是「预览标不全」）。现在严格按 pos 往后找一个，重复词也不会丢。
+           */
+        var pieces = line.rubies.slice();
         for (var j = 0; j < pieces.length; j++) {
           var base = pieces[j][0];
           var reading = pieces[j][1];
@@ -4467,7 +4477,6 @@
 
   function notifyConfigUI() {
     try {
-      updateLyricBar();
       if (typeof plugin !== "undefined" && plugin.onConfig && !state.configRoot) {
         state.configRoot = buildConfigUI();
       }
@@ -4478,351 +4487,6 @@
     } catch (e) {
       /* 面板只是显示用，不能因为它把插件搞崩 */
     }
-  }
-
-  // ------------------------------------------------------------ 歌词页工具条
-
-  /*
-   * 歌词页右下角的两个小按钮：开关注音、重置本首的读音。
-   *
-   * 为什么要做在歌词页：插件设置面板要点进 BetterNCM 菜单，改读音 / 临时关掉注音
-   * 时来回跳很烦。默认页和 RNP 的容器不一样（`.m-lyric` / `.rnp-lyrics`），
-   * 两边都要挂上；容器换了（换页面 / RNP 重绘）就重建。
-   */
-  var lyricBar = null;
-  var lyricBarAt = 0;
-  /*
-   * 停靠进原生工具条会被宿主（React）重渲染时冲掉 —— 真机现象：按钮出现一次，
-   * 下一首歌 / 下次重绘就没了。死磕不划算：连续被冲掉两次就改用浮动条，
-   * 浮动条是我们自己的节点，只在歌词容器被整体替换时才会消失。
-   */
-  var barMode = "dock"; // dock | float
-  var barLost = 0;
-
-  function lyricPageHost() {
-    var sels = [".m-lyric", ".rnp-lyrics", "[class^='rnp-lyrics']", "ul.lyric"];
-    for (var i = 0; i < sels.length; i++) {
-      var el = null;
-      try {
-        el = document.querySelector(sels[i]);
-      } catch (e) {
-        el = null;
-      }
-      if (el && el.isConnected) return el;
-    }
-    return null;
-  }
-
-  function barButton(label, act) {
-    var b = document.createElement("button");
-    b.type = "button";
-    b.setAttribute("data-wk-act", act);
-    b.textContent = label;
-    b.style.cssText =
-      "font-size:12px;line-height:1;padding:3px 7px;border-radius:10px;cursor:pointer;" +
-      "border:1px solid rgba(255,255,255,.35);background:rgba(30,36,48,.55);color:#fff;" +
-      "font-family:inherit;white-space:nowrap;";
-    return b;
-  }
-
-  function updateLyricBar() {
-    if (!lyricBar || !lyricBar.isConnected) return;
-    var docked = /docked/.test(lyricBar.className || "");
-    var vert = docked && lyricBar.getAttribute("data-wk-vert") === "1";
-    var t = lyricBar.querySelector('[data-wk-act="toggle"]');
-    if (t) {
-      t.textContent = vert ? "注" : docked ? (config.enabled ? "注音" : "注音关") : config.enabled ? "注音 开" : "注音 关";
-    }
-    var r = lyricBar.querySelector('[data-wk-act="reset"]');
-    if (r) r.textContent = vert ? "重" : docked ? "重置" : "重置本首";
-  }
-
-  /*
-   * 找原生工具条的锚点：
-   *   - RNP 是「译 / 音 / 逐字」那三个小按钮；
-   *   - 网易云默认歌词页是「音译 / 翻译」那两个切换。
-   * 锚点必须是"像按钮"的元素（button / class 里带 btn/toggle/tool/control，或 role=button），
-   * 否则逐字歌词里一个写着「音」的 span 也会被当成按钮。
-   */
-  var NATIVE_TOGGLE_TEXT = /^(译|譯|音|逐字|翻译|翻譯|音译|音譯|注音|罗马音|羅馬音)$/;
-  function findNativeToggle() {
-    var roots = [".m-lyric", ".rnp-lyrics", "[class^='rnp-lyrics']", "[class*='lyric']"];
-    for (var r = 0; r < roots.length; r++) {
-      var box = null;
-      try {
-        box = document.querySelector(roots[r]);
-      } catch (e) {
-        box = null;
-      }
-      if (!box) continue;
-      var nodes = box.querySelectorAll("button, [role='button'], span, div, i, a");
-      for (var i = 0; i < nodes.length; i++) {
-        var el = nodes[i];
-        if (!el || (el.children && el.children.length)) continue;
-        if (el.closest && el.closest("[data-wk-ui]")) continue;
-        var txt = (el.textContent || "").replace(/\s+/g, "");
-        if (!NATIVE_TOGGLE_TEXT.test(txt)) continue;
-        var cls = typeof el.className === "string" ? el.className : "";
-        var looksButton =
-          el.tagName === "BUTTON" ||
-          el.getAttribute("role") === "button" ||
-          /btn|button|toggle|switch|tool|control|icon|tab/i.test(cls);
-        if (!looksButton) continue;
-        return el;
-      }
-    }
-    return null;
-  }
-
-  /** 原生那一栏是不是竖着排的（RNP 的 译/音/逐字 就是一列） */
-  function dockIsVertical(parent) {
-    try {
-      var cs = window.getComputedStyle ? window.getComputedStyle(parent) : null;
-      if (cs && /column/.test(cs.flexDirection || "")) return true;
-    } catch (e) {
-      /* 拿不到样式就当横排 */
-    }
-    return false;
-  }
-
-  /**
-   * 把两个按钮停靠到原生工具条里。
-   *
-   * 三个要点（都是真机上踩出来的）：
-   *   1. **放最前面**：RNP 那一列是 译 / 音 / 逐字 竖排，插在 译 后面会把 音 挤下去，
-   *      看着像"夹在中间"；用户要的是放在上面。
-   *   2. **克隆原生元素**：直接 cloneNode(false) 一个原生按钮，class / 标签 / 结构全一样，
-   *      样式自然一致；自己写一套样式怎么调都差一点。
-   *   3. **点击走 document 的捕获阶段**：原生工具条那一块会 stopPropagation，
-   *      按钮上挂的 click 收不到（真机现象"按钮根本点不动"）。
-   */
-  function dockBar(anchor) {
-    var parent = anchor.parentNode;
-    if (!parent) return false;
-    var vertical = dockIsVertical(parent);
-    var bar = document.createElement("span");
-    bar.className = "wk-bar wk-bar-docked";
-    bar.setAttribute("data-wk-ui", "1");
-    bar.setAttribute("data-wk-vert", vertical ? "1" : "0");
-    bar.style.cssText = vertical
-      ? "display:flex;flex-direction:column;align-items:center;gap:4px;"
-      : "display:inline-flex;align-items:center;gap:2px;margin-right:6px;vertical-align:middle;";
-    try {
-      bar.style.setProperty("pointer-events", "auto", "important");
-    } catch (e0) {
-      /* 老引擎不支持就算了 */
-    }
-
-    function makeBtn(label, act, title) {
-      var b = null;
-      try {
-        b = anchor.cloneNode(false); // 浅克隆：标签 / class / 属性都一样，样式自然一致
-      } catch (e1) {
-        b = null;
-      }
-      if (!b || b.nodeType !== 1) {
-        b = document.createElement("button");
-        b.type = "button";
-        var cls = typeof anchor.className === "string" ? anchor.className : "";
-        cls = cls.replace(/(^|\s)(active|selected|on|off|disabled|checked|current|hover)(?=\s|$)/g, " ");
-        if (cls) b.className = cls.trim();
-      }
-      // 原生按钮上那些"点了会干什么"的标记别抄过来
-      ["data-wk-act", "role", "tabindex", "aria-pressed", "aria-checked", "aria-selected", "id", "for"].forEach(function (a) {
-        try {
-          b.removeAttribute(a);
-        } catch (e2) {
-          /* 没有就算了 */
-        }
-      });
-      b.setAttribute("data-wk-act", act);
-      b.textContent = label;
-      b.title = title;
-      try {
-        b.style.setProperty("cursor", "pointer", "important");
-        b.style.setProperty("pointer-events", "auto", "important");
-        b.style.setProperty("opacity", "1", "important");
-        b.style.setProperty("visibility", "visible", "important");
-      } catch (e3) {
-        /* 同上 */
-      }
-      return b;
-    }
-
-    var b1 = makeBtn(vertical ? "注" : "注音", "toggle", "开关注音");
-    var b2 = makeBtn(vertical ? "重" : "重置", "reset", "重置本首（清掉这一首里改过的读音）");
-    bar.appendChild(b1);
-    bar.appendChild(b2);
-
-    try {
-      // 放最前面（用户点名要"放上面"）
-      parent.insertBefore(bar, parent.firstChild);
-      lyricBar = bar;
-      return true;
-    } catch (e) {
-      lyricBar = null;
-      return false;
-    }
-  }
-
-  function ensureLyricBar() {
-    var now = Date.now();
-    if (lyricBar && lyricBar.isConnected) {
-      updateLyricBar();
-      return;
-    }
-    if (lyricBar && !lyricBar.isConnected) {
-      // 被宿主冲掉了：记一次，连着两次就别再停靠了
-      barLost++;
-      if (barLost >= 2) barMode = "float";
-      lyricBar = null;
-    }
-    /*
-     * 优先停靠到原生工具条（用户点名要的：RNP 的 译/音/逐字、默认页的音译/翻译那一栏）。
-     * 找不到才退回右上角的浮动条。
-     */
-    if (barMode === "dock" && now - lyricBarAt >= 500) {
-      var anchor = null;
-      try {
-        anchor = findNativeToggle();
-      } catch (eFind) {
-        anchor = null;
-      }
-      if (anchor && dockBar(anchor)) {
-        lyricBarAt = now;
-        updateLyricBar();
-        return;
-      }
-    }
-    if (now - lyricBarAt < 1000) return; // 一秒查一次容器就够了
-    lyricBarAt = now;
-    var host = lyricPageHost();
-    if (!host) return;
-    var bar = document.createElement("div");
-    bar.className = "wk-bar";
-    bar.setAttribute("data-wk-ui", "1");
-    bar.style.cssText =
-      "position:absolute;right:6px;top:6px;z-index:2147482000;display:flex;gap:4px;padding:3px 4px;" +
-      "border-radius:12px;background:rgba(18,22,32,.72);box-shadow:0 2px 10px rgba(0,0,0,.35);" +
-      "opacity:.92;transition:opacity .15s;user-select:none;pointer-events:auto;";
-    bar.addEventListener("mouseenter", function () {
-      bar.style.opacity = "1";
-    });
-    bar.addEventListener("mouseleave", function () {
-      bar.style.opacity = ".92";
-    });
-    bar.appendChild(barButton("注音 开", "toggle"));
-    bar.appendChild(barButton("重置本首", "reset"));
-    /*
-     * 容器多半没有定位上下文，补一个 relative 才能把工具条固定在右上角。
-     * 只在我们确实插了工具条时补，而且记下原值，卸掉时还原。
-     */
-    try {
-      var pos = window.getComputedStyle ? window.getComputedStyle(host).position : "";
-      if (!pos || pos === "static") {
-        if (!host.getAttribute("data-wk-bar-pos")) {
-          host.setAttribute("data-wk-bar-pos", host.style.position || "");
-        }
-        host.style.position = "relative";
-      }
-    } catch (e) {
-      /* 拿不到样式也没关系，工具条会跟着内容流走 */
-    }
-    // 点击统一由 document 的捕获阶段处理（见 onBarClickCapture）
-    try {
-      host.appendChild(bar);
-      lyricBar = bar;
-    } catch (e) {
-      lyricBar = null;
-    }
-  }
-
-  /**
-   * 重置**这一首**的读音：清掉这一首各行"就地改的读音"，并清掉振假名缓存重扫。
-   *
-   * 只动这一首：键是整行原文，所以只删这些行的条目；别的歌、面板里的通用规则、
-   * 大模型的缓存都不动（那些清起来要么误伤要么花钱）。
-   */
-  function resetSongReadings() {
-    var regions = [];
-    try {
-      regions = state.annotator ? state.annotator.findRegions("lyrics") : [];
-    } catch (e) {
-      regions = [];
-    }
-    var lines = {};
-    for (var i = 0; i < regions.length; i++) {
-      var t = regionText(regions[i]);
-      if (t) lines[t] = 1;
-    }
-    var spans = config.furiganaLineSpans || {};
-    var fixes = config.furiganaLineFixes || {};
-    var removed = 0;
-    for (var k in lines) {
-      if (!Object.prototype.hasOwnProperty.call(lines, k)) continue;
-      if (Object.prototype.hasOwnProperty.call(spans, k)) {
-        delete spans[k];
-        removed++;
-      }
-      if (Object.prototype.hasOwnProperty.call(fixes, k)) {
-        delete fixes[k];
-        removed++;
-      }
-    }
-    saveConfig();
-    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
-    rescan();
-    notifyConfigUI();
-    return removed;
-  }
-
-  /*
-   * 工具条的点击统一在 document 的**捕获阶段**处理。
-   *
-   * 为什么：原生工具条那一块（RNP / 网易云自己的）会在 mousedown / click 上
-   * stopPropagation，挂在按钮自己身上的监听收不到 —— 真机现象就是"按钮点不动"。
-   * 捕获阶段在它们之前跑，然后我们把这次事件吃掉，歌词也不会被"跳到这一句"。
-   */
-  function onBarClickCapture(ev) {
-    var t = ev.target;
-    var actEl = null;
-    try {
-      actEl = t && t.closest ? t.closest("[data-wk-act]") : null;
-    } catch (e) {
-      actEl = null;
-    }
-    if (!actEl) return;
-    var act = actEl.getAttribute("data-wk-act");
-    if (!act) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
-    var btn = actEl;
-    if (act === "toggle") {
-      config.enabled = !config.enabled;
-      saveConfig();
-      if (config.enabled) enable();
-      else disable();
-      updateLyricBar();
-      notifyConfigUI();
-    } else if (act === "reset") {
-      var n = resetSongReadings();
-      var old = btn.textContent;
-      btn.textContent = "✓";
-      setTimeout(function () {
-        try {
-          btn.textContent = old;
-        } catch (e2) {
-          /* 按钮没了就算了 */
-        }
-      }, 1200);
-      if (n === 0) log("重置本首：这一首没有改过的读音");
-    }
-  }
-  try {
-    document.addEventListener("click", onBarClickCapture, true);
-  } catch (eBarEvt) {
-    /* 挂不上就退回浮动条自己的监听 */
   }
 
   // ------------------------------------------------------------ 生命周期

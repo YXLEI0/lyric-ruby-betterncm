@@ -5168,20 +5168,14 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
-  assert.deepStrictEqual(
-    pairs,
-    [
-      ["天気", "てんき"],
-      ["良", "い"],
-      ["散歩", "さんぽ"],
-      ["Excuse", "エクスキューズ"],
-      ["shirt", "シャツ"],
-      ["Yes", "イエス"],
-      ["nine", "ナイン"],
-      ["fifteen", "フィフティーン"],
-    ],
-    "预览的示例读音（默认平假名）"
-  );
+  const byWord = new Map(pairs);
+  // 日语那两行：写法跟着面板走
+  assert.deepStrictEqual([byWord.get("天気"), byWord.get("良"), byWord.get("散歩")], ["てんき", "い", "さんぽ"], "日语行的振假名");
+  // 英文两行：每个词都按真实引擎注上（以前只写死了一小撮，看着标不全）
+  const expectKana = (w) => env.window.WK.state.reader.read(w).kana;
+  for (const w of ["Excuse", "me", "Can", "you", "tell", "how", "much", "the", "shirt", "is", "Yes", "it's", "nine", "fifteen"]) {
+    assert.strictEqual(byWord.get(w), expectKana(w), "英文词也要注上：" + w + " / " + JSON.stringify(pairs));
+  }
 
   const lines = [...preview.querySelectorAll(".wk-pv-line")];
   assert.strictEqual(lines.length, 4, "四行示例（第 3 / 4 行是英文两句）");
@@ -5205,20 +5199,8 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
-  assert.deepStrictEqual(
-    kataPairs,
-    [
-      ["天気", "テンキ"],
-      ["良", "イ"],
-      ["散歩", "サンポ"],
-      ["Excuse", "エクスキューズ"],
-      ["shirt", "シャツ"],
-      ["Yes", "イエス"],
-      ["nine", "ナイン"],
-      ["fifteen", "フィフティーン"],
-    ],
-    "切成片假名之后预览也要跟着变"
-  );
+  const kataWord = new Map(kataPairs);
+  assert.deepStrictEqual([kataWord.get("天気"), kataWord.get("良"), kataWord.get("散歩")], ["テンキ", "イ", "サンポ"], "切成片假名之后预览也要跟着变");
 });
 
 test("改名搬家：老的 latin-katakana.* 键会复制到 lyric-ruby.*，老键留着", async () => {
@@ -5735,130 +5717,6 @@ test("就地编辑器：清空 = 恢复默认读音，输入 - 才留空", async
   assert.deepStrictEqual(pairs(), [["君", "きみ"]], "减号要留空：" + pairs().join(","));
   const saved2 = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.deepStrictEqual(saved2.furiganaLineSpans, { 明日も君と: [[0, "明日", ""]] }, "留空要按位置存：" + JSON.stringify(saved2.furiganaLineSpans));
-});
-
-test("歌词页的工具条：开关注音 / 重置本首（默认页和 RNP 都挂得上）", async () => {
-  /*
-   * 设置面板要点进 BetterNCM 菜单，临时关一下注音 / 清掉自己改的读音很麻烦。
-   * 歌词页右上角放两个小按钮，默认页（.m-lyric）和 RNP（.rnp-lyrics）都适配。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>明日も君と</p></li>
-</ul></div></body></html>`;
-  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
-  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
-  await env.runLoad();
-  await sleep(500);
-
-  const bar = env.document.querySelector(".m-lyric .wk-bar");
-  assert.ok(bar, "默认歌词页要有工具条：" + env.document.body.innerHTML.slice(0, 200));
-  const toggle = bar.querySelector('[data-wk-act="toggle"]');
-  const reset = bar.querySelector('[data-wk-act="reset"]');
-  assert.ok(toggle && reset, "两个按钮都要在");
-  assert.ok(env.window.document.querySelector(".wk-bar"), "工具条要在页面上");
-
-  // 关掉注音：注音全撤，按钮文字跟着变
-  toggle.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-  await sleep(300);
-  assert.strictEqual(env.window.WK.config.enabled, false, "开关要真的关掉注音");
-  assert.strictEqual(toggle.textContent, "注音 关");
-  assert.strictEqual(env.document.querySelectorAll("ruby.wk-ruby").length, 0, "关掉之后不该有注音");
-  toggle.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-  await sleep(400);
-  assert.strictEqual(env.window.WK.config.enabled, true, "再点要开回来");
-  assert.ok(env.document.querySelectorAll("ruby.wk-ruby").length > 0, "开回来要重新注上");
-
-  // 重置本首：清掉这一首里改过的读音
-  env.window.WK.config.furiganaLineSpans = { 明日も君と: [[0, "明日", "あす"]] };
-  env.window.WK.state.annotator.restoreAll();
-  env.window.WK.state.annotator.pass(env.window.WK.state.annotator.findRegions("lyrics"));
-  const read = () => env.document.querySelector("ruby.wk-ruby .wk-rt").textContent;
-  assert.strictEqual(read(), "あす", "先改一处");
-  reset.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-  await sleep(500);
-  assert.strictEqual(read(), "あした", "重置之后回到词典读音：" + env.document.querySelector("ul.lyric li p").innerHTML);
-  assert.deepStrictEqual(
-    JSON.parse(env.window.localStorage.getItem("lyric-ruby.config")).furiganaLineSpans,
-    {},
-    "重置要把这一首的修改清干净"
-  );
-
-  // RNP：容器换了也要挂得上
-  const RNP = `<!doctype html><html><head></head><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line">
-  <div class="rnp-lyrics-line-original">明日も君と</div>
-  <div class="rnp-lyrics-line-romaji">a shi ta mo ki mi to</div>
-  <div class="rnp-lyrics-line-translated">明天也和你一起</div>
-</div></div></body></html>`;
-  const rnp = bootPlugin(RNP, { config: { online: false, llmEnabled: false } });
-  rnp.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
-  await rnp.runLoad();
-  await sleep(600);
-  assert.ok(rnp.document.querySelector(".rnp-lyrics .wk-bar"), "RNP 歌词页也要有工具条");
-});
-
-test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认页的音译/翻译）", async () => {
-  /*
-   * 用户要的是"跟 RNP 的 译 音 逐字 放一起、样式一样"，默认页要跟"音译 / 翻译"那一栏放在一起。
-   * 浮动条太容易点不到，改成停靠：按钮抄原生按钮的 class，插在它后面。
-   */
-  const RNP = `<!doctype html><html><head></head><body>
-<div class="rnp-lyrics">
-  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-original">いざなった clover へ</div></div>
-  <div class="rnp-lyrics-tools"><span class="tool-btn">译</span><span class="tool-btn">音</span><span class="tool-btn">逐字</span></div>
-</div></body></html>`;
-  const rnp = bootPlugin(RNP, { config: { online: false, llmEnabled: false } });
-  rnp.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ", ざ: "ザ" }));
-  await rnp.runLoad();
-  await sleep(900);
-  const rnpTools = rnp.document.querySelector(".rnp-lyrics-tools");
-  const rnpBar = rnpTools.querySelector(".wk-bar");
-  assert.ok(rnpBar, "按钮要停靠在 RNP 的原生那一栏里：" + rnpTools.outerHTML);
-  const rnpBtns = Array.from(rnpBar.querySelectorAll("[data-wk-act]"));
-  assert.deepStrictEqual(rnpBtns.map((b) => b.textContent), ["注音", "重置"], "停靠版用短标签");
-  assert.strictEqual(rnpBar.parentNode.firstChild, rnpBar, "要放在那一栏的最上面");
-  assert.ok(
-    rnpBtns.every((b) => b.className.indexOf("tool-btn") >= 0),
-    "样式要跟原生按钮一样（抄它的 class）：" + rnpBtns.map((b) => b.className).join(",")
-  );
-
-  // 竖排的工具条（RNP 那种一列）：按钮改成单字，而且颜色 / 尺寸要钉住（真机上出现过看不见）
-  const VERT = `<!doctype html><html><head></head><body>
-<div class="rnp-lyrics">
-  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-original">いざなった clover へ</div></div>
-  <div class="rnp-lyrics-tools" style="display:flex;flex-direction:column;">
-    <span class="tool-btn">译</span><span class="tool-btn">音</span><span class="tool-btn">逐字</span>
-  </div>
-</div></body></html>`;
-  const vert = bootPlugin(VERT, { config: { online: false, llmEnabled: false } });
-  vert.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ" }));
-  await vert.runLoad();
-  await sleep(900);
-  const vertBar = vert.document.querySelector(".rnp-lyrics-tools .wk-bar");
-  assert.ok(vertBar, "竖排工具条也要停靠：" + vert.document.querySelector(".rnp-lyrics-tools").outerHTML);
-  const vertBtns = Array.from(vertBar.querySelectorAll("[data-wk-act]"));
-  assert.deepStrictEqual(vertBtns.map((b) => b.textContent), ["注", "重"], "竖排用单字，别把那一列撑开");
-  assert.strictEqual(vertBtns[0].tagName, "SPAN", "克隆原生元素（样式才会一模一样）");
-  assert.ok(vertBtns[0].className.indexOf("tool-btn") >= 0, "class 跟原生的一样：" + vertBtns[0].className);
-  assert.strictEqual(vertBar.parentNode.firstChild, vertBar, "要放在那一列的最上面");
-
-  const NCM = `<!doctype html><html><head></head><body>
-<div class="m-lyric">
-  <ul class="lyric"><li class="line"><p>いざなった clover へ</p></li></ul>
-  <div class="lyric-tools"><span class="lyric-tool-btn">音译</span><span class="lyric-tool-btn">翻译</span></div>
-</div></body></html>`;
-  const ncm = bootPlugin(NCM, { config: { online: false, llmEnabled: false } });
-  ncm.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ", ざ: "ザ" }));
-  await ncm.runLoad();
-  await sleep(900);
-  const ncmTools = ncm.document.querySelector(".lyric-tools");
-  const ncmBar = ncmTools.querySelector(".wk-bar");
-  assert.ok(ncmBar, "默认页要跟音译/翻译那一栏放一起：" + ncmTools.outerHTML);
-  assert.ok(
-    Array.from(ncmBar.querySelectorAll("[data-wk-act]")).some((b) => b.className.indexOf("lyric-tool-btn") >= 0),
-    "样式同样抄原生的"
-  );
 });
 
 test("留空之后还能点回来：留空的那一段包一层壳，双击就能重新填读音", async () => {
