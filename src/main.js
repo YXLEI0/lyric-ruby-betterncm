@@ -174,6 +174,12 @@
     llmModel: "deepseek-chat",
     llmKey: "",
     /*
+     * 让大模型按整句切词（熟字训优先）。**单独一个开关**，默认关：
+     * 每句一次请求，比"只问个别词"那档重得多；而且离线词典本来就能读大多数词，
+     * 这一档是给"帷帳 とばり / 今日 きょう"这种熟字训和生词兜底的。
+     */
+    llmSegment: false,
+    /*
      * 读音来源的调用顺序（越靠前越优先），设置面板里可以上下调。
      * 记号 / 缩写 / 字母名 / 长音符罗马字不在这张表里 —— 那是"这个词该怎么断"，
      * 不是"读音该信谁"，永远最先判（见 core/reading.js 的 lookup）。
@@ -2268,8 +2274,28 @@
    *
    * 罗马音层 / 翻译层不参与投票（它们是页面自己加的，不代表原文语种）。
    */
-  var songKindCache = { key: null, value: "unknown" };
+  /*
+   * 语种投票 / 整首判定的**每轮缓存**。
+   *
+   * 为什么必须有：这两个函数都要把所有歌词区域扫一遍（每个区域一次 visibleText），
+   * 而它们在"一个文本节点注一次音"的路径上被调用（extraTokens -> lineLooksJapanese）。
+   * 逐字歌词一行十几个节点时，等于每轮扫描把整首歌词读十几遍 ——
+   * CPU 采样里 songKind 一个人就占了 60%，真机表现是歌词滚动卡。
+   * 现在每轮 pass 只算一次（songLangGen 每轮 +1），单个节点直接命中缓存。
+   */
+  var songLangGen = 0;
+  var songKindGen = -1;
+  var songKindValue = "unknown";
+  var songJaGen = -1;
+  var songJaValue = true;
   function songKind() {
+    if (songKindGen === songLangGen) return songKindValue;
+    songKindGen = songLangGen;
+    songKindValue = computeSongKind();
+    return songKindValue;
+  }
+
+  function computeSongKind() {
     if (!state.annotator || !state.annotator.findRegions) return "unknown";
     var regions = [];
     try {
@@ -2278,38 +2304,98 @@
       return "unknown";
     }
     if (!regions || !regions.length) return "unknown";
-    var texts = [];
     var kana = 0;
     var cjk = 0;
-    var cn = 0;
+    var cn = 0; // 有中文痕迹的纯汉字行（一个中文虚词也算）
+    var cnStrong = 0; // 其中"明显是中文"的（中文特有字形 / 语气词 / 中文逗号 / 两个以上虚词）
     for (var i = 0; i < regions.length; i++) {
       if (fontSkipped(regions[i])) continue;
       var t = regionText(regions[i]);
       if (!t) continue;
-      texts.push(t);
       if (RE_KANA_ANY.test(t)) kana++;
       else if (/[\u4E00-\u9FFF]/.test(t)) {
         cjk++;
-        if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(t)) cn++;
+        if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine) {
+          if (WKCnLine.isChineseLine(t)) {
+            cnStrong++;
+            cn++;
+          } else if (WKCnLine.hasChineseEvidence && WKCnLine.hasChineseEvidence(t)) cn++;
+        }
       }
     }
-    var key = kana + "|" + cjk + "|" + cn + "|" + texts.join("\n").slice(0, 2000);
-    if (songKindCache.key === key) return songKindCache.value;
-    var value;
-    if (kana > 0) value = "ja"; // 有假名就是日文歌
-    else if (cn > 0) value = "zh"; // 一句假名都没有、还能认出中文行 = 中文歌
-    else if (cjk > 0) value = "ja"; // 纯汉字没有假名（`東京` 这种）按日文处理
-    else value = "unknown"; // 只有拉丁字母：交给逐行的西文逻辑
-    songKindCache = { key: key, value: value };
-    return value;
+    if (kana === 0) {
+      if (cn > 0) return "zh"; // 一句假名都没有、还能认出中文行 = 中文歌
+      if (cjk > 0) return "ja"; // 纯汉字没有假名（`東京` 这种）按日文处理
+      return "unknown"; // 只有拉丁字母：交给逐行的西文逻辑
+    }
+    /*
+     * 有假名不一定是日语歌：中文歌里可能夹着一两句日语（`ありがとう`、
+     * `(ツンデレ・ガール 愛莉)` 这种）。中文味道的行**多于**假名行时按中文歌处理，
+     * 那些纯汉字的中文行才不会拿日语读音去注（真机现象：`不用害怕` → ふようがい）。
+     * 另外要求至少有一行是"明显中文"，免得一首日文歌里几句纯汉字（碰巧带 在 / 有）就翻过去。
+     */
+    if (cn >= 2 && cn >= kana && cnStrong >= 1) return "zh";
+    return "ja"; // 有假名就是日文歌
+  }
+
+  /**
+   * 这一行的汉字是不是每个都能用日语读出来（词典覆盖）。
+   *
+   * 干什么用：中文歌里夹的日语标题行（`(G・U・T・S雫)`）一个字的中文痕迹都没有，
+   * 靠这个判 —— 日语词典能把 雫 读成 しずく，中文行 `那一些呼喊求助` 里的 喊 读不出来。
+   */
+  function japaneseReadable(line) {
+    if (typeof WKFurigana === "undefined" || !WKFurigana.tokens) return false;
+    if (!WKFurigana.ready || !WKFurigana.ready()) return false;
+    var toks = null;
+    try {
+      toks = WKFurigana.tokens(line);
+    } catch (e) {
+      toks = null;
+    }
+    if (!toks || !toks.length) return false;
+    var re = /[\u4E00-\u9FFF\u3400-\u4DBF\u3005]+/g;
+    var m;
+    while ((m = re.exec(line))) {
+      var a = m.index;
+      var b = a + m[0].length;
+      var covered = false;
+      for (var i = 0; i < toks.length; i++) {
+        if (toks[i].start < b && a < toks[i].end) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) return false; // 有一个汉字读不出来：更像中文行
+    }
+    return true;
   }
 
   function lineLooksJapanese(line) {
     if (!line) return songKind() !== "zh" && songLooksJapanese();
     if (RE_KANA_ANY.test(line)) return true;
-    if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(line)) return false;
+    if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine) {
+      /*
+       * 没有假名时先看"是不是中文行"。判据见 core/cn-line.js：
+       * 中文特有字形 / 语气词 / 中文逗号 / 两个以上中文虚词。
+       *
+       * 全角冒号那一类**不算**中文证据：`通称：愛情対象年齢` 就是这么被整行注成
+       * 普通话读音的（トンチェン / アイチン / ニェンリン）。
+       */
+      if (WKCnLine.isChineseLine(line)) return false;
+    }
     var kind = songKind();
-    if (kind === "zh") return false;
+    if (kind === "zh") {
+      /*
+       * 中文歌里的纯汉字行：有一点中文味道（哪怕只有一个 的 / 不 / 在）就按中文；
+       * 一点都没有、而日语词典能把这一行每个汉字都读出来 → 是夹进来的日语标题行
+       * （`(G・U・T・S雫)` 的 雫 读 しずく）。
+       */
+      if (typeof WKCnLine !== "undefined" && WKCnLine.hasChineseEvidence && WKCnLine.hasChineseEvidence(line)) {
+        return false;
+      }
+      return japaneseReadable(line);
+    }
     return songLooksJapanese();
   }
 
@@ -2359,6 +2445,28 @@
     for (var i = 0; i < rules.length; i++) {
       if (line.indexOf(rules[i].scope) < 0) continue;
       fixes[rules[i].word] = rules[i].kana;
+    }
+    /*
+     * 大模型切词（单独开关 llmSegment）：让模型按整句切分并给读音，熟字训优先
+     * （帷帳 とばり、今日 きょう）—— kuromoji 会把这类词切碎（帷 + 帳）。
+     * 模型给的形状就是「底字 -> 读音」，正好当这一行的修正用：
+     * 长词优先、和旧切片重叠的自动让开，注音逻辑一行都不用改。
+     * 还没回来的句子这里拿到 null（后台已经在排队），下一轮重扫时补上。
+     */
+    if (config.llmSegment === true && llmAvailable() && state.llm && state.llm.segment) {
+      var segs = null;
+      try {
+        segs = state.llm.segment(line);
+      } catch (e) {
+        segs = null;
+      }
+      for (var q2 = 0; segs && q2 < segs.length; q2++) {
+        var pair = segs[q2];
+        if (!pair || !pair[0] || !pair[1]) continue;
+        // 手填的规则 / 就地改的读音优先于模型
+        if (Object.prototype.hasOwnProperty.call(fixes, pair[0])) continue;
+        fixes[pair[0]] = pair[1];
+      }
     }
     /*
      * 模型的答案不在本地词表里，而是"这句歌词 + 这个词"的缓存 ——
@@ -2524,11 +2632,38 @@
    * 把 原文 + 罗马音 + 中文翻译 塞进同一个元素，拿 context 去判会读到同一块里的中文翻译，
    * 于是日文原文被当成中文、逐字注上普通话读音（真机现象：`妄想感傷代償連盟` 上面是 ワンシャン…）。
    */
-  function extraTokens(text, context, host, offset) {
+  function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    if (lineLooksJapanese(s)) return furiganaTokens(s, context, host, offset);
+    if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset);
     return cjkTokens(s, context);
+  }
+
+  /**
+   * 这一小段该按日文注吗。
+   *
+   * 逐字歌词把一行拆成"一个字一个节点"，单看一个字根本分不出语种：
+   *   `莉` / `雫` 在 `(ツンデレ・ガール 愛莉)` / `(G・U・T・S雫)` 里是日文
+   *   （り / しずく），在中文歌里就是中文（真机现象：莉 被注成 リ、雫 被注成 ナ，
+   *   都是按普通话读音来的）。
+   *
+   * 所以"这一小段自己没假名、又短得看不出语种"时，借**整行原文**
+   * （注音层算好的 __wkLineText，只含原文、不含翻译层）来判。
+   * 仍然守住原来的底线：整块 context 可能混着中文翻译，只在最后才退到它。
+   */
+  function nodeLooksJapanese(s, lineText, context, offset) {
+    if (RE_KANA_ANY.test(s)) return true;
+    /*
+     * 逐字歌词：这几个字的语种由**整行**决定，不单独判。
+     * 单独判会走"这一行没有中文痕迹、日语词典又读得出 → 当日语"那条（见 lineLooksJapanese），
+     * 于是中文行里的 `害` 会被读成 がい。
+     */
+    if (typeof offset === "number" && s.length <= 4) {
+      var line = lineText || "";
+      if (!line || line.length <= s.length) line = context || "";
+      if (line && line.length > s.length) return lineLooksJapanese(line);
+    }
+    return lineLooksJapanese(s);
   }
 
   /** 这个汉字是不是多音字；是就返回它构建期算好的候选读音 */
@@ -2556,7 +2691,6 @@
     return { kana: got, source: "llm" };
   }
 
-  var japaneseSongCache = { key: "", value: true };
   /** 整首专属读音（见 SONG_READINGS）的缓存：同一首歌不必每轮重算 */
   var songScopeCache = { key: null, words: null };
   /**
@@ -2577,6 +2711,13 @@
   }
 
   function songLooksJapanese() {
+    if (songJaGen === songLangGen) return songJaValue;
+    songJaGen = songLangGen;
+    songJaValue = computeSongLooksJapanese();
+    return songJaValue;
+  }
+
+  function computeSongLooksJapanese() {
     if (!state.annotator || !state.annotator.findRegions) return true;
     var regions = [];
     try {
@@ -2585,22 +2726,19 @@
       return true;
     }
     if (!regions || !regions.length) return true; // 歌词还没加载出来：先别下结论
-    var texts = [];
-    var kanaLines = 0;
     for (var i = 0; i < regions.length; i++) {
-      var t = regionText(regions[i]);
-      texts.push(t);
-      if (RE_KANA_ANY.test(t)) kanaLines++;
+      if (RE_KANA_ANY.test(regionText(regions[i]))) return true;
     }
-    var key = kanaLines + "|" + texts.join("\n").slice(0, 4000);
-    if (japaneseSongCache.key === key) return japaneseSongCache.value;
-    var value = kanaLines >= 1;
-    japaneseSongCache = { key: key, value: value };
-    return value;
+    return false;
   }
 
   function pass() {
     if (!config.enabled || !state.annotator) return;
+    /*
+     * 新一轮扫描：语种投票 / 整首判定要重算一次（见 songKind 上面的说明）。
+     * 只在这一处加一，这样一轮 pass 里几百个节点共用同一个结论。
+     */
+    songLangGen++;
     if (emergencyOff()) {
       warn("检测到紧急开关，停用插件");
       disable();
@@ -2627,7 +2765,6 @@
        */
       updateSongScope();
       updateJapaneseFont();
-      updateLineHeight();
       var regions = null;
       if (config.scope === "lyrics") regions = state.annotator.findRegions("lyrics");
       else if (config.scope === "titles") regions = state.annotator.findRegions("titles");
@@ -2638,6 +2775,8 @@
         regions = state.annotator.findRegions("lyrics");
       }
       state.lastResult = state.annotator.pass(regions);
+      // 行距用 pass 交回来的"原文行"，不再自己查一遍 DOM（见 updateLineHeight 的说明）
+      updateLineHeight(state.lastResult && state.lastResult.lyricRegions);
       /*
        * "扫到了歌词区域，却一个注音都没加上"是最常见的那种故障（"这首歌整页都没
        * 注音"）。原因（图案行 / 署名行 / 无译文 / 认输期）只写在控制台的 skips 里，
@@ -2760,6 +2899,8 @@
       state.timerIsRaf = false;
     }
     if (state.annotator) state.annotator.restoreAll();
+    // 内联行高是我们写的，停用时要一起收走（DOM 还原测试会逐字节比对）
+    clearLineHeights();
     if (typeof WKAnnotate !== "undefined" && WKAnnotate.removeStyles) {
       WKAnnotate.removeStyles(document);
     }
@@ -2769,6 +2910,46 @@
     if (state.annotator) state.annotator.restoreAll();
     if (state.corrector) state.corrector.retryMisses();
     schedule(0);
+  }
+
+  /*
+   * 大模型切词（llmSegment）的结果回来了：把这些行**重扫一遍**。
+   *
+   * 为什么不能只 relabel()：新切分常常把两个已经注好的 ruby 合成一个词
+   * （帷 とばり + 帳 ちょう → 帷帳 とばり），relabel 只会改写已有 ruby 的读音，
+   * 合不成一个，旧的错切分会一直留在屏幕上。
+   * 一批 6 句、一首歌七八批，所以攒一下再扫（每批都整块重扫会看着在闪）。
+   */
+  var segRescanPending = {};
+  var segRescanTimer = null;
+  function scheduleSegRescan(lines) {
+    for (var i = 0; lines && i < lines.length; i++) segRescanPending[lines[i]] = 1;
+    if (segRescanTimer) return;
+    segRescanTimer = setTimeout(function () {
+      segRescanTimer = null;
+      var want = segRescanPending;
+      segRescanPending = {};
+      if (!config.enabled || !config.llmSegment || !state.annotator || !state.annotator.rescanRegions) return;
+      var regions = [];
+      try {
+        regions = state.annotator.findRegions("lyrics");
+      } catch (e) {
+        return;
+      }
+      var hit = [];
+      for (var j = 0; j < regions.length; j++) {
+        var t = regionText(regions[j]);
+        if (!t) continue;
+        if (Object.prototype.hasOwnProperty.call(want, t)) hit.push(regions[j]);
+      }
+      if (!hit.length) return;
+      try {
+        state.annotator.rescanRegions(hit);
+      } catch (e2) {
+        /* 重扫失败不影响别处 */
+      }
+      notifyConfigUI();
+    }, 400);
   }
 
   /**
@@ -2822,8 +3003,13 @@
     if (RE_KANA_ANY.test(t)) return true;
     if (fontSkipped(el)) return false;
     if (!/[\u4E00-\u9FFF]/.test(t)) return false;
+    /*
+     * 和注音层用同一套「这一行是不是日文」的判据。
+     * 以前这里只问 isChineseLine，中文歌里那些"没有中文特有字形"的纯汉字行
+     * （`不用害怕` / `毫不得意`）就全被换成了日文字形（真机现象：中文歌词显示成日文字体）。
+     */
     if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(t)) return false;
-    return true;
+    return lineLooksJapanese(t);
   }
 
   /**
@@ -2943,40 +3129,120 @@
    *
    * 有注音的行会被 <rt> 撑高一点，于是"唱到那行时整块歌词往上跳"。
    * 只靠 rt 的 line-height 归零不够（不同歌词插件对行高的写法不一样），
-   * 干脆给**每一行**一个固定的 line-height：有注音、没注音一样高。
-   * 值取 2.2 —— 够放下一行 55% 的注音，又不会把行拉得太开。
+   * 干脆给**每一行原文**一个固定的 line-height：有注音、没注音一样高。
+   *
+   * 只碰原文行，**不碰音译 / 翻译**：以前写的是一条 CSS 规则
+   * （`ul.lyric li p` + `[data-wk-region]`），而网易云默认页一行是
+   * `li.line > p × 2`（第一个 p 原文、第二个 p 中文翻译）—— 选择器把翻译那一行
+   * 也一起改了行高（真机现象：音译/翻译行忽宽忽窄，和原文对不上）。
+   * 现在改成**逐元素内联样式**，作用的正是注音层认下的那些"原文行"
+   * （findRegions("lyrics") 已经把翻译层和 RNP 的 -romaji / -translated 踢掉了）。
    */
-  var lineHeightCss = null;
-  function updateLineHeight() {
-    var want = config.uniformLineHeight !== false;
-    var css = "";
-    if (want) {
-      var sels =
-        typeof state.annotator !== "undefined" && state.annotator && state.annotator.lyricSelectors
-          ? state.annotator.lyricSelectors()
-          : ["ul.lyric li p", ".rnp-lyrics-line-original"];
-      var parts = ["[data-wk-region]"];
-      for (var i = 0; i < sels.length; i++) parts.push(sels[i]);
-      var lh = Number(config.lineHeight);
-      if (!(lh >= 1.1 && lh <= 3)) lh = 1.6;
-      css = parts.join(",\n") + " { line-height: " + lh + " !important; }";
+  var lhEls = [];
+  /** 撤掉所有内联行高（停用 / 关掉开关时用） */
+  function clearLineHeights() {
+    for (var i = 0; i < lhEls.length; i++) {
+      try {
+        if (lhEls[i] && lhEls[i].style) lhEls[i].style.removeProperty("line-height");
+      } catch (e) {
+        /* 元素已经丢了就算了 */
+      }
     }
-    if (css === lineHeightCss) return;
-    lineHeightCss = css;
+    lhEls = [];
+  }
+  /**
+   * @param {Array<Element>} [regions] 这次要覆盖的"原文行"，由 annotate 的 pass() 交回来。
+   *        不给时自己查一遍（改设置、面板预览这种一次性调用）。
+   *
+   * 性能上必须做到两件事，否则歌词滚动会发涩（真机报过"卡"）：
+   *   1. 不要自己再调 findRegions("lyrics") —— 那是 11 个选择器 + 逐元素可见性判断，
+   *      每轮扫描多查一遍 DOM，代价比注音本身还大；
+   *   2. 已经写过同一个值的元素**一个字都别再写** —— 写 style 会触发样式重算，
+   *      每轮给几十行写一遍就是稳定掉帧。
+   */
+  function updateLineHeight(regions) {
+    var want = config.uniformLineHeight !== false;
+    var lh = Number(config.lineHeight);
+    if (!(lh >= 1.1 && lh <= 3)) lh = 1.6;
+    var v = String(lh);
+    var list = regions;
+    if (!list && want && state.annotator && state.annotator.findRegions) {
+      try {
+        list = state.annotator.findRegions("lyrics");
+      } catch (e) {
+        list = [];
+      }
+    }
+    if (!list) list = [];
+    if (!want) {
+      // 关掉开关：把写过的内联行高全撤掉，然后什么都不加
+      clearLineHeights();
+      try {
+        var css0 = document.getElementById("lyric-ruby-lineheight");
+        if (css0 && css0.parentNode) css0.parentNode.removeChild(css0);
+      } catch (e6) {
+        /* 没有就算了 */
+      }
+      return;
+    }
+    // 稳态：这一批元素身上已经都是这个值 → 直接返回（这条是滚动流畅的关键）
+    if (want && list.length === lhEls.length) {
+      var same = true;
+      for (var s = 0; s < list.length; s++) {
+        var el0 = list[s];
+        if (el0 !== lhEls[s] || !el0 || !el0.style) {
+          same = false;
+          break;
+        }
+        try {
+          if (el0.style.getPropertyValue("line-height") !== v) {
+            same = false;
+            break;
+          }
+        } catch (e0) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+    // 撤掉已经不在这一批里的（换歌 / 关掉开关）
+    for (var i = lhEls.length - 1; i >= 0; i--) {
+      var old = lhEls[i];
+      if (list.indexOf(old) >= 0) continue;
+      lhEls.splice(i, 1);
+      try {
+        if (old && old.style) old.style.removeProperty("line-height");
+      } catch (e2) {
+        /* 元素已经被丢掉就算了 */
+      }
+    }
+    if (want) {
+      for (var k = 0; k < list.length; k++) {
+        var el = list[k];
+        if (!el || !el.style) continue;
+        var cur = "";
+        try {
+          cur = el.style.getPropertyValue("line-height");
+        } catch (e3) {
+          cur = "";
+        }
+        if (cur !== v) {
+          try {
+            el.style.setProperty("line-height", v, "important");
+          } catch (e4) {
+            continue;
+          }
+        }
+        if (lhEls.indexOf(el) < 0) lhEls.push(el);
+      }
+    }
+    // 1.8.0 之前写的是样式表，留在这里会连翻译行一起改，收走
     try {
-      var el = document.getElementById("lyric-ruby-lineheight");
-      if (!css) {
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-        return;
-      }
-      if (!el) {
-        el = document.createElement("style");
-        el.id = "lyric-ruby-lineheight";
-        (document.head || document.documentElement).appendChild(el);
-      }
-      el.textContent = css;
-    } catch (e) {
-      /* 挂不上不影响注音 */
+      var css = document.getElementById("lyric-ruby-lineheight");
+      if (css && css.parentNode) css.parentNode.removeChild(css);
+    } catch (e5) {
+      /* 没有就算了 */
     }
   }
 
@@ -3047,6 +3313,8 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
       '<div class="wk-row"><input type="password" data-k="llmKey" placeholder="大模型 API Key（留空则不用）"> ' +
       '<button data-a="llmTest">测试</button> <span data-v="llmTest"></span></div>' +
+      // 切词单独一个开关：它每句发一次请求，比"只问个别词"重得多，默认关
+      '<div class="wk-row"><label><input type="checkbox" data-k="llmSegment"> 大模型切词（熟字训优先）</label></div>' +
       '<div class="wk-llm-state wk-hint"></div>' +
       "<h3>预览</h3>" +
       '<div class="wk-preview"></div>' +
@@ -3597,7 +3865,6 @@
             }
             rescan();
           } else if (NEEDS_LINEHEIGHT.indexOf(key) >= 0) {
-            lineHeightCss = null;
             updateLineHeight();
           } else if (NEEDS_FONT.indexOf(key) >= 0) {
             // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次样式表
@@ -3946,6 +4213,14 @@
           },
           // 同上：拦住"意译/拟声词"（案例 tick -> カチカチ）
           validate: validateAnswer,
+          /*
+           * 整句切词回来了（llmSegment 那一档）：把这些行拆回纯文本再重注 ——
+           * 新切分可能把两个已经注好的 ruby 合成一个词（见 scheduleSegRescan）。
+           */
+          onSegmented: function (lines) {
+            if (!config.enabled || !config.llmSegment) return;
+            scheduleSegRescan(lines);
+          },
           log: function () {
             trace("llm", Array.prototype.join.call(arguments, " "));
             if (config.verbose) console.log.apply(console, [LOG].concat(Array.prototype.slice.call(arguments)));
@@ -4000,8 +4275,8 @@
           return looksCensoredRun(text);
         },
         // 振假名 / 汉字 / 谚文：读音在切的时候就定了，注音层只负责包成 ruby（见 extraTokens）
-        extraTokens: function (text, context) {
-          return extraTokens(text, context);
+        extraTokens: function (text, context, host, offset, lineText) {
+          return extraTokens(text, context, host, offset, lineText);
         },
         annotateAll: config.annotateAll !== false,
         log: function () {

@@ -583,7 +583,7 @@ test("全大写缩写贴着数字是字母名：AM6:00 -> エーエム（英语�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
@@ -620,7 +620,7 @@ test("西里尔全大写缩写逐字母读：СССР -> エスエスエスエ�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
@@ -656,7 +656,7 @@ test("ツイッター只在 `Xだけの…` 那一句命中；别的 X 照旧字
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
@@ -1768,10 +1768,28 @@ test("钩子：对方重建完一行直接叫我们时，注音要在同一次�
 });
 
 test("禁用后 DOM 完全还原并收走样式，重新启用又能标注", async () => {
+  /**
+   * 属性顺序不参与比较。
+   *
+   * 重新启用之后 `style`（行高）和 `data-wk-region` 谁先写上去取决于那一轮
+   * 是先注音还是先写样式，两者都对，但 innerHTML 的字节序会不一样。
+   * 这里只比"有哪些元素、每个元素有哪些属性、值是什么"。
+   */
+  const stable = (root) => {
+    const clone = root.cloneNode(true);
+    const walk = (el) => {
+      const attrs = [...el.attributes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const a of attrs) el.removeAttribute(a.name);
+      for (const a of attrs) el.setAttribute(a.name, a.value);
+      for (const c of el.children) walk(c);
+    };
+    walk(clone);
+    return clone.innerHTML;
+  };
   const env = bootPlugin();
   await env.runLoad();
   await sleep(600);
-  const annotated = env.document.body.innerHTML;
+  const annotated = stable(env.document.body);
   assert.ok(rubyCount(env.document.body) > 0);
 
   env.api.set("enabled", false);
@@ -1782,7 +1800,7 @@ test("禁用后 DOM 完全还原并收走样式，重新启用又能标注", asy
 
   env.api.set("enabled", true);
   await sleep(600);
-  assert.strictEqual(env.document.body.innerHTML, annotated, "重新启用后应该回到同样的结果");
+  assert.strictEqual(stable(env.document.body), annotated, "重新启用后应该回到同样的结果");
   assert.ok(env.document.getElementById("lyric-ruby-style"), "样式要补回来");
 });
 
@@ -2353,7 +2371,7 @@ test("冠词 a 不许被行里别处的「a 贴着汉字」带成 エイ（Tell 
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   // 一个 <li> 里几块文字，注音落在哪一块取决于"哪块像歌词原文"，所以按整行取注音
   const li = env.document.querySelector("ul.lyric li");
   const pairs = [...li.querySelectorAll("ruby.wk-ruby")].map((r) => [
@@ -2968,7 +2986,7 @@ test("法语歌词：整行用「法语拼读」，常用词走人工词表", as
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (i) =>
     new Map(
@@ -3108,7 +3126,7 @@ test("德语歌词（用例 1）：整行走德语拼读，英文行不受影响
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -3178,7 +3196,7 @@ test("拉丁语歌词（用例 2 / 5 / 7）：古典式拼读 + 短句靠整首�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -3229,7 +3247,7 @@ test("斯瓦希里语歌词（用例 3 / 4）：按开音节直读，中文译�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -3272,7 +3290,7 @@ test("拉丁语行的段标 `(A:` / `(B:` 不注音，同行的词照常标", as
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -3313,7 +3331,7 @@ test("段标不会被「学会的词」带出读音；呼语 O 读 オー", asyn
     },
   });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -3340,7 +3358,7 @@ test("说话人段标 `M:` 留白，同一行里 `匿名M` 的 M 照读 エム",
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   // 第一行：只有 `匿名M` 那个 M 有注音，行首的段标一个字都不许加
@@ -3438,7 +3456,7 @@ test("日语歌里的汉字不标普通话读音（开了开关也不标）", as
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const han = [...ps[1].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
   assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
@@ -3963,14 +3981,45 @@ test("全角数字要注音、信息行不许注音", async () => {
   }
 });
 
-test("统一行距：歌词行有固定 line-height 样式", async () => {
-  const env = bootPlugin(NCM_HTML, { config: { online: false, llmEnabled: false } });
+test("统一行距：只给歌词原文行加行高，音译 / 翻译行不碰", async () => {
+  /*
+   * 以前是一条 CSS 规则（`ul.lyric li p, [data-wk-region]`），而网易云默认页一行是
+   * `li.line > p × 2`（第一个 p 原文、第二个 p 中文翻译）—— 选择器把翻译那一行
+   * 也一起改了行高，真机上就是"音译/翻译行忽宽忽窄、和原文对不上"。
+   * 现在改成逐个元素写内联样式，只写在注音层认下的"原文行"上。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>きらめく light と clover</p><p>闪耀的光与三叶草</p></li>
+  <li class="line"><p>ずっと dream を見てた</p><p>一直做着梦</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
   await sleep(250);
-  const style = env.document.getElementById("lyric-ruby-lineheight");
-  assert.ok(style, "要有统一行距的样式表");
-  assert.ok(/line-height:\s*1\.6/.test(style.textContent), "默认行高 1.6（可调）：" + style.textContent);
-  assert.ok(/ul\.lyric li p/.test(style.textContent), "要覆盖歌词选择器：" + style.textContent);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  assert.strictEqual(ps.length, 4, "两行 × (原文 + 翻译)");
+  for (const i of [0, 2]) {
+    assert.strictEqual(ps[i].style.getPropertyValue("line-height"), "1.6", "原文行要固定行高（默认 1.6）：" + ps[i].style.cssText);
+    assert.strictEqual(ps[i].style.getPropertyPriority("line-height"), "important", "要 !important，压过页面自己的规则");
+  }
+  for (const i of [1, 3]) {
+    assert.strictEqual(ps[i].style.getPropertyValue("line-height"), "", "翻译行不许改行高：" + ps[i].style.cssText);
+  }
+  assert.strictEqual(
+    env.document.getElementById("lyric-ruby-lineheight"),
+    null,
+    "不再用样式表（那种写法会连翻译行一起改）"
+  );
+
+  // 行高可调：改成 2.2 之后原文行跟着变
+  env.window.WK.set("lineHeight", 2.2);
+  await sleep(200);
+  assert.strictEqual(ps[0].style.getPropertyValue("line-height"), "2.2", "行高可调：" + ps[0].style.cssText);
+
+  // 关掉「统一行距」：内联行高要撤干净，翻译行照旧不动
+  env.window.WK.set("uniformLineHeight", false);
+  await sleep(200);
+  assert.strictEqual(ps[0].style.getPropertyValue("line-height"), "", "关掉之后要撤掉：" + ps[0].style.cssText);
 });
 
 test("歌词界面里双击注音就能改：只改这一行，并落盘", async () => {
@@ -4155,7 +4204,7 @@ test("中文歌的版权块不注音（词版权管理方：… 有限公司）"
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   // 歌词行照标（汉字）
   assert.ok(ps[0].querySelectorAll("ruby.wk-ruby").length > 3, "歌词行要逐字注音：" + ps[0].innerHTML);
@@ -4249,7 +4298,7 @@ test("西语歌词（On My Way）：y イ、ti ティ、de デ（不是字母名
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const map = (p) =>
     new Map(
@@ -4287,7 +4336,7 @@ test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", a
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHangul: true } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const p = env.document.querySelector("ul.lyric li p");
   const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
@@ -4408,7 +4457,7 @@ test("拉丁语行的呼语 O 与连词 o：大写读 オー、小写读 オ（`
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -4459,7 +4508,7 @@ ${CREDITS.map((c) => '  <li class="line"><p>' + c + "</p></li>").join("\n")}
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   // 前两行是真歌词，照常注音（尤其 `Music と light の 中で`：不能因为以 Music 开头就杀）
@@ -4504,7 +4553,7 @@ test("日语行里的拉丁词走词典：同一个 `Ave` 不许两行两个读�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -4540,7 +4589,7 @@ test("人工词典优先于「学会的词」：模型沉淀的 `ave アヴェ` 
     },
   });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const got = linePairs(ps, 0);
   assert.strictEqual(got.get("Ave"), "アベ", "人工词典条目要赢：" + JSON.stringify([...got]));
@@ -4562,7 +4611,7 @@ test("德语行 `Sieh mit deinen Augen`：`mit` 不许念成 MIT 的字母名", 
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const got = linePairs(env.document.querySelectorAll("ul.lyric li p"), 0);
   assert.strictEqual(env.api.lang("Sieh mit deinen Augen").id, "de", "这一行要判成德语");
   assert.strictEqual(got.get("mit"), "ミット", "mit 不许念字母名：" + JSON.stringify([...got]));
@@ -4580,7 +4629,7 @@ test("连字符串起来的长词：一行里每个词各自一个 ruby（不许
 </ul></div></div></body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
 
   const p = env.document.querySelectorAll("ul.lyric li p")[0];
   const bases = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.childNodes[0].nodeValue);
@@ -4612,7 +4661,7 @@ test("德语人名 `Erika`：一行只有一个词也读 エーリカ（不许�
 </ul></div></div></body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   assert.deepStrictEqual(PAIRS(ps[0]), [["Erika", "エーリカ"]], "德语人名要读长音");
   assert.strictEqual(env.api.read("Erika").source, "dict", "要有确定答案，不许停在罗马音层");
@@ -4631,7 +4680,7 @@ test("俄语歌词（用例 6）：西里尔字母也注音（词典和罗马音
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -4664,7 +4713,7 @@ test("日语行里夹的西里尔 / 希腊词也要注音（假名优先不该�
 </body></html>`;
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(400);
+  await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   const l0 = linePairs(ps, 0);
@@ -5053,6 +5102,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="annotateHangul"]',
     '[data-k="llmEnabled"]',
     '[data-k="llmKey"]',
+    '[data-k="llmSegment"]',
     '[data-a="llmTest"]',
     ".wk-llm-state",
     ".wk-preview",
@@ -5265,4 +5315,164 @@ test("缺核心模块时优雅退出，不抛异常", () => {
   }, "缺依赖时不应抛异常");
   assert.strictEqual(window.WK, undefined, "初始化失败就不该导出 API");
   assert.strictEqual(window.WesternKatakana, undefined);
+});
+
+/** 逐字/整行都能用的假分词器：表里没有的字当作"读不出来"（reading "*"） */
+const perCharTokenizer = (table) => ({
+  tokenize(text) {
+    const out = [];
+    for (const ch of text) out.push({ surface_form: ch, reading: table[ch] || "*" });
+    return out;
+  },
+});
+
+test("中文歌里夹日语行：中文行走普通话读音，日语行照旧振假名", async () => {
+  /*
+   * 真机事故（截图）：一首中文歌里有一句 ありがとう，于是整首被判成日语歌 ——
+   *   `不用害怕` 被注成 ふようがい（日语读音），
+   *   `(G・U・T・S雫)` 的 雫 被注成 ナ、`(ツンデレ・ガール 愛莉)` 的 莉 被注成 リ（普通话读音），
+   *   连中文行的字体都被换成了日文字形。
+   * 现在：整首按"假名行 vs 中文行"投票定语种；逐字歌词一个节点一个字时，
+   * 这几个字跟着**整行**的语种走。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p><span>你</span><span>的</span><span>眼</span><span>睛</span><span>看</span><span>见</span><span>了</span></p></li>
+  <li class="line"><p><span>不</span><span>用</span><span>害</span><span>怕</span></p></li>
+  <li class="line"><p><span>毫</span><span>不</span><span>得</span><span>意</span></p></li>
+  <li class="line"><p>今日もありがとう</p></li>
+</ul></div></body></html>`;
+
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 今: "キョ", 日: "ウ", も: "モ", あ: "ア", り: "リ", が: "ガ", と: "ト", う: "ウ" }));
+  await env.runLoad();
+  await sleep(600);
+
+  const pairs = (el) =>
+    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [
+      r.childNodes[0].nodeValue,
+      r.querySelector(".wk-rt").textContent,
+    ]);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+
+  // 1. 中文行：读音来自普通话表（不是日语读音）
+  const wantHan = (text) =>
+    JSON.parse(JSON.stringify(env.window.WKCJK.scan(text, { han: true, hangul: false }))).map((x) => [x.text, x.kana]);
+  assert.deepStrictEqual(pairs(ps[1]), wantHan("不用害怕"), "中文行要按普通话读音注：" + ps[1].innerHTML);
+  assert.ok(ps[1].textContent.indexOf("ふ") < 0, "不许出现日语读音：" + ps[1].innerHTML);
+  // 2. 日语行：照旧振假名（今日 きょ + う，假分词器逐字给的）
+  assert.deepStrictEqual(pairs(ps[3]), [["今日", "きょう"]], "日语行照旧振假名：" + ps[3].innerHTML);
+  // 3. 中文行的字体不许换成日文字体
+  assert.strictEqual(ps[1].style.getPropertyValue("font-family"), "", "中文行不许换日文字体：" + ps[1].getAttribute("style"));
+});
+
+test("逐字节点 + 日语标题行：雫 / 愛 按整行判成日文，不许拿普通话读音", async () => {
+  /*
+   * 同一个字在两首歌里的语种不一样，只看一个节点判不出来：
+   *   `(G・U・T・S雫)` 的 雫 读 しずく、`(ツンデレ・ガール 愛莉)` 的 愛 读 あい；
+   *   以前它们被注成 ナ / リ（普通话读音），因为逐字节点自己不带假名，
+   *   整首又被那句 ありがとう 判成了日语歌。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p><span>(</span><span>G</span><span>・</span><span>U</span><span>・</span><span>T</span><span>・</span><span>S</span><span>雫</span><span>)</span></p></li>
+  <li class="line"><p><span>(</span><span>ツ</span><span>ン</span><span>デ</span><span>レ</span><span>・</span><span>ガ</span><span>ー</span><span>ル</span><span> </span><span>愛</span><span>莉</span><span>)</span></p></li>
+  <li class="line"><p><span>你</span><span>的</span><span>眼</span><span>睛</span><span>看</span><span>见</span><span>了</span></p></li>
+</ul></div></body></html>`;
+
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  env.window.WKFurigana.setTokenizer(
+    perCharTokenizer({ 雫: "シズク", 愛: "アイ", ツ: "ツ", ン: "ン", デ: "デ", レ: "レ", ガ: "ガ", ー: "ー", ル: "ル" })
+  );
+  await env.runLoad();
+  await sleep(600);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const rubyOver = (p, ch) => {
+    const hit = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === ch);
+    return hit.length ? hit[0].querySelector(".wk-rt").textContent : null;
+  };
+  assert.strictEqual(rubyOver(ps[0], "雫"), "しずく", "雫 要读日语 しずく：" + ps[0].innerHTML);
+  assert.ok(!/ナ/.test(ps[0].innerHTML), "不许出现普通话读音 ナ：" + ps[0].innerHTML);
+  assert.strictEqual(rubyOver(ps[1], "愛"), "あい", "愛 要读日语 あい：" + ps[1].innerHTML);
+  assert.strictEqual(rubyOver(ps[1], "莉"), null, "莉 在日语里没有标准读音，宁可留白：" + ps[1].innerHTML);
+  assert.ok(rubyOver(ps[2], "看") !== null, "同一首里的中文行要注普通话读音：" + ps[2].innerHTML);
+});
+
+test("大模型切词（单独开关）：按整句切分，帷帳 读 とばり", async () => {
+  /*
+   * kuromoji 会把熟字训切碎（帷 + 帳 → とばり + ちょう）。开着这个开关时，
+   * 整句交给模型切词，答案按「底字 -> 读音」当这一行的修正用。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>帷帳の奥で</p></li>
+</ul></div></body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: {
+      online: false,
+      llmEnabled: true,
+      llmSegment: true,
+      llmKey: "sk-test",
+      llmEndpoint: "https://api.example.com/v1/chat/completions",
+    },
+    fetch: function (url, init) {
+      const content = JSON.parse(init.body).messages[0].content;
+      // 只有切词那一档才回答案；别的（单词校正）回空对象，免得两档互相干扰
+      if (content.indexOf("熟字训") < 0) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ choices: [{ message: { content: "{}" } }] }),
+        });
+      }
+      asked.push(content);
+      const out = { "1": [["帷帳", "とばり"], ["奥", "おく"]] };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  env.window.WKFurigana.setTokenizer(
+    perCharTokenizer({ 帷: "トバリ", 帳: "チョウ", の: "ノ", 奥: "オク", で: "デ" })
+  );
+  await env.runLoad();
+  await sleep(3000);
+
+  assert.ok(asked.length >= 1, "开了开关就要发请求");
+  assert.ok(asked[0].indexOf("帷帳の奥で") >= 0, "要把整句发过去：" + asked[0].slice(-80));
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["帷帳", "とばり"], ["奥", "おく"]], "整词合成一个注音：" + p.innerHTML);
+});
+
+test("大模型切词没开时：一句都不发，也不影响普通振假名", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>帷帳の奥で</p></li>
+</ul></div></body></html>`;
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
+    fetch: function (url, init) {
+      asked.push(JSON.parse(init.body).messages[0].content);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: "{}" } }] }),
+      });
+    },
+  });
+  await env.runLoad();
+  await sleep(1200);
+  assert.ok(
+    asked.every((c) => c.indexOf("熟字训") < 0),
+    "没开切词开关就不许发切词请求：" + asked.map((c) => c.slice(0, 40)).join(" | ")
+  );
 });

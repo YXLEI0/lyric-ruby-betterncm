@@ -194,7 +194,8 @@
       return null;
     }
     // 只有数字的行也要注（kuromoji 不给阿拉伯数字读音，由 core/numbers.js 补）
-    if (!d.core.hasKanji(s) && !/[0-9]/.test(s)) return null;
+    // 全角数字（１２３）同样算 —— 歌词里经常是全角的
+    if (!d.core.hasKanji(s) && !/[0-9\uFF10-\uFF19]/.test(s)) return null;
     var kana = (opts && opts.kana) || "hiragana";
     var key = cacheKey(s, kana) + "\u0001" + fixesKey(opts && opts.fixes);
     var hit = cache.get(key);
@@ -213,8 +214,17 @@
     var fixed = fixesIn(s, (opts && opts.fixes) || null, kana);
     var suppressed = suppressedIn(s, opts && opts.fixes);
     var segs = null;
+    /*
+     * 全角数字先折成半角再分词（长度一一对应，下标不用换算）。
+     *
+     * 为什么必须折：kuromoji 只认半角，「３つ」会当成一个无读音的怪词，整行读不出来；
+     * 折成「3つ」之后它就能切出「数字 + 助数词」，读音是 みっつ。
+     */
+    var tokText = s.replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
     try {
-      segs = d.core.tokensToSegments(d.tokenizer.tokenize(s), { kana: kana });
+      segs = d.core.tokensToSegments(d.tokenizer.tokenize(tokText), { kana: kana });
     } catch (e) {
       segs = null;
     }
@@ -246,6 +256,20 @@
         if (at < 0) continue;
         // 底字取原文那一段（位置一一对应），读音来自换过写法的分词结果
         var text0 = s.substr(at, seg.text.length);
+        if (!text0) continue;
+        /*
+         * 数字 + 假名（`1つ` ひとつ / `2人` ふたり / `10日` とおか）：
+         * 只给数字那一小段注音，后面的假名留在底字外面。
+         *
+         * 为什么：假名本来就会读，再盖一层注音（真机现象：「1つ」的 つ 上面
+         * 也顶着一层假名）纯属噪音。后面跟的是**汉字**时（10日）就不能截 ——
+         * 汉字自己需要读音，截掉就漏标了。
+         */
+        var baseLen = text0.length;
+        if (seg.num && seg.num.len > 0 && seg.num.len < baseLen) {
+          if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(text0.slice(seg.num.len))) baseLen = seg.num.len;
+        }
+        text0 = text0.slice(0, baseLen);
         if (!text0) continue;
         if (coveredByFixed(at, at + text0.length)) continue; // 用户已经指定了这段怎么读
         var gone = false;

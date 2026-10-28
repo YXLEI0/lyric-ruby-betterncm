@@ -2044,6 +2044,28 @@ function buildRuby(base, gloss, provisional, source) {
       /** 「这一整块是不是署名表」按行列表缓存，一轮只算一次（见 lineLooksLikeCreditBlock） */
       var creditBlockCache = new Map();
       /*
+       * 区域的可见性一轮只判一次。
+       *
+       * 逐字歌词一行十几个文本节点，每轮都问一次 isVisible(region) 就是十几个
+       * getComputedStyle —— 同一个区域问十几遍同一个答案，纯浪费
+       * （CPU 采样里 isVisible 占了半壁江山）。
+       */
+      var visibleCache = new Map();
+      function regionVisible(el) {
+        if (!el) return false;
+        if (!el.isConnected) return false;
+        var hit = visibleCache.get(el);
+        if (hit !== undefined) return hit;
+        var v = false;
+        try {
+          v = isVisible(el);
+        } catch (eVis) {
+          v = false;
+        }
+        visibleCache.set(el, v);
+        return v;
+      }
+      /*
        * 这一轮里"要等一会儿再试"的最短时间。有节点因为
        * 「文本在动」（MOTION_WINDOW_MS 滑动窗口）或「认输期」（churn 退避）
        * 被跳过时记下来，最后交给上层安排下一次扫描 —— 页面自己不动的时候，
@@ -2066,7 +2088,7 @@ function buildRuby(base, gloss, provisional, source) {
             break;
           }
         }
-        if (!region.isConnected || !isVisible(region)) continue;
+        if (!regionVisible(region)) continue;
 
         /*
          * 这里没有「按行分工、让给 jp-furigana」那套规则 —— 那是
@@ -2291,12 +2313,23 @@ function buildRuby(base, gloss, provisional, source) {
       }
       var notes = skipNotes;
       skipNotes = [];
+      /*
+       * 把这一轮真正处理过的区域也交回去：上层（统一行距）要按"原文行"逐个写内联样式，
+       * 自己再调一次 findRegions("lyrics") 就等于每轮多查一遍 DOM
+       * （11 个选择器 + 逐元素可见性判断），真机上那点开销够让歌词滚起来发涩。
+       */
+      var lyricList = [];
+      for (var lr = 0; lr < list.length; lr++) {
+        if (isLyricRegion(list[lr])) lyricList.push(list[lr]);
+      }
       return {
         scanned: list.length,
         changed: changed,
         restored: restored,
         skipped: skipped,
         unstable: unstable,
+        regions: list,
+        lyricRegions: lyricList,
         // 跳过原因（上层会写进 WK.stats()，排障时一眼看到"为什么这行没注音"）
         skips: notes,
         errors: errorNotes, // 单个节点注音时抛的异常（以前只在轨迹里，现在也会回到上层）
@@ -2333,6 +2366,45 @@ function buildRuby(base, gloss, provisional, source) {
      * 变更（补丁第三条），但这是同步调用链上的一环，递归没有任何好处，挡掉。
      */
     var repairing = false;
+    /**
+     * 只把指定的几行还原、再重注一遍。
+     *
+     * 什么时候用：大模型把某一行的切分改了（帷 + 帳 → 帷帳 とばり、帷 = とばり / 帳 = ちょう）。
+     * 光 relabel() 不够 —— 它只改写已有 ruby 的读音，**合不了一个词**，
+     * 旧的错切分（两个 ruby）会一直留在屏幕上。
+     *
+     * @param {Array<Element>} list 区域元素（findRegions 返回的那种）
+     * @returns {number} 还原了几条记录
+     */
+    function rescanRegions(list) {
+      if (!list || !list.length) return 0;
+      var done = 0;
+      records.forEach(function (rec, node) {
+        var host = rec.host;
+        if (!host || !host.isConnected) return;
+        for (var i = 0; i < list.length; i++) {
+          var r = list[i];
+          if (!r) continue;
+          if (r === host || (r.contains && r.contains(host))) {
+            restoreRecord(node, rec); // 里面会把记录删掉
+            done++;
+            return;
+          }
+        }
+      });
+      if (!repairing) {
+        repairing = true;
+        try {
+          pass(list);
+        } catch (e) {
+          /* 重注失败不影响别处 */
+        } finally {
+          repairing = false;
+        }
+      }
+      return done;
+    }
+
     function repairLine(lineEl) {
       if (repairing) return false;
       if (!lineEl || lineEl.nodeType !== 1 || !lineEl.isConnected) return false;
@@ -2351,6 +2423,7 @@ function buildRuby(base, gloss, provisional, source) {
       pass: pass,
       restoreAll: restoreAll,
       relabel: relabel,
+      rescanRegions: rescanRegions,
       findRegions: findRegions,
       customRegions: customRegions,
       injectedCount: injectedCount,

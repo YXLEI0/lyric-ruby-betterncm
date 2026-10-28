@@ -29,6 +29,14 @@
   var G = typeof globalThis !== "undefined" ? globalThis : {};
 
   var CACHE_KEY = "lyric-ruby.llm.v1";
+  /*
+   * 整句切词（可选那一档）的缓存。和上面那份分开存：
+   * 那份是「词 + 语境 -> 读音」，这份是「整句 -> [[底字, 读音], ...]]」，
+   * 混在一起会在 loadCache 里被当成格式不对的条目丢掉。
+   */
+  var SEG_CACHE_KEY = "lyric-ruby.llm.segs.v1";
+  var SEG_CACHE_MAX = 800;
+  var SEG_BATCH = 6; // 一次问几句（每句都要模型切词，比单词那档重）
   var CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 半年
   var CACHE_MAX = 6000;
   var FLUSH_DELAY_MS = 400; // 攒批窗口
@@ -306,6 +314,11 @@
      * 由上层决定收不收：词是不是"两可"、本地层是不是本来就对，这些只有上层知道。
      */
     var onAnswer = typeof options.onAnswer === "function" ? options.onAnswer : null;
+    /*
+     * 一整句切词回来了（可选那一档，见下面的 segment()）：参数是"这次拿到切分的句子"。
+     * 上层要拿它把这些行重扫一遍 —— 新的切分常常把两个已经注好的 ruby 合成一个词。
+     */
+    var onSegmented = typeof options.onSegmented === "function" ? options.onSegmented : null;
 
     var cfg = {
       enabled: options.enabled !== false,
@@ -507,8 +520,14 @@
 
     function clearCache() {
       mem.clear();
+      segCache = {};
+      segQueue = [];
+      segQueued = {};
+      segFailUntil = {};
+      segDirty = true;
       dirty = true;
       saveCache(true);
+      saveSegs();
       stats.cacheHits = 0;
       stats.hits = 0;
       stats.misses = 0;
@@ -753,6 +772,307 @@
           if (queue.length) schedule(okFlag ? FLUSH_DELAY_MS : 0);
           return okFlag;
         });
+    }
+
+    // ------------------------------------------------------------ 整句切词
+    /*
+     * 可选的一档：让模型**按整句切词**并给读音（熟字训优先）。
+     *
+     * 为什么需要：kuromoji + IPADIC 会把熟字训切碎 —— 帷帳 とばり 被切成
+     * 帷（とばり）+ 帳（ちょう），明日 / 今日 这类也要靠 vendor/furigana.js 里的
+     * 覆盖表硬顶，覆盖表之外的长尾就只能注错。模型看得到整句，切分和读音都更靠得住。
+     *
+     * 返回的形状刻意做成「底字 -> 读音」的成对数组（和面板「按行修正」同一套）：
+     *   [["帷帳", "とばり"], ["奥", "おく"]]
+     * 上层把它当成这一行的 fixes 塞进 furigana 那层：长度优先、和旧切片重叠的自动让开，
+     * 不用另写一套注音逻辑。缓存也按**整句**存，绝不做全局词表
+     * （同一个词换个句子读音可能就不一样）。
+     */
+    var segCache = loadSegCache(); // 行 -> [[底字, 读音], ...]
+    var segQueue = [];
+    var segQueued = {};
+    var segInflight = false;
+    var segTimer = null;
+    var segFailUntil = {}; // 行 -> 这个时间点之前别再问（失败冷却，免得每轮重扫都发一次）
+    var segDirty = false;
+    var segStats = { lines: 0, asked: 0, hits: 0, errors: 0 };
+
+    function loadSegCache() {
+      try {
+        if (typeof localStorage === "undefined") return {};
+        var raw = localStorage.getItem(SEG_CACHE_KEY);
+        if (!raw) return {};
+        var obj = JSON.parse(raw);
+        var out = {};
+        for (var line in obj) {
+          if (!Object.prototype.hasOwnProperty.call(obj, line)) continue;
+          var list = obj[line];
+          if (!list || !list.length) continue;
+          var clean = [];
+          for (var i = 0; i < list.length; i++) {
+            var pair = list[i];
+            if (!pair || pair.length < 2) continue;
+            if (typeof pair[0] !== "string" || typeof pair[1] !== "string") continue;
+            if (!pair[0] || !pair[1]) continue;
+            clean.push([pair[0], pair[1]]);
+          }
+          if (clean.length) out[line] = clean;
+        }
+        return out;
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function trimSegCache() {
+      var keys = [];
+      for (var k in segCache) if (Object.prototype.hasOwnProperty.call(segCache, k)) keys.push(k);
+      if (keys.length <= SEG_CACHE_MAX) return;
+      // 对象键保持插入顺序：丢最早进去的那一批
+      var drop = keys.length - SEG_CACHE_MAX;
+      for (var i = 0; i < drop; i++) delete segCache[keys[i]];
+    }
+
+    function saveSegs() {
+      if (!segDirty) return;
+      segDirty = false;
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.setItem(SEG_CACHE_KEY, JSON.stringify(segCache));
+      } catch (e) {
+        log("切词缓存写入失败（配额？）：" + (e && e.message));
+      }
+    }
+
+    function segmentPrompt(lines) {
+      var rows = [];
+      for (var i = 0; i < lines.length; i++) rows.push({ i: i + 1, line: lines[i] });
+      return (
+        "你是日语歌词注音助手。下面是几句日语歌词（line 字段），请把每一句切成词，" +
+        "并给出每个词在**这一句里**的读音。\n" +
+        "要求：\n" +
+        "1. **熟字训优先**：整个词只有一个读音的，按整个词标，不要拆开 —— " +
+        "帷帳 → とばり、今日 → きょう、明日 → あした、一人 → ひとり、大人 → おとな；\n" +
+        "2. 底字只写**汉字 / 数字那一段**，不要带送假名和假名：" +
+        "鳴らす → [\"鳴\",\"な\"]、食べる → [\"食\",\"た\"]、1つ → [\"1\",\"ひとつ\"]；\n" +
+        "3. 纯假名 / 标点 / 拉丁字母的词不要列（它们本来就会读）；\n" +
+        "4. 读音用平假名；底字必须是这句里**连续出现**的一段原文，别改写原句；\n" +
+        "5. 严格输出一个 JSON 对象，键是 i 字段（数字，写成字符串也行），" +
+        "值是 [[底字, 读音], ...]，不要多余字段。\n" +
+        "歌词：" +
+        JSON.stringify(rows)
+      );
+    }
+
+    /** 模型给的一条答案能不能用：只收「这句里连续出现的一段原文 + 假名读音」 */
+    function normalizeSegs(v, line) {
+      var rows = null;
+      if (Object.prototype.toString.call(v) === "[object Array]") rows = v;
+      else if (v && typeof v === "object") {
+        // 有的模型偏好 {"帷帳":"とばり"}，也认
+        rows = [];
+        for (var kk in v) if (Object.prototype.hasOwnProperty.call(v, kk)) rows.push([kk, v[kk]]);
+      }
+      if (!rows) return null;
+      var out = [];
+      var used = {};
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var w = "";
+        var kana = "";
+        if (Object.prototype.toString.call(row) === "[object Array]" && row.length >= 2) {
+          w = row[0];
+          kana = row[1];
+        } else if (row && typeof row === "object") {
+          w = row.w || row.word || row.text || "";
+          kana = row.k || row.kana || row.reading || "";
+        }
+        w = String(w == null ? "" : w).replace(/\s+/g, "");
+        kana = String(kana == null ? "" : kana).replace(/\s+/g, "");
+        if (!w || !kana) continue;
+        if (w.length > 12 || kana.length > 20) continue;
+        if (!RE_JA_KANA.test(kana)) continue; // 只要假名（不要汉字读音、不要英文）
+        // 纯假名 / 拉丁字母的"词"不注：它们本来就会读
+        if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005\uFF10-\uFF19]/.test(w)) continue;
+        if (line.indexOf(w) < 0) continue; // 必须是这一句里的原文
+        if (used[w]) continue;
+        used[w] = 1;
+        out.push([w, kana]);
+      }
+      return out;
+    }
+
+    function applySegs(batch, obj) {
+      var lines = [];
+      for (var i = 0; i < batch.length; i++) {
+        var line = batch[i];
+        var v = obj[String(i + 1)];
+        if (v === undefined) v = obj[i + 1];
+        var list = normalizeSegs(v, line);
+        if (!list || !list.length) continue;
+        segCache[line] = list;
+        segStats.lines++;
+        lines.push(line);
+      }
+      if (!lines.length) return lines;
+      segDirty = true;
+      trimSegCache();
+      saveSegs();
+      /*
+       * 通知上层：这几句的切分到了，要**重扫这几行**。
+       * 光 relabel() 不行 —— 新切分常常把两个已经注好的 ruby 合成一个词
+       * （帷 + 帳 → 帷帳），得先把那几行拆回纯文本再重注。
+       */
+      if (onSegmented) {
+        try {
+          onSegmented(lines);
+        } catch (e) {
+          /* 上层重扫失败不影响缓存 */
+        }
+      }
+      return lines;
+    }
+
+    function segmentFailed(batch, err, usage) {
+      segInflight = false;
+      segStats.errors++;
+      stats.failures++;
+      lastError = (err && err.message) || String(err);
+      if (usage && usage.sent) {
+        try {
+          onUsage({ requests: 1, ok: 0, words: usage.words, chars: usage.chars });
+        } catch (e) {
+          /* 记账失败不影响主流程 */
+        }
+      }
+      var until = Date.now() + 60000;
+      for (var i = 0; i < batch.length; i++) segFailUntil[batch[i]] = until;
+      cooldownUntil = Date.now() + cooldownMs;
+      log("大模型切词失败（" + batch.length + " 句）：" + lastError);
+      onStatus("大模型切词失败：" + lastError);
+    }
+
+    function sendSegs() {
+      if (segInflight || !segQueue.length) return Promise.resolve(null);
+      if (!canAsk()) return Promise.resolve(null);
+      if (roomThisMinute() <= 0) {
+        scheduleSeg(60000 - (Date.now() - requestTimes[requestTimes.length - 1]) + 50);
+        return Promise.resolve(null);
+      }
+      var batch = segQueue.splice(0, SEG_BATCH);
+      if (!batch.length) return Promise.resolve(null);
+      for (var i = 0; i < batch.length; i++) delete segQueued[batch[i]];
+      segInflight = true;
+      requestTimes.push(Date.now());
+      stats.requests++;
+      segStats.asked++;
+      var usageChars = 0;
+      for (var c = 0; c < batch.length; c++) usageChars += batch[c].length;
+      var gotResponse = false;
+      var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var to = setTimeout(function () {
+        if (ctrl) ctrl.abort();
+      }, REQUEST_TIMEOUT_MS);
+      var p;
+      try {
+        p = fetch(cfg.endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + cfg.key,
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            temperature: 0,
+            max_tokens: 2000,
+            response_format: { type: "json_object" },
+            messages: [{ role: "user", content: segmentPrompt(batch) }],
+          }),
+          signal: ctrl ? ctrl.signal : undefined,
+        });
+      } catch (e) {
+        clearTimeout(to);
+        segmentFailed(batch, e, { words: batch.length, chars: usageChars, sent: false });
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(p)
+        .then(function (res) {
+          gotResponse = true;
+          if (res && res.ok) return res.json();
+          return readBody(res).then(function (body) {
+            throw httpError(res && res.status, cfg.endpoint, body);
+          });
+        })
+        .then(function (data) {
+          var content =
+            data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+          var obj = pickJson(content);
+          if (!obj) throw new Error("响应里没有 JSON：" + String(content == null ? "" : content).slice(0, 120));
+          var u = data && data.usage;
+          onUsage({
+            requests: 1,
+            ok: 1,
+            words: batch.length,
+            chars: usageChars,
+            promptTokens: u && typeof u.prompt_tokens === "number" ? u.prompt_tokens : 0,
+            completionTokens: u && typeof u.completion_tokens === "number" ? u.completion_tokens : 0,
+          });
+          var lines = applySegs(batch, obj);
+          log("大模型切词回来 " + batch.length + " 句：可用 " + lines.length + " 句");
+          // 失败退避复位：能正常回来就说明接口是通的
+          cooldownMs = cooldownBase;
+          cooldownUntil = 0;
+          failedSinceHit = 0;
+          return lines.length > 0;
+        })
+        .catch(function (err) {
+          segmentFailed(batch, err, { words: batch.length, chars: usageChars, sent: gotResponse });
+          return false;
+        })
+        .then(function (okFlag) {
+          clearTimeout(to);
+          segInflight = false;
+          if (segQueue.length) scheduleSeg(okFlag ? FLUSH_DELAY_MS : 0);
+          return okFlag;
+        });
+    }
+
+    function scheduleSeg(delay) {
+      if (segInflight || segTimer || !segQueue.length) return;
+      var d = typeof delay === "number" ? delay : FLUSH_DELAY_MS;
+      if (!canAsk()) {
+        if (!cfg.enabled || !cfg.key || !cfg.endpoint) return;
+        d = Math.max(d, cooldownUntil - Date.now() + 50);
+      }
+      segTimer = setTimeout(function () {
+        segTimer = null;
+        sendSegs();
+      }, d);
+    }
+
+    function enqueueSeg(line) {
+      if (segQueued[line] || segCache[line]) return;
+      segQueued[line] = true;
+      segQueue.push(line);
+      scheduleSeg(FLUSH_DELAY_MS);
+    }
+
+    /**
+     * 这一句的切分结果（没问过 / 还没回来时返回 null，并在后台排队）。
+     * @param {string} line 一整句歌词的原文
+     * @returns {Array<Array<string>>|null} [[底字, 读音], ...]
+     */
+    function segment(line) {
+      var s = contextKey(line);
+      if (!s) return null;
+      var hit = segCache[s];
+      if (hit) return hit;
+      // 没有汉字就不用切：假名 / 英文行 kuromoji 那层已经够了
+      if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(s)) return null;
+      if (!canAsk()) return null;
+      if (segFailUntil[s] && Date.now() < segFailUntil[s]) return null;
+      enqueueSeg(s);
+      return null;
     }
 
     /**
@@ -1142,7 +1462,16 @@
         timer = null;
         timerDelay = -1;
       }
-      return send();
+      if (segTimer) {
+        clearTimeout(segTimer);
+        segTimer = null;
+      }
+      var p = segQueue.length ? sendSegs() : Promise.resolve(null);
+      var q = send();
+      // 两档都要等（测试里常常只看"请求发完了没有"）
+      return Promise.resolve(p).then(function () {
+        return q;
+      });
     }
 
     /**
@@ -1200,6 +1529,13 @@
 
     return {
       lookup: lookup,
+      /**
+       * 这一整句的切分 / 读音（可选那一档，见上面「整句切词」）。
+       *
+       * 返回 [[底字, 读音], ...]；没问过就返回 null 并在后台排队，
+       * 回来之后通过 onSegmented 让上层把那几行重扫一遍。
+       */
+      segment: segment,
       peek: peek,
       /**
        * 导出缓存里"问出来过"的词 —— 给「把常用词沉淀进离线词典」用。
@@ -1264,6 +1600,10 @@
         if (!canAsk() && queue.length) {
           queue = [];
           queued.clear();
+        }
+        if (!canAsk() && segQueue.length) {
+          segQueue = [];
+          segQueued = {};
         }
         /*
          * 这一层刚变得可用（多半是刚填好 key）：把 wanted 里"注音那一刻
@@ -1384,6 +1724,11 @@
           cooldownMs: Math.max(0, cooldownUntil - Date.now()),
           cooldownMaxMs: COOLDOWN_MAX_MS,
           lastError: lastError,
+          // 整句切词那一档（可选）
+          segCached: Object.keys(segCache).length,
+          segAsked: segStats.asked,
+          segLines: segStats.lines,
+          segErrors: segStats.errors,
         };
       },
     };

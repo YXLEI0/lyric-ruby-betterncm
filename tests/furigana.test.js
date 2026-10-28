@@ -195,6 +195,55 @@ test("按行修正：长词优先，重叠的短词不重复注", () => {
   );
 });
 
+test("振假名：数字 + 假名只注数字那一段（1つ ひとつ，つ 不注）", async () => {
+  /*
+   * 真机现象：`たった1つの音をか` 里 `つ` 上面也顶着一层假名（ひとつ 盖住了 1つ）。
+   * 假名本来就会读，再盖一层注音纯属噪音 —— 底字只留数字。
+   * 数字后面跟的是汉字时（10日 とおか）不能截，汉字本身要注。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  W.WKFurigana.configure({ dicPath: path.join(ROOT, "vendor", "dict") });
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    W.WKFurigana.load(() => resolve(true));
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("词典加载超时"));
+      }
+    }, 50);
+  });
+
+  const one = W.WKFurigana.tokens("1つ");
+  assert.deepStrictEqual(Array.from(one, (t) => [t.text, t.kana, t.start, t.end]), [["1", "ひとつ", 0, 1]], "つ 不许被注：" + JSON.stringify(one));
+
+  // 全角数字也要认（以前整行直接返回 null）
+  const zen = W.WKFurigana.tokens("３つの");
+  assert.deepStrictEqual(Array.from(zen, (t) => [t.text, t.kana]), [["３", "みっつ"]], "全角数字：" + JSON.stringify(zen));
+
+  // 数字 + 汉字：底字不截
+  const ni = W.WKFurigana.tokens("2人で");
+  assert.deepStrictEqual(Array.from(ni, (t) => [t.text, t.kana]), [["2人", "ふたり"]], "汉字要留下来：" + JSON.stringify(ni));
+
+  const hi = W.WKFurigana.tokens("10日");
+  assert.deepStrictEqual(Array.from(hi, (t) => [t.text, t.kana]), [["10日", "とおか"]], "熟字训整词：" + JSON.stringify(hi));
+});
+
 test("振假名：真的读出 IPADIC 的读音（kuromoji + vendor/dict）", async () => {
   const ctx = newWindow();
   const W = ctx.window;
