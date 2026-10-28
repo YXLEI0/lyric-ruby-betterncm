@@ -2185,7 +2185,16 @@
      */
     var next = [];
     for (var i = 0; i < list.length; i++) {
-      if (list[i] && list[i][0] !== at) next.push(list[i]);
+      var old = list[i];
+      if (!old) continue;
+      var oldAt = typeof old[0] === "number" ? old[0] : parseInt(old[0], 10);
+      var oldLen = String(old[1] == null ? "" : old[1]).length;
+      /*
+       * 和这一段有重叠的旧条目一律删掉：合并（嘲笑）之后，之前拆开的两条（嘲/笑）
+       * 还留在表里的话，注音会按先命中的那条来 —— 屏幕上就是拆不干净 / 合不干净。
+       */
+      if (oldAt < at + word.length && at < oldAt + oldLen) continue;
+      next.push(old);
     }
     /*
      * 三种写法：
@@ -2195,6 +2204,37 @@
      */
     if (kana !== null) next.push([at, word, kana || ""]);
     if (next.length) map[lineText] = next;
+    else delete map[lineText];
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    rescan();
+  }
+
+  /**
+   * 一次写多条按位置的修改（「手动切词」把一个词拆成几段时用）。
+   * 覆盖掉 [from, to) 里原有的条目，只重扫一次。
+   */
+  function saveInlineSpans(lineText, spans, from, to) {
+    if (!lineText || !spans || !spans.length) return;
+    var map = config.furiganaLineSpans;
+    if (!map || typeof map !== "object") map = config.furiganaLineSpans = {};
+    var cur = map[lineText];
+    if (!cur || !cur.length) cur = [];
+    var keep = [];
+    for (var i = 0; i < cur.length; i++) {
+      var sp = cur[i];
+      if (!sp) continue;
+      var at0 = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+      var len0 = String(sp[1] == null ? "" : sp[1]).length;
+      // 和这次拆开的那一段有重叠的旧条目先删掉
+      if (at0 < to && from < at0 + len0) continue;
+      keep.push(sp);
+    }
+    for (var j = 0; j < spans.length; j++) keep.push([spans[j].at, spans[j].word, spans[j].kana]);
+    keep.sort(function (a, b) {
+      return a[0] - b[0];
+    });
+    if (keep.length) map[lineText] = keep;
     else delete map[lineText];
     saveConfig();
     if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
@@ -2349,6 +2389,41 @@
     wrap.appendChild(box);
     wrap.appendChild(makeMergeBtn(1, "→"));
 
+    /*
+     * 「拆」：手动切词 —— 把当前这个词拆成几段，每段自己一个读音。
+     * 输入框里写 `底字=读音`，空格分开（例如 嘲=あざ 笑=わら）。
+     * 「↺」：取消合并 / 恢复默认 —— 把这一处的修改删掉，回到词典切的。
+     */
+    var splitMode = false;
+    var splitBtn = document.createElement("button");
+    splitBtn.type = "button";
+    splitBtn.textContent = "拆";
+    splitBtn.title = "手动切词：底字=读音，空格分开（例 嘲=あざ 笑=わら）";
+    splitBtn.style.fontSize = "12px";
+    splitBtn.addEventListener("mousedown", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      splitMode = true;
+      box.value = span.word.charAt(0) + "=" + current;
+      box.placeholder = "底字=读音，空格分开";
+      box.title = "例：嘲=あざ 笑=わら（底字必须和原句连得上）";
+      box.select();
+    });
+    wrap.appendChild(splitBtn);
+
+    var resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.textContent = "↺";
+    resetBtn.title = "取消合并 / 恢复默认（删掉这一处的修改）";
+    resetBtn.style.fontSize = "12px";
+    resetBtn.addEventListener("mousedown", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeEditor();
+      saveInlineFix(lineText, span.at, span.word, null);
+    });
+    wrap.appendChild(resetBtn);
+
     try {
       var r = rubyEl.getBoundingClientRect();
       wrap.style.left = Math.max(4, r.left) + "px";
@@ -2372,6 +2447,29 @@
          *             等于这一处再也改不回来（用户报的就是这个）；
          *   减号 - -> 留空（这一处不注音，给 帷帳 とばり 这种当て字用）。
          */
+        if (splitMode) {
+          /*
+           * 拆分：`底字=读音 底字=读音`，每段都要能在原句里按顺序连起来。
+           * 对不上就整条不动（宁可回到原来那个词，也别把读音安错地方）。
+           */
+          var got = [];
+          var cursor = 0;
+          var reSplit = /([^=\s]+)=([^\s]+)/g;
+          var mm;
+          while ((mm = reSplit.exec(v))) {
+            var w1 = mm[1];
+            var k1 = mm[2];
+            var at1 = span.word.indexOf(w1, cursor);
+            if (at1 < 0) {
+              got = null;
+              break;
+            }
+            got.push({ at: span.at + at1, word: w1, kana: k1 });
+            cursor = at1 + w1.length;
+          }
+          if (got && got.length) saveInlineSpans(lineText, got, span.at, span.at + span.word.length);
+          return;
+        }
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {

@@ -5538,7 +5538,7 @@ test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら",
 
   const box = env.document.querySelector("input.wk-edit");
   assert.ok(box, "双击后要弹输入框");
-  const right = Array.from(env.document.querySelectorAll(".wk-edit-box button")).pop();
+  const right = Array.from(env.document.querySelectorAll(".wk-edit-box button")).filter((b) => b.textContent === "→")[0];
   assert.ok(right, "要有合并按钮");
   right.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
   await sleep(20);
@@ -5909,4 +5909,73 @@ test("整行只有一个全大写词（MWAH!）也要注音", async () => {
   assert.strictEqual(p.querySelector("ruby.wk-ruby").childNodes[0].nodeValue, "MWAH", "底字是 MWAH");
   // 翻译行不许注
   assert.strictEqual(env.document.querySelectorAll("ul.lyric li p")[1].querySelectorAll("ruby").length, 0, "翻译行不许注");
+});
+
+test("就地编辑器：合并之后能拆开（手动切词）、也能取消合并", async () => {
+  /*
+   * 合并按钮只解决"合成一个词"；合错了 / 想改切分就得有反过来的一手。
+   *   「拆」= 手动切词：底字=读音，空格分开（例 嘲=あざ 笑=わら）
+   *   「↺」= 取消合并 / 恢复默认：把这一处的修改删掉，回到词典切的
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>嘲笑って</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 嘲: "アザ", 笑: "ワラ", っ: "ッ", て: "テ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const read = () =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const click = (label) =>
+    Array.from(env.document.querySelectorAll(".wk-edit-box button"))
+      .filter((b) => b.textContent === label)[0]
+      .dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const type = (v) => {
+    const box = env.document.querySelector("input.wk-edit");
+    box.value = v;
+    box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  };
+
+  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "初始：" + p.innerHTML);
+
+  // 合并
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  click("→");
+  await sleep(20);
+  type("あざわら");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "合并之后：" + p.innerHTML);
+
+  // 拆开（手动切词）
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  click("拆");
+  await sleep(20);
+  type("嘲=あざ 笑=わら");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "拆开之后：" + p.innerHTML);
+
+  // 再合并，然后用 ↺ 取消合并
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  click("→");
+  await sleep(20);
+  type("あざわら");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "再合并：" + p.innerHTML);
+  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  await sleep(40);
+  click("↺");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "取消合并要回到词典切的：" + p.innerHTML);
+  assert.deepStrictEqual(
+    (JSON.parse(env.window.localStorage.getItem("lyric-ruby.config")) || {}).furiganaLineSpans,
+    {},
+    "取消合并之后不该留数据"
+  );
 });
