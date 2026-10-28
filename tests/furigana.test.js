@@ -177,10 +177,15 @@ test("按行修正：读音写成空串 = 留空（这一行不给这个词注�
   const ctx = newWindow();
   const W = ctx.window;
   W.WKFurigana.setTokenizer(fakeTokenizer({ 帷: "トバリ", 帳: "チョウ" }));
+  const kept = Array.from(W.WKFurigana.tokens("帷帳の奥", { fixes: { 帷: "" } }) || [], (t) => [t.text, t.kana, t.blank]);
+  // 留空的那一段不产生注音，但会给一个 blank 标记（annotate 用它包一层壳，好让页面上还能改回来）
+  assert.deepStrictEqual(kept[0][0], "帷", "留空的是 帷：" + JSON.stringify(kept));
+  assert.strictEqual(kept[0][2], true, "留空的段要标成 blank：" + JSON.stringify(kept));
+  assert.ok(!kept[0][1], "留空就没有读音：" + JSON.stringify(kept));
   assert.deepStrictEqual(
-    Array.from(W.WKFurigana.tokens("帷帳の奥", { fixes: { 帷: "" } }), (t) => [t.text, t.kana]),
+    kept.filter((x) => !x[2]).map((x) => [x[0], x[1]]),
     [["帳", "ちょう"]],
-    "留空的词不注，其余照旧：" + JSON.stringify(W.WKFurigana.tokens("帷帳の奥", { fixes: { 帷: "" } }))
+    "留空的词不注，其余照旧：" + JSON.stringify(kept)
   );
 });
 
@@ -382,4 +387,32 @@ test("按行修正：数字 + 假名只注数字（fixes / spans 两种都成立
   const pairs = (opts) => Array.from(W.WKFurigana.tokens("たった1つの音をか", opts) || [], (t) => [t.text, t.kana]);
   assert.deepStrictEqual(pairs({ fixes: { "1つ": "ひとつ" } }), [["1", "ひとつ"], ["音", "おと"]], "fixes 也要截");
   assert.deepStrictEqual(pairs({ spans: [[3, "1つ", "ひとつ"]] }), [["1", "ひとつ"], ["音", "おと"]], "spans 也要截");
+});
+
+test("作词者的括号读音：中间夹空格也要采（舞台 (セカイ)）", () => {
+  /*
+   * `舞台(セカイ)` 紧贴着写的形式 vendor 本来就认；但歌词里常见 `舞台 (セカイ)`
+   * （中间一个空格 / 换行），那条正则要求紧贴，于是 舞台 还是按词典读 ぶたい，
+   * 括号里的官方读音被丢掉，屏幕上还多出一截 "(セカイ)"（真机现象）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 舞台: "ブタイ", 響: "ヒビ", に: "ニ", く: "ク" }));
+
+  const tight = Array.from(W.WKFurigana.tokens("舞台(セカイ)") || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+  assert.deepStrictEqual(tight, [["舞台", "せかい"], ["(セカイ)", "HIDE"]], "紧贴写法：" + JSON.stringify(tight));
+
+  const spaced = Array.from(W.WKFurigana.tokens("舞台 (セカイ) に響く") || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+  assert.deepStrictEqual(
+    spaced,
+    [["舞台", "せかい"], [" (セカイ)", "HIDE"], ["響", "ひび"]],
+    "中间有空格也要采括号里的读音：" + JSON.stringify(spaced)
+  );
+
+  // 用户 / 模型指定过读音时，括号不抢
+  const fixed = Array.from(W.WKFurigana.tokens("舞台 (セカイ)", { fixes: { 舞台: "ぶたい" } }) || [], (t) => [
+    t.text,
+    t.kana || (t.hide ? "HIDE" : ""),
+  ]);
+  assert.deepStrictEqual(fixed, [["舞台", "ぶたい"]], "指定过读音就不许括号覆盖：" + JSON.stringify(fixed));
 });

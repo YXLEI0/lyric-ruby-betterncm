@@ -2334,7 +2334,8 @@
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {
-          if (span.word !== word || current) saveInlineFix(lineText, span.at, span.word, null);
+          // 清空 = 删掉这一处修改（普通注音回到词典读音；留空处取消留空）
+          saveInlineFix(lineText, span.at, span.word, null);
         } else if (v !== current || span.word !== word) {
           saveInlineFix(lineText, span.at, span.word, v);
         }
@@ -2364,7 +2365,8 @@
         var t = ev.target;
         while (t && t !== document.body) {
           var cn = t && typeof t.className === "string" ? t.className : "";
-          if (/(^|\s)wk-ruby(\s|$)/.test(cn)) break;
+          // 注音（wk-ruby）和被留空的那一段（wk-blank）都能双击改
+          if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) break;
           t = t.parentNode;
         }
         if (!t || t === document.body) return;
@@ -4400,10 +4402,77 @@
 
   function updateLyricBar() {
     if (!lyricBar || !lyricBar.isConnected) return;
+    var docked = /docked/.test(lyricBar.className || "");
     var t = lyricBar.querySelector('[data-wk-act="toggle"]');
-    if (t) t.textContent = config.enabled ? "注音 开" : "注音 关";
+    if (t) t.textContent = docked ? (config.enabled ? "注音" : "注音关") : config.enabled ? "注音 开" : "注音 关";
     var r = lyricBar.querySelector('[data-wk-act="reset"]');
-    if (r) r.textContent = "重置本首";
+    if (r) r.textContent = docked ? "重置" : "重置本首";
+  }
+
+  /*
+   * 找原生工具条的锚点：
+   *   - RNP 是「译 / 音 / 逐字」那三个小按钮；
+   *   - 网易云默认歌词页是「音译 / 翻译」那两个切换。
+   * 锚点必须是"像按钮"的元素（button / class 里带 btn/toggle/tool/control，或 role=button），
+   * 否则逐字歌词里一个写着「音」的 span 也会被当成按钮。
+   */
+  var NATIVE_TOGGLE_TEXT = /^(译|譯|音|逐字|翻译|翻譯|音译|音譯|注音|罗马音|羅馬音)$/;
+  function findNativeToggle() {
+    var roots = [".m-lyric", ".rnp-lyrics", "[class^='rnp-lyrics']", "[class*='lyric']"];
+    for (var r = 0; r < roots.length; r++) {
+      var box = null;
+      try {
+        box = document.querySelector(roots[r]);
+      } catch (e) {
+        box = null;
+      }
+      if (!box) continue;
+      var nodes = box.querySelectorAll("button, [role='button'], span, div, i, a");
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (!el || (el.children && el.children.length)) continue;
+        if (el.closest && el.closest("[data-wk-ui]")) continue;
+        var txt = (el.textContent || "").replace(/\s+/g, "");
+        if (!NATIVE_TOGGLE_TEXT.test(txt)) continue;
+        var cls = typeof el.className === "string" ? el.className : "";
+        var looksButton =
+          el.tagName === "BUTTON" ||
+          el.getAttribute("role") === "button" ||
+          /btn|button|toggle|switch|tool|control|icon|tab/i.test(cls);
+        if (!looksButton) continue;
+        return el;
+      }
+    }
+    return null;
+  }
+
+  /** 把两个按钮停靠到原生工具条里，样式跟着原生按钮走 */
+  function dockBar(anchor) {
+    var parent = anchor.parentNode;
+    if (!parent) return false;
+    var cls = typeof anchor.className === "string" ? anchor.className : "";
+    // 别把"选中/禁用"这类状态类抄过来
+    cls = cls.replace(/(^|\s)(active|selected|on|off|disabled|checked|current|hover)(?=\s|$)/g, " ").replace(/\s+/g, " ").trim();
+    var bar = document.createElement("span");
+    bar.className = "wk-bar wk-bar-docked";
+    bar.setAttribute("data-wk-ui", "1");
+    bar.style.cssText = "display:inline-flex;align-items:center;gap:2px;margin-left:6px;vertical-align:middle;";
+    var b1 = barButton("注音", "toggle");
+    var b2 = barButton("重置", "reset");
+    [b1, b2].forEach(function (b) {
+      if (cls) b.className = cls;
+      b.style.cssText = "margin:0 2px;padding:0 2px;font-size:inherit;line-height:inherit;cursor:pointer;border:0;background:transparent;color:inherit;font-family:inherit;";
+    });
+    bar.appendChild(b1);
+    bar.appendChild(b2);
+    try {
+      parent.insertBefore(bar, anchor.nextSibling);
+      lyricBar = bar;
+      return true;
+    } catch (e) {
+      lyricBar = null;
+      return false;
+    }
   }
 
   function ensureLyricBar() {
@@ -4411,6 +4480,23 @@
     if (lyricBar && lyricBar.isConnected) {
       updateLyricBar();
       return;
+    }
+    /*
+     * 优先停靠到原生工具条（用户点名要的：RNP 的 译/音/逐字、默认页的音译/翻译那一栏）。
+     * 找不到才退回右上角的浮动条。
+     */
+    if (now - lyricBarAt >= 500) {
+      var anchor = null;
+      try {
+        anchor = findNativeToggle();
+      } catch (eFind) {
+        anchor = null;
+      }
+      if (anchor && dockBar(anchor)) {
+        lyricBarAt = now;
+        updateLyricBar();
+        return;
+      }
     }
     if (now - lyricBarAt < 1000) return; // 一秒查一次容器就够了
     lyricBarAt = now;

@@ -271,12 +271,6 @@
         ntk.text = ntk.text.slice(0, cut);
       }
     }
-    function coveredByFixed(a, b) {
-      for (var q = 0; q < out.length; q++) {
-        if (out[q].start < b && a < out[q].end) return true;
-      }
-      return false;
-    }
     if (segs && segs.length) {
       for (var i = 0; i < segs.length; i++) {
         var seg = segs[i];
@@ -353,6 +347,82 @@
         if (gone) continue; // 用户把这段的注音留空了
         out.push({ text: text0, start: at, end: at + text0.length, kana: seg.rt, kind: "kanji" });
       }
+    }
+    /*
+     * 作词者自己写的括号读音，**中间夹了空格 / 换行**的写法：`舞台 (セカイ)`。
+     *
+     * vendor 那条正则要求括号紧贴汉字，所以 `舞台 (セカイ)` 匹配不到 ——
+     * 结果 舞台 还是按词典读 ぶたい，括号里的官方读音被丢掉，
+     * 屏幕上还多出一截 "(セカイ)"（真机现象）。
+     * 这里补一遍宽松匹配，命中的读法当这一段的读音，括号那截照旧藏起来。
+     */
+    var reParen = /([\u4E00-\u9FFF\u3005]+)[ \t\u3000\n]*[（(]([\u3041-\u3096\u30A1-\u30FA\u30FC]{1,12})[）)]/g;
+    var pm;
+    while ((pm = reParen.exec(s))) {
+      var pWord = pm[1];
+      var wAt = pm.index;
+      var wEnd = wAt + pWord.length;
+      var pEnd = pm.index + pm[0].length;
+      // 只看"用户 / 模型指定的读音"（fixed / spans），不看词典自己的切片
+      var userFixed = false;
+      for (var uq = 0; uq < fixed.length; uq++) {
+        if (fixed[uq].start < wEnd && wAt < fixed[uq].end) {
+          userFixed = true;
+          break;
+        }
+      }
+      for (var uq2 = 0; !userFixed && uq2 < spans.length; uq2++) {
+        if (spans[uq2].start < wEnd && wAt < spans[uq2].end) userFixed = true;
+      }
+      if (userFixed) continue;
+      // 紧贴着写的那种 vendor 已经处理过（它会给一个 hide 片段），别再插一遍
+      var vendorDone = false;
+      for (var vq = 0; vq < out.length; vq++) {
+        if (out[vq].hide && out[vq].start < pEnd && wEnd <= out[vq].end) {
+          vendorDone = true;
+          break;
+        }
+      }
+      if (vendorDone) continue;
+      /*
+       * 覆盖掉词典给的那个读音（舞台 ぶたい）：作词者在括号里写的才是官方读法
+       * （这个案子是 セカイ）。
+       */
+      var kept = [];
+      for (var kq = 0; kq < out.length; kq++) {
+        if (out[kq].start < wEnd && wAt < out[kq].end) continue;
+        kept.push(out[kq]);
+      }
+      out = kept;
+      out.push({ text: pWord, start: wAt, end: wEnd, kana: toKanaMode(pm[2], kana), kind: "inline" });
+      out.push({ text: s.substr(wEnd, pEnd - wEnd), start: wEnd, end: pEnd, hide: true, kind: "hide" });
+    }
+    /*
+     * 用户把读音留空的那些位置也交出去：annotate 会给它包一层 <span class="wk-blank">，
+     * 这样这一处还能双击改回来（以前什么都不插，改出去就回不来）。
+     */
+    for (var bq = 0; bq < suppressed.length; bq++) {
+      var b0 = suppressed[bq][0];
+      var b1 = suppressed[bq][1];
+      if (!(b1 > b0) || b1 > s.length) continue;
+      var dupBlank = false;
+      for (var dq2 = 0; dq2 < out.length; dq2++) {
+        if (out[dq2].start < b1 && b0 < out[dq2].end) {
+          dupBlank = true;
+          break;
+        }
+      }
+      if (dupBlank) continue;
+      out.push({ text: s.slice(b0, b1), start: b0, end: b1, blank: true, kind: "blank" });
+    }
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    function coveredByFixed(a, b) {
+      for (var q = 0; q < out.length; q++) {
+        if (out[q].start < b && a < out[q].end) return true;
+      }
+      return false;
     }
     /*
      * 数字：kuromoji 对阿拉伯数字不给读音（`105` 的 reading 是 `*`），这里自己补。

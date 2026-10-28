@@ -711,6 +711,7 @@
        */
       var cls = typeof el.className === "string" ? el.className : "";
       if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(cls)) return true;
+      if (/(^|\s)wk-blank(\s|$)/.test(cls)) return true; // 留空处的可点击壳
       if (el.tagName === "RT" || /(^|\s)(wk-rt|kt-rt|fg-rt|wk-ov-label|kt-ov-label)(\s|$)/.test(cls)) {
         return true;
       }
@@ -1120,6 +1121,16 @@
         var g = null;
         var src = null;
         /*
+         * "读音留空"的那一段：不注音，但要包一层壳，好在页面上还能双击改回来。
+         * 这里必须让 any=true —— 否则整段会被判成"无译文"跳过，壳也插不进去。
+         */
+        if (tokens[i].blank) {
+          glosses.push(null);
+          sources.push(null);
+          any = true;
+          continue;
+        }
+        /*
          * 段标（`(A:` / `B：`）在真机上可能被拆成不同节点：`A` 在它自己的节点里，
          * 冒号落在**下一个**文本节点 —— token 自己看不到冒号，段标判定就失效了
          * （真机形态 `Vindicia (A: Vanitatum sentio)` 的 A、B 被注上了 ア / ビー）。
@@ -1216,7 +1227,14 @@
       for (var j = 0; j < tokens.length; j++) {
         var tk = tokens[j];
         if (tk.start > pos) pieces.push({ text: text.slice(pos, tk.start) });
-        if (tk.hide) {
+        if (tk.blank) {
+          /*
+           * 用户把这一处的读音留空了（编辑器里输入 -）。
+           * 以前什么都不插，于是这一处没有节点可点 —— 改出去就回不来。
+           * 现在包一层 wk-blank，双击它就能重新填读音。
+           */
+          pieces.push({ text: tk.text, blank: true });
+        } else if (tk.hide) {
           /*
            * 作词者自带的括号注音「漢字(かな)」：括号那一段是"读法"不是歌词。
            * 显示出来就变成 漢字(かな) + 汉字上面的假名注音，两套读音并排 —— 藏起来。
@@ -1261,6 +1279,13 @@
       // （那样底字会渲染两遍）。这种情况直接移除原节点，注音从第 0 段开始排。
       var leadIsRuby = !!pieces[0].ruby;
       /*
+       * 第 0 段是"留空壳"或"要藏起来的括号读音"时，原节点不能装它的文字：
+       * 那条路只会把 pieces[0].text 写回原节点、从第 1 段开始插，壳就丢了
+       * （真机现象：留空的那一段变成普通文本，再也点不开）。
+       * 这里把原节点留空（引用还在，React 安全），所有片段从第 0 段开始插。
+       */
+      var leadNeedsOwnNode = !leadIsRuby && !!(pieces[0].blank || pieces[0].hide);
+      /*
        * 记下动 DOM 之前宿主的可见原文。
        *
        * 为什么不能只用 rec.plain 来判断"这行变没变"：plain 是这个文本节点的原文，
@@ -1284,7 +1309,10 @@
       var refNode = node.nextSibling;
       var tail = doc.createDocumentFragment();
       var startIndex = 0;
-      if (!leadIsRuby) {
+      if (leadNeedsOwnNode) {
+        node.nodeValue = "";
+        startIndex = 0;
+      } else if (!leadIsRuby) {
         node.nodeValue = pieces[0].text;
         startIndex = 1;
       } else if (node.parentNode === host) {
@@ -1310,7 +1338,7 @@
       for (var k = startIndex; k < pieces.length; k++) {
         var piece = pieces[k];
         var childNode = piece.ruby ||
-          (piece.hide ? makeHideSpan(doc, piece.text) : doc.createTextNode(piece.text));
+          (piece.hide ? makeHideSpan(doc, piece.text) : piece.blank ? makeBlankSpan(doc, piece.text) : doc.createTextNode(piece.text));
         // 给"我们自己造出来的"节点打标记：别的插件（jp-furigana）的
         // MutationObserver 靠它区分"这是注音插件插的"从而不把行标脏。
         // 见 tools/patch-jp-furigana.js 的 __ktRecordIsOurs（它认 __wkOwned，
@@ -1345,7 +1373,7 @@
         // 行首就是词的那种，我们写进去的是空串，所以这里也存空串（不是 null）——
         // 判据是 `rec.head == null || node.nodeValue === rec.head`，
         // 存 null 会变成"不检查"，框架写进去的新歌词就会被我们覆盖掉。
-        head: leadIsRuby ? "" : pieces[0].text,
+        head: leadIsRuby || leadNeedsOwnNode ? "" : pieces[0].text,
         region: region,
         kept: node.parentNode === host,
         index: origIndex,
@@ -1418,6 +1446,17 @@
 function makeHideSpan(d, t) {
   var el = d.createElement("span");
   el.className = "wk-hide";
+  el.textContent = t;
+  return el;
+}
+
+/**
+ * "读音被留空"的那一段：照常显示原文，只是包一层，好让就地编辑器还能点它。
+ */
+function makeBlankSpan(d, t) {
+  var el = d.createElement("span");
+  el.className = "wk-blank";
+  el.setAttribute("data-wk-blank", "1");
   el.textContent = t;
   return el;
 }

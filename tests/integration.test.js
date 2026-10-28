@@ -5782,3 +5782,89 @@ test("歌词页的工具条：开关注音 / 重置本首（默认页和 RNP 都
   await sleep(600);
   assert.ok(rnp.document.querySelector(".rnp-lyrics .wk-bar"), "RNP 歌词页也要有工具条");
 });
+
+test("歌词页按钮停靠到原生工具条（RNP 的 译/音/逐字、默认页的音译/翻译）", async () => {
+  /*
+   * 用户要的是"跟 RNP 的 译 音 逐字 放一起、样式一样"，默认页要跟"音译 / 翻译"那一栏放在一起。
+   * 浮动条太容易点不到，改成停靠：按钮抄原生按钮的 class，插在它后面。
+   */
+  const RNP = `<!doctype html><html><head></head><body>
+<div class="rnp-lyrics">
+  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-original">いざなった clover へ</div></div>
+  <div class="rnp-lyrics-tools"><span class="tool-btn">译</span><span class="tool-btn">音</span><span class="tool-btn">逐字</span></div>
+</div></body></html>`;
+  const rnp = bootPlugin(RNP, { config: { online: false, llmEnabled: false } });
+  rnp.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ", ざ: "ザ" }));
+  await rnp.runLoad();
+  await sleep(900);
+  const rnpTools = rnp.document.querySelector(".rnp-lyrics-tools");
+  const rnpBar = rnpTools.querySelector(".wk-bar");
+  assert.ok(rnpBar, "按钮要停靠在 RNP 的原生那一栏里：" + rnpTools.outerHTML);
+  const rnpBtns = Array.from(rnpBar.querySelectorAll("button"));
+  assert.deepStrictEqual(rnpBtns.map((b) => b.textContent), ["注音", "重置"], "停靠版用短标签");
+  assert.ok(
+    rnpBtns.every((b) => b.className.indexOf("tool-btn") >= 0),
+    "样式要跟原生按钮一样（抄它的 class）：" + rnpBtns.map((b) => b.className).join(",")
+  );
+
+  const NCM = `<!doctype html><html><head></head><body>
+<div class="m-lyric">
+  <ul class="lyric"><li class="line"><p>いざなった clover へ</p></li></ul>
+  <div class="lyric-tools"><span class="lyric-tool-btn">音译</span><span class="lyric-tool-btn">翻译</span></div>
+</div></body></html>`;
+  const ncm = bootPlugin(NCM, { config: { online: false, llmEnabled: false } });
+  ncm.window.WKFurigana.setTokenizer(perCharTokenizer({ い: "イ", ざ: "ザ" }));
+  await ncm.runLoad();
+  await sleep(900);
+  const ncmTools = ncm.document.querySelector(".lyric-tools");
+  const ncmBar = ncmTools.querySelector(".wk-bar");
+  assert.ok(ncmBar, "默认页要跟音译/翻译那一栏放一起：" + ncmTools.outerHTML);
+  assert.ok(
+    Array.from(ncmBar.querySelectorAll("button")).some((b) => b.className.indexOf("lyric-tool-btn") >= 0),
+    "样式同样抄原生的"
+  );
+});
+
+test("留空之后还能点回来：留空的那一段包一层壳，双击就能重新填读音", async () => {
+  /*
+   * 用户报的问题：留空之后这一处没有注音了，双击也就没有目标 —— 再也改不回来。
+   * 现在留空的那一段会包一层 <span class="wk-blank">，双击它照旧能编辑。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日も君と</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 明: "アシ", 日: "タ", も: "モ", 君: "キミ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const firstRuby = p.querySelector("ruby.wk-ruby");
+  firstRuby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  let box = env.document.querySelector("input.wk-edit");
+  box.value = "-";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(450);
+
+  const blank = p.querySelector(".wk-blank");
+  assert.ok(blank, "留空的那一段要包一层可点击的壳：" + p.innerHTML);
+  assert.strictEqual(blank.textContent, "明日", "壳里是原文：" + blank.textContent);
+
+  // 双击壳 -> 重新填读音
+  blank.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击留空处也要能打开编辑器");
+  box.value = "あす";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(450);
+
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["明日", "あす"], ["君", "きみ"]], "填回来要生效：" + p.innerHTML);
+  assert.strictEqual(p.querySelector(".wk-blank"), null, "填回来之后别再留壳");
+});
