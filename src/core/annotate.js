@@ -813,7 +813,8 @@
           if (p && p.nodeType === 1) {
             if (p.tagName === "RT" || p.tagName === "RP") continue;
             var cn = typeof p.className === "string" ? p.className : "";
-            if (/(^|\s)wk-(rt|hide)(\s|$)/.test(cn)) continue;
+            // 只跳过注音（wk-rt）；wk-hide 是原文里的括号读音，要算进位置
+        if (/(^|\s)wk-rt(\s|$)/.test(cn)) continue;
           }
           // 和 originalTextOf 同一套规矩：区域直接的空白文本不占位置
           if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
@@ -1259,6 +1260,8 @@
       var pieces = [];
       var pos = 0;
       var inserted = [];
+      // 只有「留空壳」/ 隐藏括号的行也算要动手（以前只数 ruby，那种行整行不动）
+      var anyPiece = false;
       for (var j = 0; j < tokens.length; j++) {
         var tk = tokens[j];
         if (tk.start > pos) pieces.push({ text: text.slice(pos, tk.start) });
@@ -1269,6 +1272,7 @@
            * 现在包一层 wk-blank，双击它就能重新填读音。
            */
           pieces.push({ text: tk.text, blank: true });
+          anyPiece = true;
         } else if (tk.hide) {
           /*
            * 作词者自带的括号注音「漢字(かな)」：括号那一段是"读法"不是歌词。
@@ -1276,6 +1280,7 @@
            * 用一个 display:none 的 span，不动原文顺序，还原时照旧能摘掉。
            */
           pieces.push({ text: tk.text, hide: true });
+          anyPiece = true;
         } else if (!glosses[j]) {
           pieces.push({ text: tk.text });
         } else {
@@ -1300,7 +1305,7 @@
       }
       if (pos < text.length) pieces.push({ text: text.slice(pos) });
 
-      if (!inserted.length) return false;
+      if (!inserted.length && !anyPiece) return false;
 
       // 注入方式：尽量保留 React 持有的那个原文本节点，只把它「切短」，
       // 注音和其他段落作为兄弟节点插到它后面。
@@ -2609,6 +2614,14 @@ function buildRuby(base, gloss, provisional, source) {
       // 内核不支持 ruby 排版：注音脱离文档流，免得 <rt> 退化成 block 撑坏行高
       // 作词者自带的括号注音「漢字(かな)」：括号和里面的假名是"读法"，不唱，藏起来
       ".wk-hide { display: none !important; }",
+      /*
+       * "读音被留空"的那一段：原文照常显示，但加一条虚线 —— 不然它和普通文字一模一样，
+       * 用户看到的就是"这里为什么没注音"（其实是自己之前留空的），也找不到地方双击。
+       */
+      ".wk-blank {",
+      "  cursor: pointer;",
+      "  border-bottom: 1px dashed rgba(255,255,255,.35);",
+      "}",
       '[data-wk-fallback] { position: relative; }',
       '[data-wk-fallback] > ruby.wk-ruby { position: relative; display: inline-block; }',
       '[data-wk-fallback] > ruby.wk-ruby > .wk-rt {',

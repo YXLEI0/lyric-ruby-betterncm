@@ -2303,7 +2303,8 @@
     for (var guard = 0; n && guard < 6; guard++) {
       if (n.nodeType === 1) {
         var cn = typeof n.className === "string" ? n.className : "";
-        if (/(^|\s)wk-ruby(\s|$)/.test(cn)) return n;
+        // 留空的壳（wk-blank）也算一个"注音位"，可以和相邻的合并
+        if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) return n;
         if (n.textContent && String(n.textContent).replace(/\s+/g, "")) return null;
       } else if (n.nodeType === 3) {
         if (String(n.nodeValue || "").replace(/\s+/g, "")) return null;
@@ -2394,7 +2395,6 @@
      * 输入框里写 `底字=读音`，空格分开（例如 嘲=あざ 笑=わら）。
      * 「↺」：取消合并 / 恢复默认 —— 把这一处的修改删掉，回到词典切的。
      */
-    var splitMode = false;
     var splitBtn = document.createElement("button");
     splitBtn.type = "button";
     splitBtn.textContent = "拆";
@@ -2403,11 +2403,16 @@
     splitBtn.addEventListener("mousedown", function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
-      splitMode = true;
-      box.value = span.word.charAt(0) + "=" + current;
-      box.placeholder = "底字=读音，空格分开";
-      box.title = "例：嘲=あざ 笑=わら（底字必须和原句连得上）";
-      box.select();
+      /*
+       * 直接把这个词按字拆开：每个字一条，读音先留空（页面上是虚线的壳，双击就能填），
+       * 之后想怎么合再手动合并。
+       */
+      var parts = [];
+      for (var si = 0; si < span.word.length; si++) {
+        parts.push({ at: span.at + si, word: span.word.charAt(si), kana: "" });
+      }
+      closeEditor();
+      saveInlineSpans(lineText, parts, span.at, span.at + span.word.length);
     });
     wrap.appendChild(splitBtn);
 
@@ -2447,29 +2452,6 @@
          *             等于这一处再也改不回来（用户报的就是这个）；
          *   减号 - -> 留空（这一处不注音，给 帷帳 とばり 这种当て字用）。
          */
-        if (splitMode) {
-          /*
-           * 拆分：`底字=读音 底字=读音`，每段都要能在原句里按顺序连起来。
-           * 对不上就整条不动（宁可回到原来那个词，也别把读音安错地方）。
-           */
-          var got = [];
-          var cursor = 0;
-          var reSplit = /([^=\s]+)=([^\s]+)/g;
-          var mm;
-          while ((mm = reSplit.exec(v))) {
-            var w1 = mm[1];
-            var k1 = mm[2];
-            var at1 = span.word.indexOf(w1, cursor);
-            if (at1 < 0) {
-              got = null;
-              break;
-            }
-            got.push({ at: span.at + at1, word: w1, kana: k1 });
-            cursor = at1 + w1.length;
-          }
-          if (got && got.length) saveInlineSpans(lineText, got, span.at, span.at + span.word.length);
-          return;
-        }
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {
@@ -3212,7 +3194,8 @@
             break;
           }
           var cn = typeof q.className === "string" ? q.className : "";
-          if (/(^|\s)wk-rt(\s|$)/.test(cn) || /(^|\s)wk-hide(\s|$)/.test(cn)) {
+          // 只跳过注音（wk-rt）；wk-hide 是作词者写的括号读音，属于原文，要算进行文本
+          if (/(^|\s)wk-rt(\s|$)/.test(cn)) {
             skipped = true;
             break;
           }

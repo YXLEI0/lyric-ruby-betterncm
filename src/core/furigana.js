@@ -266,6 +266,31 @@
     }
     for (var sp2 = 0; sp2 < spans.length; sp2++) out.push(spans[sp2]);
     /*
+     * 用户就地改过的读音（spans）压过同位置的其他条目：
+     * `嘲笑(わら)` 里 vendor 会把整段 一度嘲笑 都注成 わら，用户只想改 嘲笑 ——
+     * 不把旧条目删掉的话，先命中的还是它（真机现象：改了没反应）。
+     */
+    if (spans.length) {
+      var keptByUser = [];
+      for (var ku = 0; ku < out.length; ku++) {
+        var tu = out[ku];
+        if (!tu || tu.kind === "user") {
+          keptByUser.push(tu);
+          continue;
+        }
+        var hitUser = false;
+        for (var ks = 0; ks < spans.length; ks++) {
+          if (spans[ks].start < tu.end && tu.start < spans[ks].end) {
+            hitUser = true;
+            break;
+          }
+        }
+        if (!hitUser) keptByUser.push(tu);
+      }
+      out = keptByUser;
+    }
+
+    /*
      * 数字 + 假名的修正（用户就地改的 / 大模型切词给的「1つ ひとつ」）：
      * 底字只留数字，尾巴上的假名不进 ruby —— 和自动分词那条路同一个规矩，
      * 否则同一个 1つ 会出现两种注法（ひとつ 又盖到 つ 上面去）。
@@ -751,7 +776,7 @@
       if (!(at >= 0) || !word) continue;
       if (!kana) continue; // 空读音 = 留空，交给 suppress
       if (s.substr(at, word.length) !== word) continue; // 位置对不上：这条作废
-      out.push({ text: word, start: at, end: at + word.length, kana: toKanaMode(kana, mode), kind: "inline" });
+      out.push({ text: word, start: at, end: at + word.length, kana: toKanaMode(kana, mode), kind: "user" });
     }
     out.sort(function (a, b) {
       return a.start - b.start;

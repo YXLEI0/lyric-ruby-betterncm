@@ -5951,23 +5951,24 @@ test("就地编辑器：合并之后能拆开（手动切词）、也能取消�
   await sleep(400);
   assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "合并之后：" + p.innerHTML);
 
-  // 拆开（手动切词）
+  // 拆开：直接按字拆成两个空壳，再手动合并回来
   dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
   await sleep(40);
   click("拆");
-  await sleep(20);
-  type("嘲=あざ 笑=わら");
   await sleep(400);
-  assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "拆开之后：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "拆开之后不该有注音：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-blank").length, 2, "拆成两个可点击的空壳：" + p.innerHTML);
 
-  // 再合并，然后用 ↺ 取消合并
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  // 从空壳里合并回来
+  dbl(p.querySelector(".wk-blank"));
   await sleep(40);
   click("→");
   await sleep(20);
   type("あざわら");
   await sleep(400);
-  assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "再合并：" + p.innerHTML);
+  assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "从空壳合并回来：" + p.innerHTML);
+
+  // 用 ↺ 取消合并
   dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
   await sleep(40);
   click("↺");
