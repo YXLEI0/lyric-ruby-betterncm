@@ -718,6 +718,44 @@
     }
 
     /** 收集要处理区域里的所有文本节点（一次 TreeWalker，按文档顺序） */
+    /**
+     * 给每个文本节点标出"它在整行里的起点"（__wkOffset）。
+     *
+     * 逐字歌词把一行拆成"一个字一个文本节点"，按节点取字就只能一个字一个字地查读音 ——
+     * 语（ゴ）物（モノ）这种单字读音拼起来是错的。有了起点，上层可以拿整行去分词，
+     * 再把词的首字对回具体的节点。
+     */
+    function markNodeOffsets(regions) {
+      for (var i = 0; i < regions.length; i++) {
+        var region = regions[i];
+        if (!region || region.nodeType !== 1) continue;
+        var lineText = "";
+        try {
+          lineText = visibleText(region) || "";
+        } catch (eLt) {
+          lineText = "";
+        }
+        var walker = doc.createTreeWalker(region, NodeFilter.SHOW_TEXT, {
+          acceptNode: function () {
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        });
+        var at = 0;
+        var node;
+        while ((node = walker.nextNode())) {
+          var p = node.parentNode;
+          if (p && p.nodeType === 1) {
+            if (p.tagName === "RT" || p.tagName === "RP") continue;
+            var cn = typeof p.className === "string" ? p.className : "";
+            if (/(^|\s)wk-(rt|hide)(\s|$)/.test(cn)) continue;
+          }
+          node.__wkOffset = at;
+          node.__wkLineText = lineText;
+          at += (node.nodeValue || "").length;
+        }
+      }
+    }
+
     function collectTextNodes(regions) {
       var out = [];
       for (var i = 0; i < regions.length; i++) {
@@ -1023,7 +1061,7 @@
       var extras = null;
       if (typeof extraTokens === "function") {
         try {
-          extras = extraTokens(text, context, hostMaybe);
+          extras = extraTokens(text, context, hostMaybe, node.__wkOffset, node.__wkLineText);
         } catch (e) {
           extras = null;
         }
@@ -1976,6 +2014,11 @@ function buildRuby(base, gloss, provisional, source) {
       // 会把空数组当成"没传"，于是"不标任何区域"反而变成了"扫默认区域"——
       // 设置里关掉播放栏标注后它还在注音，就是这个 bug。
       var list = regions ? regions : findRegions("safe");
+      try {
+        markNodeOffsets(list);
+      } catch (eOff) {
+        if (options.log) options.log("标偏移失败：" + (eOff && eOff.message));
+      }
       if (!list.length) {
         // 一个区域都没有（例如范围设成了"不标"）：
         // 要把已有的注音撤掉，而不是什么都不做 —— 否则关掉开关后

@@ -207,6 +207,8 @@
     furiganaLineFixes: {},
     // 统一行距：有注音的行和没注音的行一样高（给整行一个固定 line-height）
     uniformLineHeight: true,
+    // 统一行距用的行高（有注音/没注音都按它）
+    lineHeight: 1.6,
     // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
     jpnFont: true,
     jpnFontFamily: JP_FONT_DEFAULT,
@@ -2417,11 +2419,40 @@
    * 词典是懒加载的：这一趟读不到就返回 null，等 onReady 触发重扫时再补上。
    * 面板里关掉之后一条都不产出（现有注音由 rescan 里的 restore 撤掉）。
    */
-  function furiganaTokens(s, context, host) {
+  function furiganaTokens(s, context, host, offset) {
     if (config.furigana === false) return null;
     if (typeof WKFurigana === "undefined") return null;
     var line = context || s;
     var fixes = furiganaFixes(line, s, host);
+    /*
+     * 逐字歌词：一行被拆成"一个字一个节点"，这个节点的起点是 offset。
+     * 按整行分词，再把**词的第一个字**对回这个节点 —— 只注一次，读音是整词的
+     * （物語 ものがたり，而不是 物 モノ + 語 ゴ）。
+     */
+    if (typeof offset === "number" && line && line.length > s.length) {
+      var whole = WKFurigana.tokens(line, {
+        kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
+        fixes: fixes,
+      });
+      if (!whole || !whole.length) return null;
+      var mine = [];
+      for (var i = 0; i < whole.length; i++) {
+        var tk = whole[i];
+        if (tk.start < offset || tk.start >= offset + s.length) continue; // 只认"起点落在这个节点里"的词
+        var localStart = tk.start - offset;
+        var localEnd = Math.min(localStart + (tk.end - tk.start), s.length);
+        var piece = s.slice(localStart, localEnd);
+        if (!piece) continue;
+        /*
+         * 对齐校验：这个词的第一个字必须正好是这个节点里的这个字。
+         * 节点偏移量在"注音完一遍之后"可能因为空文本节点/我们插的节点算歪一格，
+         * 歪了就会把 帳 注成 帷 的读音（とばり）。对不上就宁可不注。
+         */
+        if (piece.charAt(0) !== tk.text.charAt(0)) continue;
+        mine.push({ text: piece, start: localStart, end: localEnd, kana: tk.kana, kind: tk.kind, hide: tk.hide });
+      }
+      return mine.length ? mine : null;
+    }
     var out = WKFurigana.tokens(s, {
       kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
       fixes: fixes,
@@ -2493,10 +2524,10 @@
    * 把 原文 + 罗马音 + 中文翻译 塞进同一个元素，拿 context 去判会读到同一块里的中文翻译，
    * 于是日文原文被当成中文、逐字注上普通话读音（真机现象：`妄想感傷代償連盟` 上面是 ワンシャン…）。
    */
-  function extraTokens(text, context, host) {
+  function extraTokens(text, context, host, offset) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    if (lineLooksJapanese(s)) return furiganaTokens(s, context, host);
+    if (lineLooksJapanese(s)) return furiganaTokens(s, context, host, offset);
     return cjkTokens(s, context);
   }
 
@@ -2926,7 +2957,9 @@
           : ["ul.lyric li p", ".rnp-lyrics-line-original"];
       var parts = ["[data-wk-region]"];
       for (var i = 0; i < sels.length; i++) parts.push(sels[i]);
-      css = parts.join(",\n") + " { line-height: 2.2 !important; }";
+      var lh = Number(config.lineHeight);
+      if (!(lh >= 1.1 && lh <= 3)) lh = 1.6;
+      css = parts.join(",\n") + " { line-height: " + lh + " !important; }";
     }
     if (css === lineHeightCss) return;
     lineHeightCss = css;
@@ -3022,6 +3055,7 @@
       '<div class="wk-row"><label>注音字号 <input type="range" data-k="rtSize" min="30" max="120" step="1"> <span data-v="rtSize"></span></label></div>' +
       '<div class="wk-row"><label>注音不透明度 <input type="range" data-k="rtOpacity" min="10" max="100" step="1"> <span data-v="rtOpacity"></span></label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="uniformLineHeight"> 统一行距（有注音/没注音一样高）</label></div>' +
+      '<div class="wk-row"><label>行高 <input type="range" data-k="lineHeight" min="1.2" max="2.6" step="0.1"> <span data-v="lineHeight"></span></label></div>' +
       '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label> ' +
       '<button data-a="fontReset">重置</button> <span data-v="fontReset"></span></div>' +
       '<div class="wk-hint">填字体名（逗号分隔多个），只对日语歌生效；清空 = 用默认</div>' +
@@ -3494,7 +3528,7 @@
     var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana", "furiganaOverrides"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
-    var NEEDS_LINEHEIGHT = ["uniformLineHeight"];
+    var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
     var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
 
     var inputs = root.querySelectorAll("[data-k]");

@@ -3969,7 +3969,7 @@ test("统一行距：歌词行有固定 line-height 样式", async () => {
   await sleep(250);
   const style = env.document.getElementById("lyric-ruby-lineheight");
   assert.ok(style, "要有统一行距的样式表");
-  assert.ok(/line-height:\s*2\.2/.test(style.textContent), "行高固定 2.2：" + style.textContent);
+  assert.ok(/line-height:\s*1\.6/.test(style.textContent), "默认行高 1.6（可调）：" + style.textContent);
   assert.ok(/ul\.lyric li p/.test(style.textContent), "要覆盖歌词选择器：" + style.textContent);
 });
 
