@@ -5106,6 +5106,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="furigana"]',
     '[data-k="furiganaKana"]',
     '[data-k="jpnFont"]',
+    '[data-k="annotateLatin"]',
     '[data-k="annotateHanzi"]',
     '[data-k="annotateHangul"]',
     '[data-k="llmEnabled"]',
@@ -5864,4 +5865,48 @@ test("读不出的汉字：问模型时带整句 + 前后句（单句准确率�
   assert.strictEqual(row.next, "じゃん！", "带上后一句：" + JSON.stringify(row));
   assert.ok(asked[0].indexOf("prev / next") >= 0, "提示词要说明前后句怎么用");
   assert.ok(asked[0].indexOf("不要给 zhōng") >= 0, "提示词要提醒别给中文读音");
+});
+
+test("西文注音单独开关：关掉之后只注汉字，打开又回来", async () => {
+  /*
+   * 有些人只想看日文汉字的读音，满屏英文单词的片假名反而吵 —— 面板「其它语言」里给一个开关。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>きらめく light と clover</p></li>
+</ul></div></body></html>`;
+  const off = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateLatin: false } });
+  off.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ きらめく: "キラメク", と: "ト", 光: "ヒカリ" }));
+  await off.runLoad();
+  await sleep(500);
+  const offP = off.document.querySelector("ul.lyric li p");
+  assert.strictEqual(offP.querySelectorAll("ruby.wk-ruby").length, 0, "关掉之后西文不注：" + offP.innerHTML);
+
+  const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  on.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ きらめく: "キラメク", と: "ト" }));
+  await on.runLoad();
+  await sleep(600);
+  const onP = on.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(onP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  assert.deepStrictEqual(pairs, ["light", "clover"], "默认要注西文：" + onP.innerHTML);
+});
+
+test("整行只有一个全大写词（MWAH!）也要注音", async () => {
+  /*
+   * 真机现象：`MWAH!` 这种行一个字都没注 —— 它落进了“全大写 = 缩写”的兜底，
+   * 而那一行还夹着中文翻译（同一个 <li> 的第二个 <p>），语境被判成读不出来。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>MWAH!</p><p>（亲吻你！）</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const rt = p.querySelector("ruby.wk-ruby .wk-rt");
+  assert.ok(rt, "MWAH 要有注音：" + p.innerHTML);
+  assert.strictEqual(p.querySelector("ruby.wk-ruby").childNodes[0].nodeValue, "MWAH", "底字是 MWAH");
+  // 翻译行不许注
+  assert.strictEqual(env.document.querySelectorAll("ul.lyric li p")[1].querySelectorAll("ruby").length, 0, "翻译行不许注");
 });

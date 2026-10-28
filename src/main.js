@@ -204,6 +204,11 @@
      */
     annotateHanzi: false,
     annotateHangul: false,
+    /*
+     * 西文歌词（英文 / 法德拉丁俄希…）标片假名。默认开；关掉之后只注日语振假名和汉字读音。
+     * 为什么要这个开关：有些人只想看日文汉字的读音，满屏英文单词的片假名反而吵。
+     */
+    annotateLatin: true,
     // 日语汉字振假名：默认开（装了本插件就是要看读音）；平假名是日语歌词的惯例
     furigana: true,
     furiganaKana: "hiragana",
@@ -1481,6 +1486,17 @@
     word = foldFullwidthLetters(word);
     if (line != null) line = foldFullwidthLetters(line);
     /*
+     * 整行只有一个全大写词（`MWAH!` / `LOVE`）：这不是缩写，是喊出来的一个词，照常读。
+     * 不特判的话它会落进"全大写 = 缩写"那条兜底里，然后被判成读不出来（留白）。
+     */
+    var bareLine = String(line == null ? "" : line).replace(/[\s!！?？.,、。~〜\-—]+/g, "");
+    if (/^[A-Z]{2,}$/.test(word) && bareLine === word) {
+      var soloRead = state.reader ? state.reader.read(word) : null;
+      if (soloRead && soloRead.kana) {
+        return { kana: soloRead.kana, source: soloRead.source || "rule", confident: true };
+      }
+    }
+    /*
      * 数字后面的单位词（`300mm` ミリ、`5kg` キロ、`60Hz` ヘルツ）。
      *
      * 必须排在打码那几判前面：`mm` 长得就像打码用的重复字母串（`XX`），
@@ -2214,6 +2230,9 @@
       var skippedLayer = false;
       for (var q = p; q && q !== lineEl; q = q.parentNode) {
         if (!q || q.nodeType !== 1) continue;
+        var qc = typeof q.className === "string" ? q.className : "";
+        // 到了我们自己的 ruby 就停：里面是底字，要算进位置里
+        if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(qc)) break;
         if (q !== lineEl && fontSkipped(q)) {
           skippedLayer = true;
           break;
@@ -2593,11 +2612,71 @@
    * 和现在用的原文对不上。这里退一步按"包含"找一遍，并把起点按前缀长度平移回去 ——
    * 用户改过的读音不该因为一次修 bug 全丢。
    */
+  /**
+   * 重置**这一首**的读音：清掉这一首各行「就地改的读音」，并清掉振假名缓存重扫。
+   *
+   * 只动这一首：键是整行原文，所以只删这些行的条目；别的歌、面板里的通用规则、
+   * 大模型的缓存都不动（那些清起来要么误伤要么花钱）。
+   */
+  function resetSongReadings() {
+    var regions = [];
+    try {
+      regions = state.annotator ? state.annotator.findRegions("lyrics") : [];
+    } catch (e) {
+      regions = [];
+    }
+    var lines = {};
+    for (var i = 0; i < regions.length; i++) {
+      var t = regionText(regions[i]);
+      if (t) lines[t] = 1;
+    }
+    var spans = config.furiganaLineSpans || {};
+    var fixes = config.furiganaLineFixes || {};
+    var removed = 0;
+    for (var k in lines) {
+      if (!Object.prototype.hasOwnProperty.call(lines, k)) continue;
+      if (Object.prototype.hasOwnProperty.call(spans, k)) {
+        delete spans[k];
+        removed++;
+      }
+      if (Object.prototype.hasOwnProperty.call(fixes, k)) {
+        delete fixes[k];
+        removed++;
+      }
+    }
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    rescan();
+    notifyConfigUI();
+    return removed;
+  }
+
+  /** 清洗一条 span 列表：空词 / 超长 / 位置对不上的都丢掉（坏数据会把整行弄花） */
+  function sanitizeSpans(list, line) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var sp = list[i];
+      if (!sp || sp.length < 2) continue;
+      var at = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+      var word = String(sp[1] == null ? "" : sp[1]);
+      var kana = String(sp[2] == null ? "" : sp[2]);
+      if (!(at >= 0) || !word) continue;
+      if (word.length > 12) continue; // 合并时算歪过就会存下一大段
+      if (line.substr(at, word.length) !== word) continue;
+      if (kana && !/[\u3041-\u3096\u30A1-\u30FA\u30FC]/.test(kana)) continue;
+      out.push([at, word, kana]);
+    }
+    return out;
+  }
+
   function lineSpans(line) {
     var map = config.furiganaLineSpans;
     if (!map || typeof map !== "object") return null;
     var list = map[line];
-    if (list && list.length) return list;
+    if (list && list.length) {
+      var clean = sanitizeSpans(list, line);
+      if (clean && clean.length) return clean;
+    }
     for (var key in map) {
       if (!Object.prototype.hasOwnProperty.call(map, key) || key === line) continue;
       var at0 = key.indexOf(line);
@@ -2999,7 +3078,13 @@
   function regionText(region) {
     try {
       if (!region) return "";
-      var whole = state.annotator && state.annotator.textOf ? state.annotator.textOf(region) || "" : region.textContent || "";
+      /*
+       * 一律用我们自己的 walker（originalText）：它只跳过 <rt> / 隐藏的括号注音 /
+       * 音译翻译层，**保留 ruby 的底字**。
+       * 以前这里先用 textOf()（annotator 的 visibleText），它会连底字一起跳过 ——
+       * 于是 `(aha) 唸る 808` 这种行算出来的行文本是 `() 唸る 808`，
+       * 就地改读音存的键和注音时对不上，改了不生效（用户报的 808 就是这样）。
+       */
       /*
        * RNP 的一个区域是 \`div.rnp-lyrics-line\`，里面装着 -original / -romaji / -translated 三层。
        * 整块取文字会把**罗马音和中文翻译**也算成这一行的原文 ——
@@ -3007,19 +3092,6 @@
        * 行也被按普通话注成 ジンイェ（真机现象）。
        * 这里和注音层用同一套"跳过哪些子层"的判据，只取原文。
        */
-      var hasSkip = false;
-      try {
-        var kids = region.querySelectorAll ? region.querySelectorAll("[class]") : [];
-        for (var i = 0; i < kids.length; i++) {
-          if (fontSkipped(kids[i])) {
-            hasSkip = true;
-            break;
-          }
-        }
-      } catch (e0) {
-        hasSkip = false;
-      }
-      if (!hasSkip) return whole;
       return originalText(region);
     } catch (e) {
       return "";
@@ -3046,6 +3118,13 @@
             skipped = true;
             break;
           }
+          /*
+           * 到了我们自己的 ruby 就停：里面是**底字**（原文），要算进来。
+           * 不特判的话会踩到下面 fontSkipped 的坑 —— ruby 的来源 class 可能是
+           * `wk-src-romaji`，而那个判据里有 romaji 字样，整块底字就被当成音译层跳过了
+           * （真机现象：`(aha) 唸る 808` 的行文本变成 `() 唸る 808`，就地改读音对不上）。
+           */
+          if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(cn)) break;
           if (q !== region && fontSkipped(q)) {
             skipped = true;
             break;
@@ -3709,6 +3788,7 @@
       '<select data-k="furiganaKana"><option value="hiragana">平假名</option><option value="katakana">片假名</option></select></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="jpnFont"> 日语歌词用日文字体</label></div>' +
       "<h3>其它语言</h3>" +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateLatin"> 西文歌词标片假名</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 中文歌词标普通话读音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 朝鲜语歌词标朝鲜语读音</label></div>' +
       "<h3>大模型校正</h3>" +
@@ -3779,6 +3859,7 @@
       "<h3>操作</h3>" +
       '<div class="wk-row">' +
       '<button data-a="rescan">重新扫描</button> ' +
+      '<button data-a="resetSong">重置本首读音</button> ' +
       '<button data-a="retry">重试没结果的词</button> ' +
       '<button data-a="exportWords">导出词库素材</button> ' +
       '<button data-a="clearCache">清除校正缓存</button>' +
@@ -4232,7 +4313,7 @@
       refreshLearned();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "furigana", "furiganaKana", "furiganaOverrides"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "furigana", "furiganaKana", "furiganaOverrides"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
     var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
@@ -4345,7 +4426,13 @@
           var what = b.dataset.a;
           if (what === "rescan") {
             rescan();
-          } else if (what === "fontReset") {
+          } else if (what === "resetSong") {
+            // 清掉这一首里"就地改过的读音"（面板里的通用规则 / 模型缓存都不动）
+            var n0 = resetSongReadings();
+            b.textContent = n0 ? "已重置 " + n0 + " 条" : "没有改动";
+            setTimeout(function () {
+              b.textContent = "重置本首读音";
+            }, 1500);          } else if (what === "fontReset") {
             /*
              * 恢复默认日文字体栈。字体名是串 CSS，改坏了（多写了竖线 / 拼错）就会静默失效 ——
              * 留一个一键回到默认的口子，不用自己去翻默认值。
@@ -4724,6 +4811,7 @@
           return extraTokens(text, context, host, offset, lineText);
         },
         annotateAll: config.annotateAll !== false,
+        annotateLatin: config.annotateLatin !== false,
         log: function () {
           trace("annotate", Array.prototype.join.call(arguments, " "));
         },

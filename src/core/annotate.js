@@ -748,6 +748,12 @@
               skip = true;
               break;
             }
+            // 到了我们自己的 ruby 就停：里面是底字（原文），要算进来
+            if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(
+              typeof p.className === "string" ? p.className : ""
+            )) {
+              break;
+            }
             if (p !== el && isSkippedRegion(p)) {
               skip = true;
               break;
@@ -762,6 +768,22 @@
         return out;
       }
       return out;
+    }
+
+    /** 区域原文的每轮缓存（annotateNode 当语境用） */
+    var regionTextMemo = new Map();
+    function cleanRegionText(region) {
+      if (!region) return "";
+      var hit = regionTextMemo.get(region);
+      if (hit !== undefined) return hit;
+      var t = "";
+      try {
+        t = originalTextOf(region);
+      } catch (e) {
+        t = "";
+      }
+      regionTextMemo.set(region, t);
+      return t;
     }
 
     function markNodeOffsets(regions) {
@@ -1099,6 +1121,13 @@
        */
       var context = contextOf(hostMaybe, text);
       /*
+       * 语境用区域原文，不要用宿主往上找到的那一大块：
+       * 网易云默认页一个 li 里两个 p（原文 + 翻译），往上找会把翻译也算进语境 ——
+       * 于是 MWAH! 这种行变成 MWAH! 加中文翻译，全大写词的判据、模型的语境全都跟着错。
+       */
+      var regionCtx = cleanRegionText(region);
+      if (regionCtx && regionCtx.indexOf(text) >= 0) context = regionCtx;
+      /*
        * 两批词：西文字母由 matcher 切，汉字 / 谚文由上层给的 extraTokens 切
        * （core/cjk.js：一个汉字一个词、一个谚文音节一个词）。两批字符集不重叠，
        * 按位置合起来就行。extraTokens 只在"非日语歌、且这行没有假名"时才会返回东西；
@@ -1113,9 +1142,11 @@
         }
       }
       var hasExtras = !!(extras && extras.length);
-      if (!hasExtras && !matcher.hasReadable(text)) return false;
+      // 面板里关掉「西文歌词标片假名」之后，这里只剩汉字 / 振假名那批
+      var latinOn = options.annotateLatin !== false;
+      if (!hasExtras && (!latinOn || !matcher.hasReadable(text))) return false;
 
-      var tokens = matcher.scan(text);
+      var tokens = latinOn ? matcher.scan(text) : [];
       if (hasExtras) tokens = mergeTokens(tokens, extras);
       if (!tokens.length) {
         noteSkip("切不出词", text, region);
@@ -2121,6 +2152,8 @@ function buildRuby(base, gloss, provisional, source) {
       // 「刚被还原成原文」的节点（快照拍在还原之前，拿到的是"今日は"这种被切短的半截文本，
       // 于是那一行永远标不回来）。
       var candidates = collectTextNodes(list);
+      // 每个区域的原文每轮算一次（下面当语境用，见 annotateNode 里的说明）
+      regionTextMemo = new Map();
 
       var changed = 0;
       var skipped = 0;
