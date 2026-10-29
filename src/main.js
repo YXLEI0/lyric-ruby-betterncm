@@ -174,12 +174,6 @@
     llmModel: "deepseek-chat",
     llmKey: "",
     /*
-     * 让大模型按整句切词（熟字训优先）。**单独一个开关**，默认关：
-     * 每句一次请求，比"只问个别词"那档重得多；而且离线词典本来就能读大多数词，
-     * 这一档是给"帷帳 とばり / 今日 きょう"这种熟字训和生词兜底的。
-     */
-    llmSegment: false,
-    /*
      * 读音来源的调用顺序（越靠前越优先），设置面板里可以上下调。
      * 记号 / 缩写 / 字母名 / 长音符罗马字不在这张表里 —— 那是"这个词该怎么断"，
      * 不是"读音该信谁"，永远最先判（见 core/reading.js 的 lookup）。
@@ -209,6 +203,15 @@
      * 为什么要这个开关：有些人只想看日文汉字的读音，满屏英文单词的片假名反而吵。
      */
     annotateLatin: true,
+    /*
+     * 日语歌里夹的西文（`きらめく light と clover` 的 light、整行英文的副歌）
+     * 要不要也标片假名。默认开。
+     *
+     * 单独一个开关是因为两种场景的诉求正好相反：听日语歌的人往往只想看汉字读音，
+     * 夹的英文再标一层片假名很吵；而听英文 / 其它语种歌的人要的就是西文注音。
+     * 关掉它只影响日语歌，非日语歌照旧看 `annotateLatin`。
+     */
+    annotateLatinJa: true,
     // 日语汉字振假名：默认开（装了本插件就是要看读音）；平假名是日语歌词的惯例
     furigana: true,
     furiganaKana: "hiragana",
@@ -2258,7 +2261,14 @@
       if (p && p.nodeType === 1) {
         if (p.tagName === "RT" || p.tagName === "RP") continue;
         var cn = typeof p.className === "string" ? p.className : "";
-        if (/(^|\s)wk-rt(\s|$)/.test(cn) || /(^|\s)wk-hide(\s|$)/.test(cn)) continue;
+        /*
+         * 只跳过注音（wk-rt）。**wk-hide 要算进位置**：那是作词者写的括号读音
+         * `謎(なぞ)る`，它本来就属于行文本（见 originalText / markNodeOffsets）——
+         * 以前这里把它当"不是原文"跳过，于是括号后面的注音起点全部少了括号那几格，
+         * 切词 / 合并 / 留空都写到了前几个字上（真机现象：`オトで謎(なぞ)る星空の軌跡`
+         * 里切 軌跡，结果 る=き、星=せき，整行错位）。
+         */
+        if (/(^|\s)wk-rt(\s|$)/.test(cn)) continue;
       }
       if (node === base) return total;
       // 区域自己的缩进 / 换行不算位置（和 regionText 同一套规矩）
@@ -2279,7 +2289,8 @@
         }
       }
       if (skippedLayer) continue;
-      total += (node.nodeValue || "").length;
+      // 和 originalText 同一套口径：逐字层字后面那个排版空格不算进位置
+      total += karaokeTextOf(node).length;
     }
     return -1;
   }
@@ -2867,48 +2878,113 @@
     if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
   }
 
-  /*
-   * 整首的行列表（每轮扫描算一次）。
+  /**
+   * 括号读音（`謎(なぞ)る` / `舞台 (セカイ)`）在行文本里占的那几格。
    *
-   * 干什么用：问模型"这个汉字读什么"时，光给它所在的那一句还不够 ——
-   * 歌词里一句话常常只是一个短语（`良ん`、`人`），前后句才看得出这是哪首歌、
-   * 在念什么。真机上单句问的准确率明显偏低。
+   * 这几格会被包进 `wk-hide` 藏起来，但**仍然属于行文本**（见 originalText）。
+   * 就地改读音存的是"在行文本里的第几个字"，所以要能把它换算回"看得见的第几个字"。
+   * 两类写法都要认：vendor 的紧贴写法（含 ・ 和数字）和上面的宽松写法（中间有空格）。
    */
-  var songLinesCache = { gen: -1, lines: [] };
-  function songLines() {
-    if (songLinesCache.gen === songLangGen) return songLinesCache.lines;
-    var out = [];
-    try {
-      var regions = state.annotator ? state.annotator.findRegions("lyrics") : [];
-      for (var i = 0; i < regions.length; i++) {
-        var t = regionText(regions[i]);
-        if (t) out.push(t);
-      }
-    } catch (e) {
-      out = [];
+  var RE_HIDE_PAREN = /([0-9\uFF10-\uFF19]*[\u4E00-\u9FFF\u3005]+)[ \t\u3000]*[（(][\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,20}[）)]/g;
+  /** 行文本 -> 每个"看得见的字"在行文本里的下标（没有括号读音时返回 null） */
+  function visibleIndexMap(line) {
+    var hidden = [];
+    var m;
+    RE_HIDE_PAREN.lastIndex = 0;
+    while ((m = RE_HIDE_PAREN.exec(line))) {
+      var open = m[0].indexOf("（");
+      if (open < 0) open = m[0].indexOf("(");
+      if (open < 0) continue;
+      var hs = m.index + open;
+      hidden.push([hs, m.index + m[0].length]);
     }
-    songLinesCache = { gen: songLangGen, lines: out };
-    return out;
-  }
-
-  /** 这一句的前后各一句（拿不到就空串，提示词里会自动省略） */
-  function contextAround(line) {
-    var lines = songLines();
-    if (!lines.length || !line) return { prev: "", next: "" };
-    var idx = lines.indexOf(line);
-    if (idx < 0) {
-      for (var i = 0; i < lines.length; i++) {
-        var t = lines[i];
-        if (!t) continue;
-        if (t.indexOf(line) >= 0 || line.indexOf(t) >= 0) {
-          idx = i;
+    if (!hidden.length) return null;
+    var vis = [];
+    for (var i = 0; i < line.length; i++) {
+      var hid = false;
+      for (var h = 0; h < hidden.length; h++) {
+        if (i >= hidden[h][0] && i < hidden[h][1]) {
+          hid = true;
           break;
         }
       }
+      if (!hid) vis.push(i);
     }
-    if (idx < 0) return { prev: "", next: "" };
-    return { prev: lines[idx - 1] || "", next: lines[idx + 1] || "" };
+    return vis;
   }
+
+  /**
+   * 一次性修好"括号读音后面那几条"的位置（1.20 及以前存歪的）。
+   *
+   * 老版本的起始位置是数"看得见的字"数出来的，括号那截（`(なぞ)`）没算进去；
+   * 于是 `オトで謎(なぞ)る星空の軌跡` 里切 軌跡 存成了 る=き / 星=せき ——
+   * 整行往后错位（用户报的就是这个）。1.20 之前存的条目全是按这个歪口径算的
+   * （1.20 启动时刚把更老的清过一次），所以把落在括号后面的条目整体换算回行坐标就行：
+   * 底字按换算后的位置重新取，读音不动。
+   */
+  function repairParenSpans() {
+    var FLAG = "lyric-ruby.spans.paren1";
+    try {
+      if (typeof localStorage === "undefined") return;
+      if (localStorage.getItem(FLAG)) return;
+      localStorage.setItem(FLAG, "1");
+    } catch (e) {
+      return;
+    }
+    var map = config.furiganaLineSpans;
+    if (!map || typeof map !== "object") return;
+    var changed = 0;
+    for (var line in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, line)) continue;
+      var list = map[line];
+      if (!list || !list.length) continue;
+      var vis = visibleIndexMap(line);
+      if (!vis) continue;
+      var next = [];
+      var touched = false;
+      for (var i = 0; i < list.length; i++) {
+        var sp = list[i];
+        if (!sp) continue;
+        var at = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+        var word = String(sp[1] == null ? "" : sp[1]);
+        var kana = sp[2] == null ? "" : String(sp[2]);
+        if (!(at >= 0) || !word || at >= vis.length) {
+          next.push(sp);
+          continue;
+        }
+        var lineAt = vis[at];
+        if (lineAt === at) {
+          next.push(sp); // 括号前面的条目位置本来就对
+          continue;
+        }
+        var fixedWord = line.substr(lineAt, word.length);
+        if (fixedWord.length !== word.length) {
+          next.push(sp);
+          continue;
+        }
+        next.push([lineAt, fixedWord, kana]);
+        touched = true;
+        changed++;
+      }
+      if (!touched) continue;
+      next.sort(function (a, b) {
+        return a[0] - b[0];
+      });
+      map[line] = next;
+    }
+    if (!changed) return;
+    saveConfig();
+    if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    log("修好 " + changed + " 条被括号读音挤歪的就地读音（括号那截以前没算进位置）");
+  }
+
+  /*
+   * 问模型"这个汉字读什么"时只给**这一句**。
+   *
+   * 以前还拼上一句 / 下一句当上下文，想提高准确率，实际反而更差：邻句里的
+   * 汉字（上一句的 上々）会把这一句的 上 带成 じょうじょう。句子本身就是
+   * 它自己最好的语境，多给的只有噪音 —— 所以整首行列表 / 前后句那套都删了。
+   */
 
   /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
   function furiganaFixes(line, text, host) {
@@ -2933,28 +3009,6 @@
       fixes[rules[i].word] = rules[i].kana;
     }
     /*
-     * 大模型切词（单独开关 llmSegment）：让模型按整句切分并给读音，熟字训优先
-     * （帷帳 とばり、今日 きょう）—— kuromoji 会把这类词切碎（帷 + 帳）。
-     * 模型给的形状就是「底字 -> 读音」，正好当这一行的修正用：
-     * 长词优先、和旧切片重叠的自动让开，注音逻辑一行都不用改。
-     * 还没回来的句子这里拿到 null（后台已经在排队），下一轮重扫时补上。
-     */
-    if (config.llmSegment === true && llmAvailable() && state.llm && state.llm.segment) {
-      var segs = null;
-      try {
-        segs = state.llm.segment(line);
-      } catch (e) {
-        segs = null;
-      }
-      for (var q2 = 0; segs && q2 < segs.length; q2++) {
-        var pair = segs[q2];
-        if (!pair || !pair[0] || !pair[1]) continue;
-        // 手填的规则 / 就地改的读音优先于模型
-        if (Object.prototype.hasOwnProperty.call(fixes, pair[0])) continue;
-        fixes[pair[0]] = pair[1];
-      }
-    }
-    /*
      * 模型的答案不在本地词表里，而是"这句歌词 + 这个词"的缓存 ——
      * 同一句里问过就带上，换一句重新问（读数本来就可能不同）。
      */
@@ -2967,8 +3021,12 @@
       } catch (e) {
         list = null;
       }
-      var around = contextAround(line);
-      var extra = { kind: "ja", romaji: romajiOf(host) || "", prev: around.prev, next: around.next };
+      /*
+       * 只带**这一句**（用户明确要求）：以前还塞了前后各一句，模型会照着邻句
+       * 猜读音 —— 上一句里的 上々 会把这一句的 上 答成 じょうじょう。
+       * 句子本身就是它自己最好的语境。
+       */
+      var extra = { kind: "ja", romaji: romajiOf(host) || "" };
       for (var j = 0; list && j < list.length; j++) {
         var word = list[j].text;
         if (Object.prototype.hasOwnProperty.call(fixes, word)) continue; // 手填的优先
@@ -2995,7 +3053,11 @@
   /** 同一条歌词的音译层（RNP / NCM 都可能把罗马音放在兄弟节点里） */
   function romajiOf(host) {
     var box = host && host.parentNode;
-    for (var depth = 0; box && depth < 2; depth++) {
+    /*
+     * 三级：逐字层是 `line > karaoke > word > span`，音译是 `line > -romaji`，
+     * 从 span 往上要爬三层才看得到（少一层就"逐字模式下音译兜底失效"）。
+     */
+    for (var depth = 0; box && depth < 3; depth++) {
       var kids = box.children || [];
       for (var i = 0; i < kids.length; i++) {
         var el = kids[i];
@@ -3033,6 +3095,16 @@
     var fixes = furiganaFixes(line, s, host);
     var spans = lineSpans(line);
     /*
+     * 页面上的「音译」行（RNP 的 -romaji 层）：词典读不出的汉字拿它兜底
+     * （`ha re ru` → 霽 は）。它只补"完全没有读音"的那几个字，不覆盖词典。
+     */
+    var romajiLine = "";
+    try {
+      romajiLine = romajiOf(host) || "";
+    } catch (eRom) {
+      romajiLine = "";
+    }
+    /*
      * 逐字歌词：一行被拆成"一个字一个节点"，这个节点的起点是 offset。
      * 按整行分词，再把**词的第一个字**对回这个节点 —— 只注一次，读音是整词的
      * （物語 ものがたり，而不是 物 モノ + 語 ゴ）。
@@ -3042,6 +3114,7 @@
         kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
         fixes: fixes,
         spans: spans,
+        romaji: romajiLine,
       });
       if (!whole || !whole.length) return null;
       var mine = [];
@@ -3049,8 +3122,20 @@
         var tk = whole[i];
         if (tk.start < offset || tk.start >= offset + s.length) continue; // 只认"起点落在这个节点里"的词
         var localStart = tk.start - offset;
+        /*
+         * 逐字层（RNP）每个字后面跟的那个空格是排版用的，行文本里已经去掉了 ——
+         * 节点自己的文字里还留着，所以切片时要跳过它，底字别把空格圈进 ruby
+         * （否则 rt 会往右偏、那一格还会被撑宽）。
+         */
+        var lead = 0;
+        while (lead < s.length && /[\s\u3000]/.test(s.charAt(lead))) lead++;
+        localStart += lead;
         var localEnd = Math.min(localStart + (tk.end - tk.start), s.length);
         var piece = s.slice(localStart, localEnd);
+        if (piece && /[\s\u3000]$/.test(piece) && !/[\s\u3000]$/.test(tk.text)) {
+          piece = piece.replace(/[\s\u3000]+$/, "");
+          localEnd = localStart + piece.length;
+        }
         if (!piece) continue;
         /*
          * 对齐校验：这个词的第一个字必须正好是这个节点里的这个字。
@@ -3066,6 +3151,7 @@
       kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
       fixes: fixes,
       spans: spans,
+      romaji: romajiLine,
     });
     return out && out.length ? out : null;
   }
@@ -3232,6 +3318,36 @@
   }
 
   /** 区域里"原文"那部分（跳过音译 / 翻译层和注音本身） */
+  /**
+   * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）里那个**尾随空格**不算歌词 ——
+   * 那是排版用的，kuromoji 会把 `燃 え 上 が る` 当成一堆独立的词，
+   * 于是 体 = からだ、温 = ゆたか（真机现象：开逐字以后整行读音全错）。
+   * 只去贴着汉字 / 假名的那一头，英文词之间的空格是词边界，必须留着。
+   *
+   * 这份判据必须和 core/annotate.js 的 karaokeTextOf 完全一致：两边的行文本
+   * 是同一把键（就地改读音按它存），差一个空格就整行对不上。
+   */
+  var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
+  function karaokeTextOf(node) {
+    var t = node && node.nodeValue ? node.nodeValue : "";
+    if (!t || !/[\s\u3000]/.test(t)) return t;
+    var inWord = false;
+    for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
+      var cn = typeof p.className === "string" ? p.className : "";
+      if (/(^|\s)rnp-karaoke-word(\s|$)/.test(cn)) {
+        inWord = true;
+        break;
+      }
+    }
+    if (!inWord) return t;
+    var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
+    if (!core) return "";
+    var out = t;
+    if (RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
+    if (RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
+    return out;
+  }
+
   function originalText(region) {
     var out = "";
     try {
@@ -3266,7 +3382,7 @@
         }
         if (skipped) continue;
         if (node.parentNode === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
-        out += node.nodeValue || "";
+        out += karaokeTextOf(node);
       }
     } catch (e) {
       return out;
@@ -3477,22 +3593,21 @@
   }
 
   /*
-   * 大模型切词（llmSegment）的结果回来了：把这些行**重扫一遍**。
+   * 把这些行**重扫一遍**（大模型的读音答案回来了用）。
    *
-   * 为什么不能只 relabel()：新切分常常把两个已经注好的 ruby 合成一个词
-   * （帷 とばり + 帳 ちょう → 帷帳 とばり），relabel 只会改写已有 ruby 的读音，
-   * 合不成一个，旧的错切分会一直留在屏幕上。
-   * 一批 6 句、一首歌七八批，所以攒一下再扫（每批都整块重扫会看着在闪）。
+   * 为什么不能只 relabel()：答案可能把两个已经注好的 ruby 合成一个词，
+   * relabel 只会改写已有 ruby 的读音，合不成一个，旧的错切分会一直留在屏幕上。
+   * 攒一下再扫（每行都整块重扫会看着在闪）。
    */
-  var segRescanPending = {};
-  var segRescanTimer = null;
-  function scheduleSegRescan(lines) {
-    for (var i = 0; lines && i < lines.length; i++) segRescanPending[lines[i]] = 1;
-    if (segRescanTimer) return;
-    segRescanTimer = setTimeout(function () {
-      segRescanTimer = null;
-      var want = segRescanPending;
-      segRescanPending = {};
+  var rescanLinePending = {};
+  var rescanLineTimer = null;
+  function rescanLines(lines) {
+    for (var i = 0; lines && i < lines.length; i++) rescanLinePending[lines[i]] = 1;
+    if (rescanLineTimer) return;
+    rescanLineTimer = setTimeout(function () {
+      rescanLineTimer = null;
+      var want = rescanLinePending;
+      rescanLinePending = {};
       if (!config.enabled || !state.annotator || !state.annotator.rescanRegions) return;
       var regions = [];
       try {
@@ -3923,14 +4038,13 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="jpnFont"> 日语歌词用日文字体</label></div>' +
       "<h3>其它语言</h3>" +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateLatin"> 西文歌词标片假名</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="annotateLatinJa"> 日语歌里夹的西文也标</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 中文歌词标普通话读音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 朝鲜语歌词标朝鲜语读音</label></div>' +
       "<h3>大模型校正</h3>" +
       '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
       '<div class="wk-row"><input type="password" data-k="llmKey" placeholder="大模型 API Key（留空则不用）"> ' +
       '<button data-a="llmTest">测试</button> <span data-v="llmTest"></span></div>' +
-      // 切词单独一个开关：它每句发一次请求，比"只问个别词"重得多，默认关
-      '<div class="wk-row"><label><input type="checkbox" data-k="llmSegment"> 大模型切词（熟字训优先）</label></div>' +
       '<div class="wk-llm-state wk-hint"></div>' +
       "<h3>预览</h3>" +
       '<div class="wk-preview"></div>' +
@@ -4447,7 +4561,7 @@
       refreshLearned();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "furigana", "furiganaKana", "furiganaOverrides"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
     var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
@@ -4853,7 +4967,7 @@
                * 可能已经因为"同行别的词注上了"而有了记录，增量 pass 会整条跳过它 ——
                * 模型刚给的读音永远上不了屏（真机现象：霽 / 掻 一直空着）。
                */
-              if (RE_KANA_ANY.test(line || "") || songLooksJapanese()) scheduleSegRescan([line]);
+              if (RE_KANA_ANY.test(line || "") || songLooksJapanese()) rescanLines([line]);
               return;
             }
             var local = state.reader ? state.reader.read(word) : null;
@@ -4878,14 +4992,6 @@
           },
           // 同上：拦住"意译/拟声词"（案例 tick -> カチカチ）
           validate: validateAnswer,
-          /*
-           * 整句切词回来了（llmSegment 那一档）：把这些行拆回纯文本再重注 ——
-           * 新切分可能把两个已经注好的 ruby 合成一个词（见 scheduleSegRescan）。
-           */
-          onSegmented: function (lines) {
-            if (!config.enabled || !config.llmSegment) return;
-            scheduleSegRescan(lines);
-          },
           log: function () {
             trace("llm", Array.prototype.join.call(arguments, " "));
             if (config.verbose) console.log.apply(console, [LOG].concat(Array.prototype.slice.call(arguments)));
@@ -4925,6 +5031,7 @@
 
     purgeStaleInlineFixes();
     migrateLineFixes();
+    repairParenSpans();
     installInlineEditor();
 
     state.annotator = WKAnnotate.createAnnotator({
@@ -4946,7 +5053,15 @@
           return extraTokens(text, context, host, offset, lineText);
         },
         annotateAll: config.annotateAll !== false,
-        annotateLatin: config.annotateLatin !== false,
+        /*
+         * 西文要不要标：总开关 + 日语歌里那一档（每个节点都会问一次，
+         * 所以写成函数 —— 换歌、改开关都不必重建注音器）。
+         */
+        annotateLatin: function () {
+          if (config.annotateLatin === false) return false;
+          if (config.annotateLatinJa === false && songLooksJapanese()) return false;
+          return true;
+        },
         log: function () {
           trace("annotate", Array.prototype.join.call(arguments, " "));
         },

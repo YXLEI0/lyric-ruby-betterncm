@@ -202,7 +202,10 @@
       "\u0001" +
       fixesKey(opts && opts.fixes) +
       "\u0002" +
-      spansKey(opts && opts.spans);
+      spansKey(opts && opts.spans) +
+      // 音译行也会改结果（见下面的"音译兜底"），必须进键 —— 否则关了音译还读到旧的
+      "\u0003" +
+      String((opts && opts.romaji) || "");
     var hit = cache.get(key);
     if (hit) return hit.length ? hit : null;
     /*
@@ -509,6 +512,33 @@
       if (coveredByFixed(sy, sy + 1)) continue;
       out.push({ text: s.charAt(sy), start: sy, end: sy + 1, kana: toKanaMode(symKana, kana), kind: "symbol" });
     }
+    /*
+     * 音译兜底：词典 + 逐字探测都给不出读音的汉字（表外字：霽 / 燦 / 鬱 这类），
+     * 拿页面上的**音译行**反推 —— 「音译负责读音、词典负责断词」。
+     *
+     * 只在完全没有读音的地方补，绝不覆盖词典 / 探测 / 用户给的（重叠的一律跳过）。
+     * 对不上的音译（换行、少一句、机器切错）在 alignRomaji 里就整行放弃，
+     * 这里再加一道"这段汉字必须还没有读音"，双保险。
+     */
+    if (opts && opts.romaji) {
+      var derivedRomaji = derivedFromRomaji(s, out, opts.romaji);
+      for (var dr = 0; dr < derivedRomaji.length; dr++) {
+        var dseg = derivedRomaji[dr];
+        if (!dseg || !dseg.kana) continue;
+        var dAt = dseg.start;
+        var dEnd = dseg.end;
+        if (!(dEnd > dAt) || dEnd > s.length) continue;
+        var dSkip = false;
+        for (var dq = 0; !dSkip && dq < out.length; dq++) {
+          if (out[dq].start < dEnd && dAt < out[dq].end) dSkip = true;
+        }
+        for (var dq2 = 0; !dSkip && dq2 < suppressed.length; dq2++) {
+          if (suppressed[dq2][0] < dEnd && dAt < suppressed[dq2][1]) dSkip = true;
+        }
+        if (dSkip) continue;
+        out.push({ text: s.slice(dAt, dEnd), start: dAt, end: dEnd, kana: toKanaMode(dseg.kana, kana), kind: "romaji" });
+      }
+    }
 
     /*
      * 用户把读音留空的那些位置也交出去：annotate 会给它包一层 <span class="wk-blank">，
@@ -595,7 +625,9 @@
     var d = deps();
     if (!d.core || !d.tokenizer) return [];
     var kana = (opts && opts.kana) || "hiragana";
-    var toks = tokens(s, { kana: kana }) || [];
+    // 音译兜底也算"有读音"（见上面的 derivedFromRomaji），否则这些字会被当成读不出、
+    // 白白问一遍大模型
+    var toks = tokens(s, { kana: kana, romaji: (opts && opts.romaji) || "", fixes: opts && opts.fixes, spans: opts && opts.spans }) || [];
     var out = [];
     /*
      * (a) 没读音：**逐字**看有没有被 tokens() 覆盖。
@@ -674,6 +706,135 @@
     return out;
   }
 
+  /**
+   * 音译行（`ha ki da su i ki ga ...`）→ 读不出的那几个汉字的读音。
+   *
+   * 做法：把这一行切成"已知读音的片 / 假名 / 读不出的汉字段"三种格子，
+   * 再把音译（已转成假名）从左往右对上去 —— 已知的必须一模一样，
+   * 假名照字面，读不出的那几格正好吃掉中间剩下的那几拍。
+   * 对上了：那一格就是它的读音（`霽` 在 `…の ha re` 里 → は）。
+   * 对不上（音译是另一句 / 换行切错 / 歌手改词）：返回空数组，照旧留空问大模型。
+   *
+   * 为什么不用 vendor 的 segmentsFromReading：它是给"官方音译 + 词典断词"设计的，
+   * 碰到 `がりの霽れ` 这种"假名夹着一个读不出的汉字"的整块片段会整段放弃
+   * （真机现象：开了音译，读不出的字还是空的）。
+   */
+  var romajiFillCache = new Map();
+  var ROMAJI_FILL_MAX = 400;
+  function derivedFromRomaji(s, toks, romaji) {
+    var key = s + "\u0001" + romaji;
+    var hit = romajiFillCache.get(key);
+    if (hit !== undefined) return hit;
+    var out = [];
+    var d = deps();
+    try {
+      var rk = d.core && d.core.romajiToKana ? d.core.romajiToKana(String(romaji)) : null;
+      if (rk) out = alignRomaji(s, toHira(rk), toks);
+    } catch (e) {
+      out = [];
+    }
+    if (romajiFillCache.size >= ROMAJI_FILL_MAX) romajiFillCache.clear();
+    romajiFillCache.set(key, out);
+    return out;
+  }
+
+  /** 音译里 を 写作 o、は 写作 wa —— 这几个假名要算"对得上" */
+  var KANA_SAME = { "を": "お", "は": "わ", "へ": "え", "づ": "ず", "ぢ": "じ" };
+  function kanaCharSame(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return KANA_SAME[a] === b || KANA_SAME[b] === a;
+  }
+  function kanaMatches(rk, ki, kana) {
+    if (ki + kana.length > rk.length) return false;
+    for (var i = 0; i < kana.length; i++) {
+      if (!kanaCharSame(rk.charAt(ki + i), kana.charAt(i))) return false;
+    }
+    return true;
+  }
+
+  /** 把整行对齐一遍，返回 [{ start, end, kana }]（只含读不出的汉字段） */
+  function alignRomaji(s, rk, toks) {
+    if (!s || !rk) return [];
+    /*
+     * 起止相同的片段只留最长的那个（词典片段可能和用户改的重叠）。
+     */
+    var byStart = {};
+    for (var i = 0; i < toks.length; i++) {
+      var tk = toks[i];
+      if (!tk || tk.hide || tk.blank || !tk.kana) continue;
+      if (!(tk.end > tk.start) || tk.start < 0) continue;
+      var old = byStart[tk.start];
+      if (!old || tk.end > old.end) byStart[tk.start] = tk;
+    }
+    var units = [];
+    var at = 0;
+    while (at < s.length) {
+      var hitTok = byStart[at];
+      if (hitTok) {
+        units.push({ kind: "k", kana: toHira(String(hitTok.kana)), start: at, end: hitTok.end });
+        at = hitTok.end;
+        continue;
+      }
+      var ch = s.charAt(at);
+      if (/[\u3041-\u3096\u30A1-\u30FA\u30FC]/.test(ch)) {
+        units.push({ kind: "k", kana: toHira(ch), start: at, end: at + 1 });
+        at++;
+        continue;
+      }
+      if (/[\u4E00-\u9FFF\u3005]/.test(ch)) {
+        var b = at + 1;
+        while (b < s.length && /[\u4E00-\u9FFF\u3005]/.test(s.charAt(b)) && !byStart[b]) b++;
+        units.push({ kind: "u", start: at, end: b });
+        at = b;
+        continue;
+      }
+      // 标点 / 数字 / 拉丁：不占拍（音译里常常也没有它们）
+      units.push({ kind: "s", start: at, end: at + 1 });
+      at++;
+    }
+    var choice = {};
+    var choiceKi = {};
+    var dead = {};
+    function go(ui, ki) {
+      if (ui === units.length) return ki === rk.length;
+      var memo = ui + "," + ki;
+      if (dead[memo]) return false;
+      var u = units[ui];
+      var ok = false;
+      if (u.kind === "k") {
+        if (kanaMatches(rk, ki, u.kana)) ok = go(ui + 1, ki + u.kana.length);
+      } else if (u.kind === "s") {
+        ok = go(ui + 1, ki);
+      } else {
+        // 读不出的字：吃掉中间剩下的一截，长度由后面对不对得上来决定
+        for (var len = 1; ki + len <= rk.length; len++) {
+          choice[ui] = len;
+          choiceKi[ui] = ki;
+          if (go(ui + 1, ki + len)) {
+            ok = true;
+            break;
+          }
+        }
+        if (!ok) {
+          delete choice[ui];
+          delete choiceKi[ui];
+        }
+      }
+      if (!ok) dead[memo] = 1;
+      return ok;
+    }
+    if (!go(0, 0)) return [];
+    var out = [];
+    for (var ui2 = 0; ui2 < units.length; ui2++) {
+      var uu = units[ui2];
+      if (uu.kind !== "u" || !choice[ui2]) continue;
+      out.push({ text: "", start: uu.start, end: uu.end, kana: rk.substr(choiceKi[ui2], choice[ui2]) });
+    }
+    return out;
+  }
+
+
   /** 两边读音比一下：长音、促音、浊音的写法差异不算"对不上" */
   function sameReading(a, b) {
     var norm = function (x) {
@@ -742,6 +903,13 @@
 
   /** 词典读不出来、但歌词里会唱的符号 */
   var SYMBOL_READINGS = { "\u221E": "むげん", "\u3006": "しめ" };
+
+  /** 片假名 → 平假名（音译对齐全按平假名比） */
+  function toHira(t) {
+    return String(t == null ? "" : t).replace(/[\u30A1-\u30F6]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0x60);
+    });
+  }
 
   /** 平假名 / 片假名互转（用户两种写法都可能填） */
   function toKanaMode(kana, mode) {    var t = String(kana == null ? "" : kana);

@@ -1785,6 +1785,9 @@ test("禁用后 DOM 完全还原并收走样式，重新启用又能标注", asy
        */
       if (el.hasAttribute && el.hasAttribute("data-wk-font")) el.removeAttribute("data-wk-font");
       if (el.style && el.style.removeProperty) el.style.removeProperty("font-family");
+      // 去掉 font-family 之后可能剩一个空的 style=""（挂过内联字体的节点才会有）——
+      // 那也是字体那套留下的，不属于"注音结构"，一样不比
+      if (el.getAttribute && el.getAttribute("style") === "") el.removeAttribute("style");
       const attrs = [...el.attributes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const a of attrs) el.removeAttribute(a.name);
       for (const a of attrs) el.setAttribute(a.name, a.value);
@@ -5111,7 +5114,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="annotateHangul"]',
     '[data-k="llmEnabled"]',
     '[data-k="llmKey"]',
-    '[data-k="llmSegment"]',
+    '[data-k="annotateLatinJa"]',
     '[data-a="llmTest"]',
     ".wk-llm-state",
     ".wk-preview",
@@ -5394,85 +5397,6 @@ test("逐字节点 + 日语标题行：雫 / 愛 按整行判成日文，不许�
   assert.strictEqual(rubyOver(ps[1], "愛"), "あい", "愛 要读日语 あい：" + ps[1].innerHTML);
   assert.strictEqual(rubyOver(ps[1], "莉"), null, "莉 在日语里没有标准读音，宁可留白：" + ps[1].innerHTML);
   assert.ok(rubyOver(ps[2], "看") !== null, "同一首里的中文行要注普通话读音：" + ps[2].innerHTML);
-});
-
-test("大模型切词（单独开关）：按整句切分，帷帳 读 とばり", async () => {
-  /*
-   * kuromoji 会把熟字训切碎（帷 + 帳 → とばり + ちょう）。开着这个开关时，
-   * 整句交给模型切词，答案按「底字 -> 读音」当这一行的修正用。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>帷帳の奥で</p></li>
-</ul></div></body></html>`;
-
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: {
-      online: false,
-      llmEnabled: true,
-      llmSegment: true,
-      llmKey: "sk-test",
-      llmEndpoint: "https://api.example.com/v1/chat/completions",
-    },
-    fetch: function (url, init) {
-      const content = JSON.parse(init.body).messages[0].content;
-      // 只有切词那一档才回答案；别的（单词校正）回空对象，免得两档互相干扰
-      if (content.indexOf("熟字训") < 0) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ choices: [{ message: { content: "{}" } }] }),
-        });
-      }
-      asked.push(content);
-      const out = { "1": [["帷帳", "とばり"], ["奥", "おく"]] };
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  env.window.WKFurigana.setTokenizer(
-    perCharTokenizer({ 帷: "トバリ", 帳: "チョウ", の: "ノ", 奥: "オク", で: "デ" })
-  );
-  await env.runLoad();
-  await sleep(3000);
-
-  assert.ok(asked.length >= 1, "开了开关就要发请求");
-  assert.ok(asked[0].indexOf("帷帳の奥で") >= 0, "要把整句发过去：" + asked[0].slice(-80));
-  const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
-    r.childNodes[0].nodeValue,
-    r.querySelector(".wk-rt").textContent,
-  ]);
-  assert.deepStrictEqual(pairs, [["帷帳", "とばり"], ["奥", "おく"]], "整词合成一个注音：" + p.innerHTML);
-});
-
-test("大模型切词没开时：一句都不发，也不影响普通振假名", async () => {
-  const HTML = `<!doctype html><html><head></head><body>
-<div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>帷帳の奥で</p></li>
-</ul></div></body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { online: false, llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      asked.push(JSON.parse(init.body).messages[0].content);
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: "{}" } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1200);
-  assert.ok(
-    asked.every((c) => c.indexOf("熟字训") < 0),
-    "没开切词开关就不许发切词请求：" + asked.map((c) => c.slice(0, 40)).join(" | ")
-  );
 });
 
 test("就地改读音只改点中的那一处（同一行两个相同的字不会一起变）", async () => {
@@ -5819,10 +5743,10 @@ test("就地改读音 / 留空：行文本按原文那层算（RNP 里带罗马�
   assert.strictEqual(find("1").querySelector(".wk-rt").textContent, "ひとつ");
 });
 
-test("读不出的汉字：问模型时带整句 + 前后句（单句准确率太低）", async () => {
+test("读不出的汉字：问模型只带这一句（邻句会把读音带歪）", async () => {
   /*
-   * 真机上"这个汉字读什么"几乎全靠模型，而歌词里一句话常常只是个短语（`霽れを待つ君`）。
-   * 只给这一句，模型看不到前后文，正确率明显偏低。现在条目里 además 带 prev / next。
+   * 以前条目里还塞前后各一句当参考。真机上反而更差：上一句里的 上々 会让这一句的
+   * 上 被答成 じょうじょう —— 邻句不是语境，是噪音。现在只给 line 这一句。
    */
   const HTML = `<!doctype html><html><head></head><body>
 <div class="m-lyric"><ul class="lyric">
@@ -5861,9 +5785,9 @@ test("读不出的汉字：问模型时带整句 + 前后句（单句准确率�
   const row = items.filter((x) => x.w === "霽")[0];
   assert.ok(row, "要问 霽：" + JSON.stringify(items));
   assert.strictEqual(row.line, "霽れを待つ君", "带上整句");
-  assert.strictEqual(row.prev, "痛みと怒れる人 を喰らったらった", "带上前一句：" + JSON.stringify(row));
-  assert.strictEqual(row.next, "じゃん！", "带上后一句：" + JSON.stringify(row));
-  assert.ok(asked[0].indexOf("prev / next") >= 0, "提示词要说明前后句怎么用");
+  assert.strictEqual(row.prev, undefined, "不许带前一句：" + JSON.stringify(row));
+  assert.strictEqual(row.next, undefined, "不许带后一句：" + JSON.stringify(row));
+  assert.ok(asked[0].indexOf("prev / next") < 0, "提示词里不该再提前后句");
   assert.ok(asked[0].indexOf("不要给 zhōng") >= 0, "提示词要提醒别给中文读音");
 });
 
@@ -5979,4 +5903,97 @@ test("就地编辑器：合并、斜杠切词、取消合并", async () => {
   click("↺");
   await sleep(400);
   assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "取消之后回到词典切的：" + p.innerHTML);
+});
+
+test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆散", async () => {
+  /*
+   * RNP 的逐字层是一个字一个 `div.rnp-karaoke-word`，字后面还跟着一个空格。
+   * 那一格空格以前被当成歌词算进行文本，于是整行变成 `燃 え 上 が る 体 温 が`，
+   * kuromoji 把每个字当独立的词：体 = からだ、温 = ゆたか、上 = うえ ——
+   * 真机现象就是「开了逐字以后整行读音全错、注音还往右挤」（用户报的严重渲染错误）。
+   */
+  const chars = Array.from("燃え上がる体温が")
+    .map((c, i, all) => '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '"><span>' + c + (i < all.length - 1 ? " " : "") + "</span></div>")
+    .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${chars}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 燃え: "モエ", 上がる: "アガル", 体温: "タイオン", が: "ガ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const got = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(
+    got,
+    [["燃", "も"], ["上", "あ"], ["体", "たいおん"]],
+    "读音要按整行分词，不许按单字：" + JSON.stringify(got) + " / " + root.innerHTML
+  );
+  // ruby 的底字里也不许带着那个空格（否则 rt 会往右偏、那一格还会被撑宽）
+  Array.from(root.querySelectorAll("ruby.wk-ruby")).forEach((r) => {
+    assert.strictEqual(
+      /[\s\u3000]/.test(r.childNodes[0].nodeValue || ""),
+      false,
+      "底字不许带排版空格：" + JSON.stringify(r.childNodes[0].nodeValue)
+    );
+  });
+});
+
+test("音译兜底：读不出的汉字用页面上的音译行补读音（不用问模型）", async () => {
+  /*
+   * 霽 这类表外字以前只能问大模型。页面上本来就有音译行（`ha re o ma tsu ki mi`），
+   * 现在直接拿它对：已知片段当锚，读不出的那个字吃掉中间剩下的那几拍。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line">
+  <div class="rnp-lyrics-line-original">霽れを待つ君</div>
+  <div class="rnp-lyrics-line-romaji">ha re o ma tsu ki mi</div>
+</div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ を: "ヲ", 待つ: "マツ", 君: "キミ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const orig = env.document.querySelector(".rnp-lyrics-line-original");
+  const got = Array.from(orig.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(got, [["霽", "は"], ["待", "ま"], ["君", "きみ"]], "音译行要能补出 霽 は：" + JSON.stringify(got) + " / " + orig.innerHTML);
+});
+
+test("日语歌里夹的西文单独一个开关：关掉只影响日语歌", async () => {
+  /*
+   * 「西文歌词标片假名」是总开关；日语歌里夹的西文（`きらめく light と clover`）
+   * 还有一个单独的开关 —— 听日语歌的人常常嫌满屏英文片假名吵，
+   * 但听英文 / 其它语种歌的人要的就是那个音译，所以两档分开。
+   */
+  const JP = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>光る light と clover</p></li>
+</ul></div></body></html>`;
+  const EN = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>Hello world</p></li>
+</ul></div></body></html>`;
+
+  // 1. 日语歌 + 关掉「日语歌里夹的西文」：英文不标，汉字照标
+  const jp = bootPlugin(JP, { config: { online: false, llmEnabled: false, annotateLatinJa: false } });
+  jp.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 光: "ヒカ", と: "ト" }));
+  await jp.runLoad();
+  await sleep(1200);
+  const jpP = jp.document.querySelector("ul.lyric li p");
+  const jpBases = Array.from(jpP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  assert.ok(
+    jpBases.every((b) => !/[A-Za-z]/.test(b)),
+    "日语歌里的英文不该标：" + JSON.stringify(jpBases) + " / " + jpP.innerHTML
+  );
+  assert.ok(jpBases.some((b) => /[\u3041-\u3096\u4E00-\u9FFF]/.test(b)), "汉字 / 假名那批照旧：" + JSON.stringify(jpBases));
+
+  // 2. 纯英文歌：同一档关着也照旧标（那是 annotateLatin 总开关的事）
+  const en = bootPlugin(EN, { config: { online: false, llmEnabled: false, annotateLatinJa: false } });
+  await en.runLoad();
+  await sleep(1600);
+  const enP = en.document.querySelector("ul.lyric li p");
+  const enBases = Array.from(enP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  assert.ok(enBases.length > 0, "非日语歌的西文照旧注：" + enP.innerHTML);
 });

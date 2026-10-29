@@ -463,3 +463,41 @@ test("留空压过模型 / 面板规则给的读音", () => {
     "模型给的读音也不许注回来：" + JSON.stringify(pairs({ spans: [[at, "人", ""]], fixes: { 人: "ひと" } }))
   );
 });
+
+test("音译兜底：词典读不出的汉字按页面上的音译行反推读音", () => {
+  /*
+   * 表外字（霽 / 鬱 这种词典里没有的）以前只能留空或问大模型。
+   * 页面上本来就有「音译」那一行（`a me a ga ri no ha re`）——
+   * 拿它反推：已知的片段负责对齐，读不出的那个字吃掉中间剩下的那几拍。
+   * 音译对不上这一行（换行切错 / 另一句）时必须整行放弃，一个都不许乱填。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({})); // 什么词都没读过，全靠音译
+  const pairs = (s, romaji) =>
+    Array.from(W.WKFurigana.tokens(s, romaji ? { romaji: romaji } : undefined) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+
+  assert.deepStrictEqual(pairs("雨上がりの霽れ"), [], "没有音译时读不出就是读不出");
+  assert.deepStrictEqual(
+    pairs("雨上がりの霽れ", "a me a ga ri no ha re"),
+    [["雨上", "あめあ"], ["霽", "は"]],
+    "读不出的字要从音译里拿到读音（霽 は）：" + JSON.stringify(pairs("雨上がりの霽れ", "a me a ga ri no ha re"))
+  );
+  assert.deepStrictEqual(
+    pairs("雨上がりの霽れ", "ki mi no ko e ga too ku"),
+    [],
+    "音译是另一句时不许乱填：" + JSON.stringify(pairs("雨上がりの霽れ", "ki mi no ko e ga too ku"))
+  );
+  // 词典读得出来的地方不许被音译盖掉
+  const W2 = newWindow();
+  W2.window.WKFurigana.setTokenizer(fakeTokenizer({ 空: "ソラ", に: "ニ", 虹: "ニジ", が: "ガ" }));
+  const got = Array.from(W2.window.WKFurigana.tokens("空に虹が架かる", { romaji: "so ra ni ni ji ga ka ka ru" }) || [], (t) => [
+    t.text,
+    t.kana,
+  ]);
+  assert.deepStrictEqual(
+    got,
+    [["空", "そら"], ["虹", "にじ"], ["架", "か"]],
+    "有词典读音的照旧，没读音的才补：" + JSON.stringify(got)
+  );
+});

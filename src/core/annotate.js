@@ -726,6 +726,38 @@
      * 语（ゴ）物（モノ）这种单字读音拼起来是错的。有了起点，上层可以拿整行去分词，
      * 再把词的首字对回具体的节点。
      */
+    /*
+     * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）把每个字后面跟的那个**空格**
+     * 也写进了文本 —— 那是排版用的（字与字之间本来就有 CSS 间距），不是歌词。
+     *
+     * 不认这一条的话，一行会变成 `燃 え 上 が る 体 温 が`：kuromoji 把每个字当成
+     * 独立的词，于是 体 = からだ、温 = ゆたか、上 = うえ —— 真机现象就是
+     * 「开了逐字以后整行读音全错、注音还往右边挤」（用户报的那个）。
+     * 只去"紧贴着汉字 / 假名"的那一头：英文词后面的空格是词边界，去了会把
+     * `Hello` `world` 粘成一个词。
+     */
+    var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
+
+    function karaokeTextOf(node) {
+      var t = node && node.nodeValue ? node.nodeValue : "";
+      if (!t || !/[\s\u3000]/.test(t)) return t;
+      var inWord = false;
+      for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
+        var cn = typeof p.className === "string" ? p.className : "";
+        if (/(^|\s)rnp-karaoke-word(\s|$)/.test(cn)) {
+          inWord = true;
+          break;
+        }
+      }
+      if (!inWord) return t;
+      var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
+      if (!core) return "";
+      var out = t;
+      if (RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
+      if (RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
+      return out;
+    }
+
     /** 一个区域里"原文"那部分：跳过注音本身、以及 RNP 的音译 / 翻译层 */
     function originalTextOf(el) {
       var out = "";
@@ -762,7 +794,7 @@
           if (skip) continue;
           // 区域自己的缩进 / 换行（RNP 那种一层层 div 的写法）不算正文
           if (node.parentNode === el && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
-          out += node.nodeValue || "";
+          out += karaokeTextOf(node);
         }
       } catch (e) {
         return out;
@@ -820,7 +852,7 @@
           if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
           node.__wkOffset = at;
           node.__wkLineText = lineText;
-          at += (node.nodeValue || "").length;
+          at += karaokeTextOf(node).length;
         }
       }
     }
@@ -1143,8 +1175,12 @@
         }
       }
       var hasExtras = !!(extras && extras.length);
-      // 面板里关掉「西文歌词标片假名」之后，这里只剩汉字 / 振假名那批
-      var latinOn = options.annotateLatin !== false;
+      /*
+       * 面板里关掉「西文歌词标片假名」之后，这里只剩汉字 / 振假名那批。
+       * 允许传函数：日语歌里的西文还有一个单独开关（annotateLatinJa），
+       * 而"这首歌是不是日语歌"每轮都会变 —— 传死值就要重建注音器。
+       */
+      var latinOn = typeof options.annotateLatin === "function" ? options.annotateLatin() !== false : options.annotateLatin !== false;
       if (!hasExtras && (!latinOn || !matcher.hasReadable(text))) return false;
 
       var tokens = latinOn ? matcher.scan(text) : [];
