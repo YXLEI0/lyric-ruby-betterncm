@@ -5940,6 +5940,61 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
   });
 });
 
+test("西文词也能就地改读音（MY → エムワイ），留空 / 改回来都行", async () => {
+  /*
+   * 西文词的读音是注音层自己那套切词器给的，日语 / 中文两档都管不到它 ——
+   * 以前双击改了存进 spans，页面上一点变化都没有（真机现象：`MY HEART` 想改成
+   * ハート，改完还是原来的读音）。现在 spans 会作为 extraTokens 交出去，
+   * 同起点时压过切词器给的读音（见 core/annotate.js 的 mergeTokens）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>ギコギコ MY</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({}));
+  await env.runLoad();
+  await sleep(800);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const read = () =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const type = (v) => {
+    const box = env.document.querySelector("input.wk-edit");
+    box.value = v;
+    box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  };
+  const myRuby = () =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "MY")[0];
+
+  assert.strictEqual(myRuby().querySelector(".wk-rt").textContent, "マイ", "初始是词典读音：" + p.innerHTML);
+
+  dbl(myRuby());
+  await sleep(40);
+  type("エムワイ");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["MY", "エムワイ"]], "改完要生效：" + p.innerHTML);
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(saved.furiganaLineSpans["ギコギコ MY"], [[5, "MY", "エムワイ"]], "按位置存：" + JSON.stringify(saved.furiganaLineSpans));
+
+  // 留空 = 这一处不注音，但留一个能双击的壳
+  dbl(myRuby());
+  await sleep(40);
+  type("-");
+  await sleep(400);
+  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "留空之后不该有注音：" + p.innerHTML);
+  const blank = p.querySelector(".wk-blank");
+  assert.ok(blank, "留空处要能点回来：" + p.innerHTML);
+
+  // 从壳里改回读音
+  dbl(blank);
+  await sleep(40);
+  type("マイ");
+  await sleep(400);
+  assert.deepStrictEqual(read(), [["MY", "マイ"]], "改回来：" + p.innerHTML);
+});
+
 test("音译兜底：读不出的汉字用页面上的音译行补读音（不用问模型）", async () => {
   /*
    * 霽 这类表外字以前只能问大模型。页面上本来就有音译行（`ha re o ma tsu ki mi`），

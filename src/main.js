@@ -473,12 +473,23 @@
     return cfg;
   }
 
+  /**
+   * 就地读音（spans）的"版本号"：每次存盘 +1。
+   *
+   * lineSpans() 会被**每个文本节点**问一次（日语那档和西文那档都要），逐字歌词一行
+   * 十几个节点就是十几遍 —— 而它里面还要 sanitize + 扫一遍别的行（行文本变了要整体
+   * 平移）。加一层按行的缓存，版本号变了就整块丢掉，改完读音立刻生效。
+   */
+  var spansGen = 0;
+  var lineSpansCache = { gen: -1, map: new Map() };
+
   function saveConfig() {
     try {
       localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
     } catch (e) {
       warn("设置保存失败", e && e.message);
     }
+    spansGen++;
   }
 
   var config = loadConfig();
@@ -2775,6 +2786,15 @@
   }
 
   function lineSpans(line) {
+    if (lineSpansCache.gen !== spansGen) lineSpansCache = { gen: spansGen, map: new Map() };
+    if (lineSpansCache.map.has(line)) return lineSpansCache.map.get(line) || null;
+    var got = computeLineSpans(line);
+    if (lineSpansCache.map.size >= 300) lineSpansCache.map.clear();
+    lineSpansCache.map.set(line, got || null);
+    return got || null;
+  }
+
+  function computeLineSpans(line) {
     var map = config.furiganaLineSpans;
     if (!map || typeof map !== "object") return null;
     var list = map[line];
@@ -3223,8 +3243,75 @@
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
-    if (nodeLooksJapanese(s, lineText, context, offset)) return furiganaTokens(s, context, host, offset, lineText);
-    return cjkTokens(s, context);
+    var base = nodeLooksJapanese(s, lineText, context, offset)
+      ? furiganaTokens(s, context, host, offset, lineText)
+      : cjkTokens(s, context);
+    /*
+     * 用户在歌词页双击改过的读音（spans）也要能压过**西文**词：西文的读音是本插件
+     * 之外那套切词器给的，日语行走 furigana 那档、非日语行走 cjk 那档 —— 西文两头
+     * 都不管，所以两条路都把 spans 交出去（真机现象：`MY HEART` 想改成 ハート，
+     * 改完页面上还是原来的读音）。
+     */
+    var ov = userSpanTokens(s, context, lineText, offset);
+    if (!ov.length) return base;
+    var out = [];
+    var i;
+    for (i = 0; i < ov.length; i++) out.push(ov[i]);
+    for (i = 0; i < (base || []).length; i++) {
+      var clash = false;
+      for (var k = 0; k < ov.length; k++) {
+        if (ov[k].start < base[i].end && base[i].start < ov[k].end) {
+          clash = true;
+          break;
+        }
+      }
+      if (!clash) out.push(base[i]);
+    }
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return out.length ? out : null;
+  }
+
+  /**
+   * 就地改读音里、落在这一段文字里的那几条（位置 → 本节点的局部坐标）。
+   *
+   * 日语行走的是 furigana 那套（core/furigana.js 的 spansIn），这里管**非日语行**：
+   * 西文词的读音由注音层的切词器给，用户改的那条只能从 extraTokens 这一侧插进去。
+   * 留空（读音写成空串）也交出去，注音层会给它包一层可点的壳。
+   */
+  function userSpanTokens(s, context, lineText, offset) {
+    var out = [];
+    var line = "";
+    if (lineText && lineText.length >= s.length) line = lineText;
+    else if (context && context.length > s.length) line = context;
+    if (!line) line = s;
+    var spans = lineSpans(line);
+    if (!spans || !spans.length) return out;
+    var base = typeof offset === "number" ? offset : 0;
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (!sp) continue;
+      var at = typeof sp[0] === "number" ? sp[0] : parseInt(sp[0], 10);
+      var word = String(sp[1] == null ? "" : sp[1]);
+      var kana = String(sp[2] == null ? "" : sp[2]).trim();
+      if (!(at >= 0) || !word) continue;
+      if (line.substr(at, word.length) !== word) continue; // 位置对不上：这条作废
+      var from = Math.max(at, base);
+      var to = Math.min(at + word.length, base + s.length);
+      if (!(to > from)) continue;
+      var piece = s.slice(from - base, to - base);
+      if (!piece) continue;
+      out.push({
+        text: piece,
+        start: from - base,
+        end: to - base,
+        kana: kana,
+        blank: !kana,
+        kind: "user",
+      });
+    }
+    return out;
   }
 
   /**

@@ -501,3 +501,21 @@ test("音译兜底：词典读不出的汉字按页面上的音译行反推读�
     "有词典读音的照旧，没读音的才补：" + JSON.stringify(got)
   );
 });
+
+test("音译兜底：会被唱出来的符号（×）也注上", () => {
+  /*
+   * 词典对 × 一个读音都不给，但音译里它占着一拍 —— `イナイイナイ×点` 的 × 唱 ば。
+   * 现在符号也当成"读不出的格"去对齐音译；不带音译时照旧留白。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({}));
+  const pairs = (s, romaji) =>
+    Array.from(W.WKFurigana.tokens(s, romaji ? { romaji: romaji } : undefined) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(pairs("イナイイナイ×点"), [], "没有音译时读不出就是读不出");
+  assert.deepStrictEqual(
+    pairs("イナイイナイ×点", "i na i i na i ba te n"),
+    [["×", "ば"], ["点", "てん"]],
+    "× 要从音译里拿到 ば：" + JSON.stringify(pairs("イナイイナイ×点", "i na i i na i ba te n"))
+  );
+});

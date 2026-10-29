@@ -1124,7 +1124,13 @@
       var j = 0;
       var lastEnd = 0;
       while (i < base.length || j < extra.length) {
-        var takeBase = j >= extra.length || (i < base.length && base[i].start <= extra[j].start);
+        /*
+         * 同起点时**以 extra 为准**：extra 里除了汉字 / 谚文，还有用户在歌词页
+         * 双击改过的读音（见 main.js 的 userSpanTokens）—— 西文词的读音本来是
+         * 切词器给的（base），改过的必须压过它（真机现象：`MY HEART` 改成 ハート
+         * 之后页面上还是原来的读音）。
+         */
+        var takeBase = j >= extra.length || (i < base.length && base[i].start < extra[j].start);
         var tk = takeBase ? base[i++] : extra[j++];
         if (tk.start < lastEnd) continue;
         out.push(tk);
