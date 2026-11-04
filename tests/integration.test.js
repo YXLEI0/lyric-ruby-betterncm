@@ -3455,6 +3455,33 @@ test("中文歌词：开了「汉字标普通话读音」才注音，默认不�
   assert.strictEqual(clone.textContent, "我爱上给我勇气的 Rainie Love");
 });
 
+test("中文歌里的纯数字 / 单位行不许用日语数词读（120km）", async () => {
+  /*
+   * 中文歌里偶尔有一整行就是数字 / 单位（`120km`）。这一行一个汉字都没有，
+   * "日语读不读得出"那个循环一次都不进 —— 以前直接算 true，整行被当日语行，
+   * 120 被注成 ひゃくにじゅう（用户报的「数字和物理单位都标上读音」）。
+   * 现在没有汉字的行不算日语可读，数字留空，单位仍然按西文读。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>我们的爱说不出口</p></li>
+  <li class="line"><p>还有什么好说的</p></li>
+  <li class="line"><p>120km</p></li>
+</ul></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  // 词典就绪（假分词器够用）：不设的话 japaneseReadable 直接 false，测不出这条
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({}));
+  await env.runLoad();
+  await sleep(600);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = Array.from(ps[2].querySelectorAll("ruby.wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["km", "キロ"]], "数字不许注成 ひゃくにじゅう：" + ps[2].innerHTML);
+});
+
 test("日语歌里的汉字不标普通话读音（开了开关也不标）", async () => {
   // 整首是日语歌（有假名），所以那些"纯汉字行"也不能拿普通话音去读：
   // 東京 是 トウキョウ，不是 ドンジン。
@@ -5938,6 +5965,48 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
       "底字不许带排版空格：" + JSON.stringify(r.childNodes[0].nodeValue)
     );
   });
+});
+
+test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟着前一个字读", async () => {
+  /*
+   * 逐字层一个字一个文本节点，括号读音（`(セカイ)`）横跨好几个节点。
+   * 以前只有第一个括号会被藏（后面几个字照旧露着），更常见的是整段括号都没藏 ——
+   * 真机现象：`〆（シメ）` 的括号一直没合并。另外 星々 在 IPADIC 里切成 星 + 々，
+   * 々 的读音是它自己，以前 々 上面什么都没有。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map(
+        (c, i, all) =>
+          '<div class="rnp-karaoke-word is-cjk' +
+          (i < all.length - 1 ? " end-with-space" : "") +
+          '"><span>' +
+          c +
+          (i < all.length - 1 ? " " : "") +
+          "</span></div>"
+      )
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric">
+  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${karaoke("舞台(セカイ)に響く")}</div></div>
+  <div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${karaoke("あの星々は")}</div></div>
+</div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 舞台: "ブタイ", 響: "ヒビ", に: "ニ", く: "ク", 星: "ホシ", あの: "アノ", は: "ハ" }));
+  await env.runLoad();
+  await sleep(600);
+
+  const lines = Array.from(env.document.querySelectorAll(".rnp-lyrics-line-karaoke"));
+  const hidden = Array.from(lines[0].querySelectorAll(".rnp-karaoke-word"))
+    .filter((w) => w.querySelector(".wk-hide"))
+    .map((w) => w.textContent.trim());
+  assert.deepStrictEqual(hidden, ["(", "セ", "カ", "イ", ")"], "括号那几个字都要藏起来：" + lines[0].innerHTML);
+
+  const pairs = Array.from(lines[1].querySelectorAll("ruby.wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["星", "ほし"], ["々", "ぼし"]], "叠字符要跟着前一个字读：" + lines[1].innerHTML);
 });
 
 test("西文词也能就地改读音（MY → エムワイ），留空 / 改回来都行", async () => {

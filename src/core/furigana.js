@@ -195,7 +195,13 @@
     }
     // 只有数字的行也要注（kuromoji 不给阿拉伯数字读音，由 core/numbers.js 补）
     // 全角数字（１２３）同样算 —— 歌词里经常是全角的
-    if (!d.core.hasKanji(s) && !/[0-9\uFF10-\uFF19]/.test(s)) return null;
+    // 只有会唱的符号 / 叠字符的行也要进来：`〆` しめ、`∞` むげん、`×` 音译兜底
+    if (
+      !d.core.hasKanji(s) &&
+      !/[0-9\uFF10-\uFF19]/.test(s) &&
+      !/[\u00D7\u00F7\u221E\u2605\u2606\u266A\u2661\u2665\u3006\u203B\u2211\u221A]/.test(s)
+    )
+      return null;
     var kana = (opts && opts.kana) || "hiragana";
     var key =
       cacheKey(s, kana) +
@@ -409,7 +415,7 @@
      * 屏幕上还多出一截 "(セカイ)"（真机现象）。
      * 这里补一遍宽松匹配，命中的读法当这一段的读音，括号那截照旧藏起来。
      */
-    var reParen = /([\u4E00-\u9FFF\u3005]+)[ \t\u3000\n]*[（(]([\u3041-\u3096\u30A1-\u30FA\u30FC]{1,12})[）)]/g;
+    var reParen = /([\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF]+)[ \t\u3000\n]*[（(][ \t\u3000]*([\u3041-\u3096\u30A1-\u30FA\u30FC]{1,12})[ \t\u3000]*[）)]/g;
     var pm;
     while ((pm = reParen.exec(s))) {
       var pWord = pm[1];
@@ -511,6 +517,33 @@
       if (symCovered) continue;
       if (coveredByFixed(sy, sy + 1)) continue;
       out.push({ text: s.charAt(sy), start: sy, end: sy + 1, kana: toKanaMode(symKana, kana), kind: "symbol" });
+    }
+    /*
+     * 叠字符 々：跟着前面那个汉字读（浊化按日语的一般规律）。
+     *
+     * kuromoji 对 `星々` 会把 々 单独切出来、读音写成它自己（`々`），于是 星 有读音、
+     * 々 空着 —— 真机现象：`あの星々は` 的 々 没有注音。`日々` / `人々` / `時々`
+     * 这种 IPADIC 里整词收着的，已经被上面的 token 覆盖，到不了这里。
+     *
+     * 浊化：`星々` ほし → ぼし、`日々` ひ → び、`人々` ひと → びと。读音里已经带了
+     * 浊音就不再浊化 —— `次々` 是 つぎつぎ，不是 づぎづぎ。
+     */
+    for (var rp = 0; rp < s.length; rp++) {
+      if (s.charAt(rp) !== "\u3005") continue;
+      if (coveredByFixed(rp, rp + 1)) continue;
+      var repBase = null;
+      for (var rb = 0; rb < out.length; rb++) {
+        var tb = out[rb];
+        if (!tb || tb.hide || tb.blank || tb.kind === "repeat" || !tb.kana) continue;
+        if (tb.end === rp && tb.start < rp) {
+          repBase = tb;
+          break;
+        }
+      }
+      if (!repBase) continue;
+      var repKana = repeatReading(repBase.kana);
+      if (!repKana) continue;
+      out.push({ text: "\u3005", start: rp, end: rp + 1, kana: toKanaMode(repKana, kana), kind: "repeat" });
     }
     /*
      * 音译兜底：词典 + 逐字探测都给不出读音的汉字（表外字：霽 / 燦 / 鬱 这类），
@@ -915,6 +948,28 @@
 
   /** 词典读不出来、但歌词里会唱的符号 */
   var SYMBOL_READINGS = { "\u221E": "むげん", "\u3006": "しめ" };
+
+  /*
+   * 叠字符 々 的读音：前一个字的读音，按日语的连浊规律浊化第一个假名。
+   * 已经带浊音 / 半浊音的读音不再浊化（次々 つぎつぎ 不是 づぎづぎ）。
+   */
+  var REPEAT_DAKU = {
+    "か": "が", "き": "ぎ", "く": "ぐ", "け": "げ", "こ": "ご",
+    "さ": "ざ", "し": "じ", "す": "ず", "せ": "ぜ", "そ": "ぞ",
+    "た": "だ", "ち": "ぢ", "つ": "づ", "て": "で", "と": "ど",
+    "は": "ば", "ひ": "び", "ふ": "ぶ", "へ": "べ", "ほ": "ぼ"
+  };
+  var REPEAT_VOICED = "がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ";
+  function repeatReading(kana) {
+    var t = toHira(String(kana == null ? "" : kana));
+    if (!t) return "";
+    for (var i = 0; i < t.length; i++) {
+      if (REPEAT_VOICED.indexOf(t.charAt(i)) >= 0) return t;
+    }
+    var head = t.charAt(0);
+    var daku = REPEAT_DAKU[head];
+    return daku ? daku + t.slice(1) : t;
+  }
 
   /** 片假名 → 平假名（音译对齐全按平假名比） */
   function toHira(t) {

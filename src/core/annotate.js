@@ -737,24 +737,32 @@
      * `Hello` `world` 粘成一个词。
      */
     var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
+    var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
+    var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
 
     function karaokeTextOf(node) {
       var t = node && node.nodeValue ? node.nodeValue : "";
       if (!t || !/[\s\u3000]/.test(t)) return t;
-      var inWord = false;
+      var wordClass = null;
       for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
         var cn = typeof p.className === "string" ? p.className : "";
-        if (/(^|\s)rnp-karaoke-word(\s|$)/.test(cn)) {
-          inWord = true;
+        if (RE_KARAOKE_WORD.test(cn)) {
+          wordClass = cn;
           break;
         }
       }
-      if (!inWord) return t;
+      if (wordClass === null) return t;
       var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
       if (!core) return "";
+      /*
+       * RNP 给"一个字一格"的词格带 is-cjk：那一格后面的空格是排版用的，一律去掉。
+       * 光看字的种类不够 —— 括号（`（シメ）`）、符号（`〆`）不是汉字/假名，按老判据
+       * 空格会留在行文本里，括号读音的正则就匹配不上（真机现象：`〆（シメ）` 没合并）。
+       */
+      var cjkWord = RE_KARAOKE_CJK.test(wordClass);
       var out = t;
-      if (RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
-      if (RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
+      if (cjkWord || RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
+      if (cjkWord || RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
       return out;
     }
 
@@ -1203,6 +1211,18 @@
          * 这里必须让 any=true —— 否则整段会被判成"无译文"跳过，壳也插不进去。
          */
         if (tokens[i].blank) {
+          glosses.push(null);
+          sources.push(null);
+          any = true;
+          continue;
+        }
+        /*
+         * 作词者的括号读音（`舞台(セカイ)` 的括号那段）：整段要藏起来，不算"没词可注"。
+         * 逐字层一个字一个节点，括号会单独占几个节点（旁边没有别的词），
+         * 不在这里放行的话整个节点被判成"无译文"跳过 —— 括号就一直露着
+         * （真机现象：`〆（シメ）` 的括号没合并）。
+         */
+        if (tokens[i].hide) {
           glosses.push(null);
           sources.push(null);
           any = true;

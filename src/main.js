@@ -2639,6 +2639,14 @@
   function japaneseReadable(line) {
     if (typeof WKFurigana === "undefined" || !WKFurigana.tokens) return false;
     if (!WKFurigana.ready || !WKFurigana.ready()) return false;
+    /*
+     * 一个汉字都没有的行（纯数字 / 纯西文 / 只有符号）不算"日语读得出"。
+     * 下面那个循环要遍历行里的汉字段，一行没有汉字时一次都不进、直接 return true ——
+     * 于是中文歌里的 `120km` 被当成日语行，数字被注上 ひゃくにじゅう
+     * （用户报的「数字和物理单位都标上读音」）。数字 / 单位在中文行里就是原样，
+     * 不该拿日语数词去读。
+     */
+    if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(line)) return false;
     var toks = null;
     try {
       toks = WKFurigana.tokens(line);
@@ -2905,7 +2913,7 @@
    * 就地改读音存的是"在行文本里的第几个字"，所以要能把它换算回"看得见的第几个字"。
    * 两类写法都要认：vendor 的紧贴写法（含 ・ 和数字）和上面的宽松写法（中间有空格）。
    */
-  var RE_HIDE_PAREN = /([0-9\uFF10-\uFF19]*[\u4E00-\u9FFF\u3005]+)[ \t\u3000]*[（(][\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,20}[）)]/g;
+  var RE_HIDE_PAREN = /([0-9\uFF10-\uFF19]*[\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF]+)[ \t\u3000]*[（(][ \t\u3000]*[\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,20}[ \t\u3000]*[）)]/g;
   /** 行文本 -> 每个"看得见的字"在行文本里的下标（没有括号读音时返回 null） */
   function visibleIndexMap(line) {
     var hidden = [];
@@ -3140,8 +3148,14 @@
       var mine = [];
       for (var i = 0; i < whole.length; i++) {
         var tk = whole[i];
-        if (tk.start < offset || tk.start >= offset + s.length) continue; // 只认"起点落在这个节点里"的词
-        var localStart = tk.start - offset;
+        /*
+         * 逐字层一个字一个文本节点，而"藏起来的括号读音"是一整段（`（シメ）`）——
+         * 只认"起点落在这个节点里"的话，只有第一个括号会被藏，剩下几个字照旧露在屏幕上
+         * （真机现象：`〆（シメ）` 的括号一直没合并）。跨进来的隐藏段也要落到每个字上。
+         */
+        var cross = !!tk.hide && tk.start < offset && offset < tk.end;
+        if (!cross && (tk.start < offset || tk.start >= offset + s.length)) continue; // 只认"起点落在这个节点里"的词
+        var localStart = cross ? 0 : tk.start - offset;
         /*
          * 逐字层（RNP）每个字后面跟的那个空格是排版用的，行文本里已经去掉了 ——
          * 节点自己的文字里还留着，所以切片时要跳过它，底字别把空格圈进 ruby
@@ -3150,7 +3164,9 @@
         var lead = 0;
         while (lead < s.length && /[\s\u3000]/.test(s.charAt(lead))) lead++;
         localStart += lead;
-        var localEnd = Math.min(localStart + (tk.end - tk.start), s.length);
+        // 跨进来的隐藏段按它在 token 里的下标核对；正常起点落在这个节点的还是比第 0 个字
+        var tkAt = cross ? offset + localStart - tk.start : 0;
+        var localEnd = cross ? s.length : Math.min(localStart + (tk.end - tk.start), s.length);
         var piece = s.slice(localStart, localEnd);
         if (piece && /[\s\u3000]$/.test(piece) && !/[\s\u3000]$/.test(tk.text)) {
           piece = piece.replace(/[\s\u3000]+$/, "");
@@ -3162,7 +3178,7 @@
          * 节点偏移量在"注音完一遍之后"可能因为空文本节点/我们插的节点算歪一格，
          * 歪了就会把 帳 注成 帷 的读音（とばり）。对不上就宁可不注。
          */
-        if (piece.charAt(0) !== tk.text.charAt(0)) continue;
+        if (piece.charAt(0) !== tk.text.charAt(tkAt)) continue;
         mine.push({ text: piece, start: localStart, end: localEnd, kana: tk.kana, kind: tk.kind, hide: tk.hide });
       }
       return mine.length ? mine : null;
@@ -3415,23 +3431,30 @@
    * 是同一把键（就地改读音按它存），差一个空格就整行对不上。
    */
   var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
+  var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
+  var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
   function karaokeTextOf(node) {
     var t = node && node.nodeValue ? node.nodeValue : "";
     if (!t || !/[\s\u3000]/.test(t)) return t;
-    var inWord = false;
+    var wordClass = null;
     for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
       var cn = typeof p.className === "string" ? p.className : "";
-      if (/(^|\s)rnp-karaoke-word(\s|$)/.test(cn)) {
-        inWord = true;
+      if (RE_KARAOKE_WORD.test(cn)) {
+        wordClass = cn;
         break;
       }
     }
-    if (!inWord) return t;
+    if (wordClass === null) return t;
     var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
     if (!core) return "";
+    /*
+     * 和 core/annotate.js 的 karaokeTextOf 必须一字不差：两边的行文本是同一把键
+     * （就地改读音按它存），差一个空格整行就对不上。
+     */
+    var cjkWord = RE_KARAOKE_CJK.test(wordClass);
     var out = t;
-    if (RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
-    if (RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
+    if (cjkWord || RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
+    if (cjkWord || RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
     return out;
   }
 

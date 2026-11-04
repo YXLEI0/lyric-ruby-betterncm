@@ -338,6 +338,12 @@ test("振假名：叠字符 々 整词注（日々 ひび）、数字+汉字整�
   assert.deepStrictEqual(pairs("万回"), [["万回", "まんかい"]], "万回 まんかい（不是 いちまんかい）");
   assert.deepStrictEqual(pairs("一万回"), [["一万回", "いちまんかい"]], "一万回 不变");
   assert.deepStrictEqual(pairs("千切れる"), [["千切", "ちぎ"]], "千切れる ちぎれる");
+  /*
+   * 星々 在 IPADIC 里不是一个词（切成 星 + 々，々 的读音就是它自己），
+   * 以前 々 上面什么都没有（真机现象：`あの星々は` 只注了 星）。
+   * 现在 々 跟着前一个字读，并按连浊浊化：ほし → ぼし。
+   */
+  assert.deepStrictEqual(pairs("あの星々は"), [["星", "ほし"], ["々", "ぼし"]], "叠字符跟着前一个字读：" + JSON.stringify(pairs("あの星々は")));
 });
 
 test("词典读不出的汉字：用「字 + 送假名」探读音（掻 か）", async () => {
@@ -442,6 +448,20 @@ test("符号读音 / 括号读音带上左边的符号（∞回 なんかい、�
     "∞ 要跟 回 一起注：" + JSON.stringify(pairs("∞回(なんかい)オチても"))
   );
   assert.deepStrictEqual(pairs("∞回"), [["∞", "むげん"], ["回", "かい"]], "单独的 ∞ 也要有读音：" + JSON.stringify(pairs("∞回")));
+});
+
+test("括号读音：底字是符号 / 叠字符时也要合并（〆（シメ））", () => {
+  /*
+   * `〆（シメ）にまった` 的 〆 不是汉字（vendor 的 KANJI 表里没有它），
+   * 以前的括号正则只认汉字，括号那截一直露在屏幕上（真机现象：括号没合并）。
+   * 现在 〆 也算底字：读音取括号里的，括号那段藏起来。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ に: "ニ", まっ: "マッ", た: "タ" }));
+  const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+  assert.deepStrictEqual(pairs("〆（シメ）にまった"), [["〆", "しめ"], ["（シメ）", "HIDE"]], "全角括号：" + JSON.stringify(pairs("〆（シメ）にまった")));
+  assert.deepStrictEqual(pairs("〆(シメ)にまった"), [["〆", "しめ"], ["(シメ)", "HIDE"]], "半角括号：" + JSON.stringify(pairs("〆(シメ)にまった")));
 });
 
 test("留空压过模型 / 面板规则给的读音", () => {
