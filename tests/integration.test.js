@@ -7209,6 +7209,28 @@ test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
   assert.ok(chips().indexOf("さまよ") >= 0, "彷徨 候选要有 さまよ：" + JSON.stringify(chips()));
 });
 
+test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>征け</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 征: "セイ", け: "ケ" }));
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = p.querySelector("ruby.wk-ruby");
+  assert.ok(ruby, "征 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "ゆく")[0];
+  assert.ok(chip, "候选里要有 ゆく：" + JSON.stringify(Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent)));
+  chip.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs[0], ["征", "ゆ"], "征 = ゆ（不是 ゆく）：" + p.innerHTML);
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>

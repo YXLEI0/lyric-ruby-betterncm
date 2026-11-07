@@ -634,6 +634,12 @@ test("括号读音的底字按网站的范围取（假名 / 西文 / 符号都�
    */
   assert.deepStrictEqual(pairs("HEART(ココロ)"), [], "西文底字不认括号读音");
   assert.deepStrictEqual(pairs("More More（フップー）"), [], "括号里的喊话不当读音");
+  /*
+   * 括号里是拉丁串的也不是读音（真机：翻译行里的 `（Hz）` 被当成 良い 的读音，
+   * 注出个 "Hz" 来）。网站提供的拉丁读音（UtaTen 的 `口吻 = kiss`）走 external 那条路。
+   */
+  assert.deepStrictEqual(pairs("転んだって良い（Hz）"), [], "括号里的 Hz 不当读音");
+  assert.deepStrictEqual(pairs("口吻（kiss）をした"), [], "括号里的 kiss 也不当读音");
   assert.deepStrictEqual(
     pairs("イナイイナイ×点(ばってん)"),
     [["×点", "ばってん"], ["(ばってん)", "HIDE"]],
