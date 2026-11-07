@@ -250,6 +250,75 @@ test("振假名：数字 + 假名只注数字那一段（1つ ひとつ，つ �
   assert.deepStrictEqual(Array.from(hi, (t) => [t.text, t.kana]), [["10日", "とおか"]], "熟字训整词：" + JSON.stringify(hi));
 });
 
+test("振假名：绝对路径读不进去时，自动退到相对路径把词典读起来", async () => {
+  /*
+   * 真机现象：整页一个注音都没有，而控制台之外什么都看不到。
+   * 原因可以是 betterncm.fs 不接受 pluginPath 拼出来的绝对路径 —— 这时必须自己
+   * 再试 "vendor/dict"，并把成功的那条路径写进 status().path（面板上要显示）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.plugin = { pluginPath: "C:/nope/lyric-ruby" };
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        assert.ok(p.indexOf("C:/nope") < 0, "绝对路径这次读不到：" + p);
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    W.WKFurigana.load(() => resolve(true));
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("没有退到相对路径："));
+      }
+    }, 50);
+  });
+  const st = W.WKFurigana.status();
+  assert.ok(/vendor\/dict/.test(st.path), "记录真正读成功的路径：" + JSON.stringify(st));
+  const tokens = W.WKFurigana.tokens("東京の空");
+  assert.deepStrictEqual(
+    Array.from(tokens, (t) => [t.text, t.kana]),
+    [["東京", "とうきょう"], ["空", "そら"]]
+  );
+});
+
+test("振假名：全部路径都读不到时，status().error 里要带上试过的路径", async () => {
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.plugin = { pluginPath: "C:/nope/lyric-ruby" };
+  W.betterncm = {
+    fs: {
+      readFile() {
+        return Promise.reject(new Error("没有这个文件"));
+      },
+    },
+  };
+  await new Promise((resolve) => {
+    W.WKFurigana.load(function () {});
+    const timer = setInterval(() => {
+      const st = W.WKFurigana.status();
+      if (!st.loading && st.error) {
+        clearInterval(timer);
+        assert.ok(st.tried.length >= 2, "要把试过的路径都记下来：" + JSON.stringify(st));
+        resolve(true);
+      }
+    }, 50);
+  });
+  assert.ok(W.WKFurigana.status().error);
+});
+
 test("振假名：真的读出 IPADIC 的读音（kuromoji + vendor/dict）", async () => {
   const ctx = newWindow();
   const W = ctx.window;

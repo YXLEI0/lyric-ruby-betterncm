@@ -3851,8 +3851,17 @@
         if (piece.charAt(0) !== tk.text.charAt(tkAt)) continue;
         mine.push({ text: piece, start: localStart, end: localEnd, kana: tk.kana, kind: tk.kind, hide: tk.hide });
       }
-      return mine.length ? mine : null;
+      if (mine.length) return mine;
+      /* 整行一条都没落下来 -> 往下走"只按这个节点自己的文字"那条兜底 */
     }
+    /*
+     * 兜底：整行对齐一条都落不下来（偏移量对不上、逐字节点的 __wkOffset 算歪了）
+     * 时，至少按这个节点自己的文字注一次。
+     *
+     * 不加这一层的话，只要整行路径失败，这一行就**一个注音都没有**，而且因为
+     * "没有 token" 不算 skip，面板/控制台上完全看不出发生了什么（真机现象：
+     * 整页歌词干干净净）。单字读音可能不如整词准，但总比没有强。
+     */
     var out = WKFurigana.tokens(s, {
       kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
       fixes: fixes,
@@ -4272,6 +4281,8 @@
       if (state.observer) state.observer.takeRecords();
       state.lastPassMs = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - t0);
       state.lastPassAt = Date.now();
+      // 把"词典有没有读进来 / 这一首标上了几行"留一份在 localStorage 里
+      reportStatus();
     }
   }
 
@@ -4813,6 +4824,7 @@
        * 振假名写法、日文字体（含字体名）、字号，一样不少，只是不再占着主面板。
        */
       '<div class="wk-row"><label><input type="checkbox" data-k="enabled"> <b>启用注音</b></label></div>' +
+      '<div class="wk-row wk-hint"><span data-v="health"></span> <button data-a="dictRetry">重试词典</button></div>' +
       '<div class="wk-source">' +
       '<div class="wk-row"><b>读音来源</b> <select data-src>' +
       '<option value="dict">离线词典</option><option value="external">外部网站 · UtaTen</option>' +
@@ -5220,6 +5232,7 @@
       refreshUsage();
       refreshLearned();
       refreshExternalUI();
+      renderHealth();
     }
 
     /*
@@ -5238,6 +5251,7 @@
       refreshUsage();
       refreshLearned();
       refreshExternalUI();
+      renderHealth();
     }, 1000);
 
     var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides"];
@@ -5478,6 +5492,16 @@
             setTimeout(function () {
               b.textContent = "重置";
             }, 1500);
+          } else if (what === "dictRetry") {
+            if (typeof WKFurigana !== "undefined" && WKFurigana.retry) {
+              WKFurigana.retry();
+              b.textContent = "重试中…";
+              setTimeout(function () {
+                b.textContent = "重试词典";
+                renderHealth();
+                rescan();
+              }, 2500);
+            }
           } else if (what === "retry") {
             // 两层一起清：免费接口那些"查过、没有"的，和模型那些"问过但没收下"的
             var n = state.corrector ? state.corrector.retryMisses() : 0;
@@ -5593,8 +5617,71 @@
         // 面板被关掉过，下次 onConfig 会重建
         state.configRoot = null;
       }
+      renderHealth();
     } catch (e) {
       /* 面板只是显示用，不能因为它把插件搞崩 */
+    }
+  }
+
+  /**
+   * 面板上那行"体检结果"：词典有没有读进来、这一首到底标上了几行。
+   *
+   * 为什么要在界面上写这两句：注音一条都不出来时，原因几乎只可能是
+   * "词典没读进来"或"这一首一行都没扫到"，而这两种情况以前只在控制台里
+   * 能看到 —— 用户看到的就是"插件坏了"。写在这里，截图就能定位。
+   */
+  function healthText() {
+    var bits = [];
+    var f = typeof WKFurigana !== "undefined" && WKFurigana.status ? WKFurigana.status() : null;
+    if (!f) bits.push("振假名模块没注入");
+    else if (f.ready) bits.push("词典就绪");
+    else if (f.loading) bits.push("词典读取中…");
+    else if (f.error) bits.push("词典读取失败：" + f.error);
+    else bits.push("词典未开始加载");
+    var r = state.lastResult;
+    if (r) bits.push("本首：扫到 " + (r.scanned || 0) + " 行，标上 " + (r.changed || 0) + " 行");
+    if (r && f && !f.ready && r.scanned > 0 && !r.changed) bits.push("→ 词典没就绪，所以一个读音都没有");
+    return bits.join(" · ");
+  }
+
+  function renderHealth() {
+    try {
+      var el = document.querySelector('[data-v="health"]');
+      if (el) el.textContent = healthText();
+    } catch (e) {
+      /* 面板没开 */
+    }
+  }
+
+  /** 把体检结果写进 localStorage（真机没法开控制台时，靠它把现场带出来） */
+  var STATUS_KEY = "lyric-ruby.status.v1";
+  var lastStatusAt = 0;
+  function reportStatus() {
+    var now = Date.now();
+    if (lastStatusAt && now - lastStatusAt < 3000) return;
+    lastStatusAt = now;
+    try {
+      var f = typeof WKFurigana !== "undefined" && WKFurigana.status ? WKFurigana.status() : null;
+      var r = state.lastResult || null;
+      localStorage.setItem(
+        STATUS_KEY,
+        JSON.stringify({
+          at: now,
+          dict: f
+            ? { ready: f.ready, loading: f.loading, error: f.error, path: f.path || "", tried: f.tried || [] }
+            : null,
+          pass: r
+            ? {
+                scanned: r.scanned || 0,
+                changed: r.changed || 0,
+                skips: (r.skips || []).slice(0, 6),
+                errors: (r.errors || []).slice(0, 4),
+              }
+            : null,
+        })
+      );
+    } catch (e) {
+      /* localStorage 满了 / 不可用都不影响注音 */
     }
   }
 

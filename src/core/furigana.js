@@ -33,6 +33,8 @@
     error: null,
     loadedAt: 0,
     onReady: null,
+    dicPath: "",
+    tried: [],
   };
 
   // 行文本 -> 片段（kana 变体也分开缓存：面板切平/片假名不会读到旧的）
@@ -66,15 +68,45 @@
       error: state.error ? String(state.error.message || state.error) : null,
       cached: cache.size,
       loadedAt: state.loadedAt,
+      // 真正读成功的那条路径 / 这次试过的路径：真机排查"词典读不进来"就看它
+      path: state.dicPath || "",
+      tried: state.tried || [],
     };
   }
 
-  /** 插件目录里的 dict/（BetterNCM 会把包解到 pluginPath 下） */
-  function guessDicPath() {
-    if (injected.dicPath) return injected.dicPath;
-    // 打包后词典在 <插件目录>/vendor/dict 下（见 tools/build.js 的 vendorEntries）
-    if (typeof plugin !== "undefined" && plugin && plugin.pluginPath) return plugin.pluginPath + "/vendor/dict";
-    return "vendor/dict";
+  /**
+   * 词典目录的候选列表（按顺序试）。
+   *
+   * 为什么不是一个路径：真机上 `betterncm.fs` 对绝对路径 / 相对路径的解析方式
+   * 随版本变过（有的版本把相对路径解析到插件目录，有的只收绝对路径）。
+   * 以前只赌 `pluginPath + "/vendor/dict"`，一旦这个拼法不被接受，17 MB 词典就
+   * 永远读不进来 —— 表现是"一个注音都没有"，而且控制台之外看不到任何提示。
+   * 现在把常见的几种写法都试一遍，命中哪个记在 status().path 里。
+   */
+  function dicPaths() {
+    var out = [];
+    var push = function (p) {
+      p = String(p == null ? "" : p);
+      if (!p) return;
+      if (out.indexOf(p) < 0) out.push(p);
+    };
+    if (injected.dicPath) push(injected.dicPath);
+    var base = "";
+    try {
+      if (typeof plugin !== "undefined" && plugin && plugin.pluginPath) base = String(plugin.pluginPath);
+    } catch (e) {
+      base = "";
+    }
+    base = base.replace(/[\\/]+$/, "");
+    if (base) {
+      push(base + "/vendor/dict");
+      push(base + "/dict");
+    }
+    // 相对路径：BetterNCM 的 fs 有可能就是以插件目录为根的
+    push("vendor/dict");
+    push("./vendor/dict");
+    if (!out.length) push("vendor/dict");
+    return out;
   }
 
   /**
@@ -109,6 +141,9 @@
 
   /**
    * 异步加载词典。失败只记一笔（面板能看到），不影响其它注音功能。
+   *
+   * 依次试 dicPaths() 里的每个候选目录：某一个读不进来（路径拼法不被
+   * betterncm.fs 接受、文件缺失）就换下一个，全部失败才记错误。
    * @param {function} [onReady] 加载成功后的回调（上层用来重扫）
    */
   function load(onReady) {
@@ -121,40 +156,70 @@
     }
     state.loading = true;
     state.error = null;
+    var paths = dicPaths();
+    state.tried = paths.slice();
     installLoader();
-    var dicPath = guessDicPath();
-    try {
-      g.kuromoji.builder({ dicPath: dicPath }).build(function (err, tokenizer) {
+
+    var at = 0;
+    var lastErr = null;
+    function attempt() {
+      if (at >= paths.length) {
         state.loading = false;
-        if (err) {
-          state.error = err;
-          if (typeof console !== "undefined" && console.warn) console.warn("[歌词注音] 振假名词典加载失败：", err);
-          return;
+        state.error = lastErr || new Error("词典目录都读不到：" + paths.join(" / "));
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[歌词注音] 振假名词典加载失败：" + state.error.message);
         }
-        state.tokenizer = tokenizer;
-        state.loadedAt = Date.now();
-        cache.clear();
-        allReadingsCache.clear();
-        if (state.onReady) {
-          try {
-            state.onReady();
-          } catch (e) {
-            /* 上层重扫失败不该影响词典就绪 */
+        return;
+      }
+      var dicPath = paths[at++];
+      var done = false;
+      try {
+        g.kuromoji.builder({ dicPath: dicPath }).build(function (err, tokenizer) {
+          if (done) return;
+          done = true;
+          if (err || !tokenizer) {
+            lastErr = err || new Error("词典读取失败：" + dicPath);
+            attempt();
+            return;
           }
-        }
-      });
-    } catch (e) {
-      state.loading = false;
-      state.error = e;
+          state.loading = false;
+          state.error = null;
+          state.dicPath = dicPath;
+          state.tokenizer = tokenizer;
+          state.loadedAt = Date.now();
+          cache.clear();
+          allReadingsCache.clear();
+          if (state.onReady) {
+            try {
+              state.onReady();
+            } catch (e) {
+              /* 上层重扫失败不该影响词典就绪 */
+            }
+          }
+        });
+      } catch (e) {
+        lastErr = e;
+        attempt();
+      }
     }
+    attempt();
   }
 
-  /** 一分钟内只试一次自动加载（词典文件缺失时别每个文本节点都去敲磁盘） */
+  /** 手动重来一次（面板上的「重试」/ 词典检测到没就绪时用） */
+  function retry() {
+    if (state.loading) return false;
+    state.error = null;
+    lastAutoLoad = 0;
+    load();
+    return true;
+  }
+
+  /** 失败时 20 秒才重试一次（词典读不进来时别每个文本节点都去敲磁盘） */
   var lastAutoLoad = 0;
   function autoLoad(onReady) {
     if (ready() || state.loading) return;
     var now = Date.now();
-    if (lastAutoLoad && now - lastAutoLoad < 60000) return;
+    if (lastAutoLoad && now - lastAutoLoad < 20000) return;
     lastAutoLoad = now;
     load(onReady);
   }
@@ -1290,6 +1355,7 @@
   return {
     configure: configure,
     load: load,
+    retry: retry,
     autoLoad: autoLoad,
     ready: ready,
     status: status,
