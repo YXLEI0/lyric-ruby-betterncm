@@ -3277,8 +3277,104 @@
     return config.externalUtaten === true && config.externalConsent === true;
   }
 
-  /** 当前歌曲的歌名 / 歌手（播放栏；RNP 页面也共用这一条播放栏） */
+  /** 歌名附注（feat./cover/remix/翻唱）先清掉，搜索命中率高很多 */
+  function cleanExternalTitle(title) {
+    var s = String(title == null ? "" : title);
+    s = s.replace(/[\(（\[【][^\)）\]】]*(?:feat|ft|cover|remix|翻唱|カバー|アレンジ)[^\)）\]】]*[\)）\]】]/gi, "");
+    s = s.replace(/\s+(?:feat|ft)\.?\s+.*$/i, "");
+    s = s.replace(/\s*[-–—]\s*(?:cover|remix|翻唱|カバー).*$/i, "");
+    return s.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+  }
+
+  /** 从网易云的 Redux store 取当前曲目（class 名会变，store 结构不会） */
+  function looksLikeStore(o) {
+    return !!(o && typeof o === "object" && typeof o.getState === "function" && typeof o.dispatch === "function");
+  }
+  function storeIn(value, depth) {
+    if (!value || typeof value !== "object" || depth > 2) return null;
+    if (looksLikeStore(value)) return value;
+    if (looksLikeStore(value.store)) return value.store;
+    var keys = ["value", "_currentValue", "stores"];
+    for (var i = 0; i < keys.length; i++) {
+      var s = storeIn(value[keys[i]], depth + 1);
+      if (s) return s;
+    }
+    return null;
+  }
+  var externalStoreCache = null;
+  function findReduxStore() {
+    if (externalStoreCache) return externalStoreCache;
+    try {
+      var sels = ["#root", "#portal_root", "body"];
+      for (var i = 0; i < sels.length; i++) {
+        var el = document.querySelector(sels[i]);
+        if (!el) continue;
+        var key = null;
+        var keys = Object.keys(el);
+        for (var k = 0; k < keys.length; k++) {
+          if (keys[k].indexOf("__reactContainer$") === 0 || keys[k].indexOf("__reactFiber$") === 0) {
+            key = keys[k];
+            break;
+          }
+        }
+        var fiber = key ? el[key] : null;
+        if (!fiber && el._reactRootContainer && el._reactRootContainer._internalRoot) fiber = el._reactRootContainer._internalRoot.current;
+        if (!fiber) continue;
+        var queue = [fiber];
+        var seen = [];
+        var budget = 20000;
+        var head = 0;
+        while (head < queue.length && budget-- > 0) {
+          var f = queue[head++];
+          if (!f || seen.indexOf(f) >= 0) continue;
+          seen.push(f);
+          var st = storeIn(f.memoizedProps, 0) || storeIn(f.memoizedState, 0);
+          if (st) {
+            externalStoreCache = st;
+            return st;
+          }
+          if (f.child) queue.push(f.child);
+          if (f.sibling) queue.push(f.sibling);
+        }
+      }
+    } catch (e) {
+      /* 老版本没有 React fiber，退回 DOM / 详情接口 */
+    }
+    return null;
+  }
+
+  /** 当前歌曲：曲目 id + 歌名 + 歌手（store / 测试替身 / 播放栏 / 页面标题） */
   function externalIdentity() {
+    var override = typeof window !== "undefined" ? window.__WK_TRACK__ : null;
+    if (override && (override.id || override.title)) {
+      return {
+        id: override.id ? String(override.id) : "",
+        title: String(override.title || ""),
+        artists: override.artists || (override.artist ? [override.artist] : []),
+      };
+    }
+    try {
+      var store = findReduxStore();
+      if (store) {
+        var root = store.getState();
+        var p = root && root.playing;
+        if (p) {
+          var id = p.resourceTrackId || p.trackId || (p.playingTrack && (p.playingTrack.id || p.playingTrack.trackId));
+          var list = [p.curTrack, p.playingTrack, p.track, p.resourceTrack];
+          for (var i = 0; i < list.length; i++) {
+            var t = list[i];
+            if (!t || !t.name || String(t.id || t.trackId) !== String(id)) continue;
+            var artists = [];
+            var src = t.ar || t.artists || [];
+            for (var j = 0; j < src.length; j++) if (src[j] && src[j].name) artists.push(src[j].name);
+            return { id: id ? String(id) : "", title: String(t.name), artists: artists };
+          }
+          if (id) return { id: String(id), title: "", artists: [] };
+        }
+      }
+    } catch (eStore) {
+      externalStoreCache = null;
+    }
     var title = "";
     var artist = "";
     try {
@@ -3291,8 +3387,8 @@
     }
     if (!title) {
       try {
-        var t = String(document.title || "").replace(/\s*[-–—]\s*网易云音乐.*$/, "");
-        var parts = t.split(/\s+[-–—]\s+/);
+        var t2 = String(document.title || "").replace(/\s*[-–—]\s*网易云音乐.*$/, "");
+        var parts = t2.split(/\s+[-–—]\s+/);
         if (parts.length >= 2) {
           title = parts[0];
           if (!artist) artist = parts[1];
@@ -3301,11 +3397,12 @@
         title = "";
       }
     }
-    return { title: title, artist: artist };
+    return { id: "", title: title, artists: artist ? [artist] : [] };
   }
 
   function externalKeyOf(id) {
-    return String(id.title || "") + "\u0000" + String(id.artist || "");
+    if (id.id) return "id:" + String(id.id);
+    return String(id.title || "") + "\u0000" + (id.artists || []).join("/");
   }
 
   function externalCacheAll() {
@@ -3454,16 +3551,96 @@
     });
   }
 
-  function loadExternalSong(key, title, artist) {
+  /** 歌曲详情接口：store 里没带歌名时兜底 */
+  function fetchTrackInfo(id) {
+    var url =
+      "https://music.163.com/api/song/detail/?id=" + encodeURIComponent(id) + "&ids=" + encodeURIComponent("[" + id + "]");
+    return fetch(url, { credentials: "omit" }).then(
+      function (r) {
+        if (!r.ok) throw new Error("歌曲信息 HTTP " + r.status);
+        return r.json();
+      }
+    ).then(function (data) {
+      var songs = (data && data.songs) || [];
+      for (var i = 0; i < songs.length; i++) {
+        if (String(songs[i].id) !== String(id)) continue;
+        var s = songs[i];
+        var artists = [];
+        var list = s.ar || s.artists || [];
+        for (var j = 0; j < list.length; j++) if (list[j] && list[j].name) artists.push(list[j].name);
+        return { title: s.name || "", artists: artists };
+      }
+      throw new Error("歌曲详情里没有这一首");
+    });
+  }
+
+  function externalSearchOnce(url, title, artists) {
+    return fetchExternalHtml(url)
+      .then(function (html) {
+        return WKExternal.parseSearch(html);
+      })
+      .then(function (candidates) {
+        for (var i = 0; i < artists.length; i++) {
+          var hit = WKExternal.pick(candidates, title, artists[i]);
+          if (hit) return hit;
+        }
+        // 只按歌名搜：同名结果唯一才收，避免套错版本
+        var same = [];
+        for (var j = 0; j < candidates.length; j++) {
+          if (WKExternal.keyOf(candidates[j].title) === WKExternal.keyOf(title)) same.push(candidates[j]);
+        }
+        return same.length === 1 ? same[0] : null;
+      });
+  }
+
+  function tryExternalSearch(urls, at, title, artists) {
+    if (at >= urls.length) return Promise.reject(new Error("UtaTen 没找到匹配的歌曲"));
+    return externalSearchOnce(urls[at], title, artists).then(function (hit) {
+      if (!hit) return tryExternalSearch(urls, at + 1, title, artists);
+      return fetchExternalHtml(hit.url).then(function (html) {
+        return WKExternal.parseLyric(html, hit.url);
+      });
+    });
+  }
+
+  function loadExternalSong(key, id, title, artists) {
     if (externalState.loading || typeof WKExternal === "undefined") return;
+    // store 只给了曲目 id：先查详情拿歌名 / 歌手
+    if (!title && id) {
+      externalState.loading = true;
+      externalState.key = key;
+      externalState.status = "正在获取歌曲信息…";
+      refreshExternalUI();
+      fetchTrackInfo(id).then(
+        function (meta) {
+          externalState.loading = false;
+          loadExternalSong(key, id, meta.title, meta.artists);
+        },
+        function (err) {
+          externalState.loading = false;
+          externalState.status = "歌曲信息获取失败：" + String((err && err.message) || err);
+          refreshExternalUI();
+        }
+      );
+      return;
+    }
     var manualMap = config.externalManualUrls && typeof config.externalManualUrls === "object" ? config.externalManualUrls : {};
     var manual = String(manualMap[key] || "");
     if (manual && !WKExternal.allowedURL(manual)) manual = "";
-    var searchUrl = manual ? "" : WKExternal.searchURL(title, artist);
-    if (!manual && !searchUrl) {
-      externalState.status = "没有可搜索的歌名";
-      refreshExternalUI();
-      return;
+    var clean = cleanExternalTitle(title);
+    var urls = [];
+    if (!manual) {
+      if (!clean) {
+        externalState.status = "没有可搜索的歌名";
+        refreshExternalUI();
+        return;
+      }
+      for (var i = 0; i < artists.length; i++) {
+        var u = WKExternal.searchURL(clean, artists[i]);
+        if (u && urls.indexOf(u) < 0) urls.push(u);
+      }
+      var titleOnly = WKExternal.searchURL(clean, "");
+      if (titleOnly && urls.indexOf(titleOnly) < 0) urls.push(titleOnly);
     }
     externalState.loading = true;
     externalState.key = key;
@@ -3475,17 +3652,7 @@
         return WKExternal.parseLyric(html, manual);
       });
     } else {
-      job = fetchExternalHtml(searchUrl)
-        .then(function (html) {
-          return WKExternal.parseSearch(html);
-        })
-        .then(function (candidates) {
-          var hit = WKExternal.pick(candidates, title, artist);
-          if (!hit) throw new Error("UtaTen 没找到匹配的歌曲");
-          return fetchExternalHtml(hit.url).then(function (html) {
-            return WKExternal.parseLyric(html, hit.url);
-          });
-        });
+      job = tryExternalSearch(urls, 0, clean, artists);
     }
     job.then(
       function (rec) {
@@ -3494,7 +3661,7 @@
         all[key] = {
           at: Date.now(),
           title: rec.title || title,
-          artists: rec.artists || [],
+          artists: rec.artists || artists,
           url: rec.url || manual || "",
           lines: rec.lines || [],
         };
@@ -3520,8 +3687,8 @@
       return;
     }
     var id = externalIdentity();
-    if (!id.title) {
-      externalState.status = "没拿到歌名，跳过外部网站";
+    if (!id.id && !id.title) {
+      externalState.status = "等待播放歌曲…";
       refreshExternalUI();
       return;
     }
@@ -3540,7 +3707,7 @@
     if (rec) {
       if (applyExternalRecord(rec, key, "本地缓存")) return;
     }
-    loadExternalSong(key, id.title, id.artist);
+    loadExternalSong(key, id.id, id.title, id.artists || []);
   }
 
   /** 外部网站这一行匹配到的读音 token（对不上返回 null） */
@@ -4680,13 +4847,6 @@
       '<div class="wk-row"><label>日文字体 <input type="text" data-k="jpnFontFamily"></label> ' +
       '<button data-a="fontReset">重置</button> <span data-v="fontReset"></span></div>' +
       '<div class="wk-hint">填字体名（逗号分隔多个），只对日语歌生效；清空 = 用默认</div>' +
-      "<h3>自定义读音</h3>" +
-      '<div class="wk-row"><label>一行一条 <code>原句片段 =&gt; 词=读音</code>（按句生效，同一个词换个句子可以填不同的）<br>' +
-      '<textarea data-k="furiganaOverrides" rows="5" spellcheck="false" ' +
-      'placeholder="明日も君と歩く => 明日=あした\n解けない方程式 => 解=と"></textarea></label></div>' +
-      '<div class="wk-row"><button data-a="ovClear">清空</button> <span data-v="ovState"></span></div>' +
-      '<div class="wk-hint">只对日语歌词的振假名生效；命中的词整条替换，优先级高于词典和分词。<br>' +
-      '平假名 / 片假名写法都可以，会跟着面板上的「振假名写法」自动转换</div>' +
       "<h3>范围</h3>" +
       '<div class="wk-row"><label>标注范围 <select data-k="scope">' +
       '<option value="all">歌词 + 播放栏 (默认)</option>' +
@@ -5318,15 +5478,6 @@
             setTimeout(function () {
               b.textContent = "重置";
             }, 1500);
-          } else if (what === "ovClear") {
-            config.furiganaOverrides = "";
-            var ta = root.querySelector('[data-k="furiganaOverrides"]');
-            if (ta) ta.value = "";
-            saveConfig();
-            if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
-            var st = root.querySelector('[data-v="ovState"]');
-            if (st) st.textContent = "已清空";
-            rescan();
           } else if (what === "retry") {
             // 两层一起清：免费接口那些"查过、没有"的，和模型那些"问过但没收下"的
             var n = state.corrector ? state.corrector.retryMisses() : 0;

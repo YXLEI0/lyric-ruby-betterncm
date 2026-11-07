@@ -4051,13 +4051,6 @@ test("面板里填了按句的读音修正：只有那一行变，别的行照�
   assert.strictEqual(read(ps[0])[0][1], "あした", "这一行按修正读：" + ps[0].innerHTML);
   // 另一行没命中范围：用词典读音（明日 词典给 あした，所以这里换个词更能说明问题）
   assert.ok(read(ps[1]).length >= 1, "另一行照旧要注音：" + ps[1].innerHTML);
-
-  // 面板里能看到、能清空
-  const root = env.listeners.config[0]();
-  const ta = root.querySelector('[data-k="furiganaOverrides"]');
-  assert.ok(ta, "面板里要有自定义读音输入框");
-  assert.ok(ta.value.indexOf("明日も抱きしめて") >= 0, "要显示当前内容：" + ta.value);
-  assert.ok(root.querySelector('[data-a="ovClear"]'), "要有清空按钮");
 });
 
 test("日语歌词换日文字体：只写在原文行的内联样式上", async () => {
@@ -5114,7 +5107,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["外观", "自定义读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });
