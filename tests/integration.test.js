@@ -6899,6 +6899,67 @@ test("外部网站：读音一样、只是切得更细的一方胜（网站 `太
   assert.deepStrictEqual(pairs, [["太", "たい"], ["陽", "よう"]], "细的那一方胜：" + p.innerHTML);
 });
 
+test("外部网站：客户端只切了网站一行的中间一段、网站用舊字體时也要对上", () => {
+  /*
+   * 真机两种对不上：
+   *   ① 网站一行是 `惹かれ 逢って 存在 綴る セカイ 共鳴らせたなら`，客户端只有后半截
+   *      `綴る セカイ 共鳴らせたなら` —— 以前只认"客户端是网站行的开头"，整行放弃，
+   *      共 被词典读成 きょう（网站标的是 共鳴 = な）；
+   *   ② 网站写 `警鐘亂打`、客户端写 `警鐘乱打` —— 舊字體差一个字，整行也对不上。
+   * 现在：折新旧字形（VARIANT_CHARS）+ 允许"这一段在网站行的中间"。
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const X = ctx.window.WKExternal;
+  const rec = {
+    provider: "utaten",
+    lines: [
+      {
+        text: "惹かれ 逢って 存在 綴る セカイ 共鳴らせたなら",
+        segments: [
+          { text: "惹", rt: "ひ" },
+          { text: "かれ " },
+          { text: "逢", rt: "あ" },
+          { text: "って " },
+          { text: "存在", rt: "そんざい" },
+          { text: " " },
+          { text: "綴", rt: "つづ" },
+          { text: "る セカイ " },
+          { text: "共鳴", rt: "な" },
+          { text: "らせたなら" },
+        ],
+      },
+      {
+        text: "午前一時、警鐘亂打に起こす瞼。",
+        segments: [
+          { text: "午前一時" },
+          { text: "、" },
+          { text: "警鐘亂打", rt: "けいしょうらんだ" },
+          { text: "に" },
+          { text: "起", rt: "お" },
+          { text: "こす" },
+          { text: "瞼", rt: "まぶた" },
+          { text: "。" },
+        ],
+      },
+    ],
+  };
+  const idx = X.buildIndex(rec);
+  assert.strictEqual(
+    JSON.stringify(X.tokensFor("綴る セカイ 共鳴らせたなら", idx)),
+    JSON.stringify([{ text: "綴", start: 0, end: 1, kana: "つづ" }, { text: "共鳴", start: 7, end: 9, kana: "な" }]),
+    "中间那一段也要对上：" + JSON.stringify(X.tokensFor("綴る セカイ 共鳴らせたなら", idx))
+  );
+  assert.strictEqual(
+    JSON.stringify(X.tokensFor("午前一時、警鐘乱打に起こす瞼。", idx)),
+    JSON.stringify([
+      { text: "警鐘乱打", start: 5, end: 9, kana: "けいしょうらんだ" },
+      { text: "起", start: 10, end: 11, kana: "お" },
+      { text: "瞼", start: 13, end: 14, kana: "まぶた" },
+    ]),
+    "舊字體折成常用字再比：" + JSON.stringify(X.tokensFor("午前一時、警鐘乱打に起こす瞼。", idx))
+  );
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>

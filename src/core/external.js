@@ -305,7 +305,28 @@
         joined += next.text;
       }
     }
-    return { entries: entries, count: count, provider: provider };
+    /*
+     * 再做两份"归一化"索引（新旧字形折过、去空白）：
+     *   canonMap  —— 折过的整行文本 -> 条目（完全一致那一档）
+     *   canonList —— 数组，用来找"客户端这行是网站那一行的中间一段"
+     * 都只收有读音片段（segs）的条目：Uta-net 那种只有罗马音的走另一条路。
+     */
+    var canonMap = {};
+    var canonList = [];
+    for (var t in entries) {
+      if (!Object.prototype.hasOwnProperty.call(entries, t)) continue;
+      var e = entries[t];
+      if (!e || !e.segs || !e.segs.length) continue;
+      var key = canon(t);
+      if (Object.prototype.hasOwnProperty.call(canonMap, key)) {
+        var prev = canonMap[key];
+        if (!prev || JSON.stringify(prev.segs) !== JSON.stringify(e.segs)) canonMap[key] = null;
+      } else {
+        canonMap[key] = e;
+      }
+      canonList.push({ key: key, segs: e.segs });
+    }
+    return { entries: entries, count: count, provider: provider, canonMap: canonMap, canonList: canonList };
   }
 
   /** 一行网站歌词 -> 去空白文本 + 读音片段（对不上返回 null） */
@@ -361,29 +382,38 @@
   /**
    * 把当前歌词行对到网站上那一行，返回 { segs, map }。
    *
-   * 两种写法差异要认：
-   *   ① 括号读音（`MY HEART(マイココロ)`）是客户端才有的 —— 对齐时连括号一起去掉，
-   *      否则整行永远对不上（网站明明标了 HEART = こころ，插件却按词典读 ハート）；
-   *   ② 客户端常把网站的一行切成两行（网站 `ギコギコ MY HEART 剪定`、客户端
-   *      只有 `ギコギコ MY HEART`）—— 当前行是网站行的**开头**时，取它落在本行里的那几段。
+   * 三种写法差异都要认：
+   *   ① 括号读音（`MY HEART(マイココロ)`）是客户端才有的 —— 对齐时连括号一起去掉；
+   *   ② 客户端只切了网站那一行的**一段**：网站 `惹かれ 逢って 存在 綴る セカイ 共鳴らせたなら`、
+   *      客户端只有 `綴る セカイ 共鳴らせたなら`（后面 / 中间那截都算）——
+   *      取落在本行里的那几段；
+   *   ③ 新旧字形：网站写 `警鐘亂打`、客户端写 `警鐘乱打` —— 折成同一个字再比。
    *      几个候选给出的读音必须完全一致，不一致就宁可不套（副歌重复、写法差异）。
    */
   function matchEntry(lineText, index) {
     if (!index || !index.entries) return null;
     var c = stripInlineBrackets(lineText);
     if (!c.text) return null;
-    var exact = index.entries[c.text];
+    var key = canon(c.text);
+    // ① 完全一样（字形差异已经折过）
+    var exact = index.canonMap && index.canonMap[key];
     if (exact && exact.segs && exact.segs.length) return { segs: exact.segs, map: c.map };
+    if (key.length < 3) return null; // 太短的行（标点 / 语气词）套上去只会套错
+    /*
+     * ② 这一段在网站某一行的中间：把那一行的读音片段整体平移过来，只留落在本行里的。
+     */
+    var list = index.canonList || [];
     var hit = null;
-    for (var t in index.entries) {
-      if (!Object.prototype.hasOwnProperty.call(index.entries, t)) continue;
-      if (t.length <= c.text.length || t.indexOf(c.text) !== 0) continue;
-      var e = index.entries[t];
-      if (!e || !e.segs) continue;
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      var at = e.key.indexOf(key);
+      if (at < 0) continue;
       var segs = [];
-      for (var i = 0; i < e.segs.length; i++) {
-        if (e.segs[i].from >= c.text.length) break;
-        segs.push({ from: e.segs[i].from, to: Math.min(e.segs[i].to, c.text.length), rt: e.segs[i].rt });
+      for (var j = 0; j < e.segs.length; j++) {
+        var from = e.segs[j].from - at;
+        var to = e.segs[j].to - at;
+        if (to <= 0 || from >= key.length) continue;
+        segs.push({ from: Math.max(0, from), to: Math.min(key.length, to), rt: e.segs[j].rt });
       }
       if (!segs.length) continue;
       var stamp = JSON.stringify(segs);
@@ -391,6 +421,28 @@
       else if (hit.stamp !== stamp) return null; // 几个候选读音不一样，别猜
     }
     return hit ? { segs: hit.segs, map: hit.map } : null;
+  }
+
+  /**
+   * 新旧字形折叠：网站常用舊字體（亂 / 體 / 學…），客户端是常用漢字。
+   * 一对一替换，长度不变 —— 下标可以直接沿用。
+   */
+  var VARIANT_CHARS = {
+    亂: "乱", 體: "体", 學: "学", 樂: "楽", 氣: "気", 燈: "灯", 戰: "戦", 劍: "剣",
+    歲: "歳", 齒: "歯", 櫻: "桜", 龍: "竜", 藝: "芸", 廣: "広", 邊: "辺", 變: "変",
+    滿: "満", 靜: "静", 德: "徳", 關: "関", 驛: "駅", 鹽: "塩", 歐: "欧", 彈: "弾",
+    擴: "拡", 隱: "隠", 濕: "湿", 燒: "焼", 說: "説", 讀: "読", 實: "実", 對: "対",
+    當: "当", 爭: "争", 緣: "縁", 譽: "誉", 譯: "訳", 綠: "緑", 雙: "双", 雜: "雑",
+    黃: "黄", 黑: "黒", 點: "点", 麵: "麺", 戶: "戸", 亞: "亜",
+  };
+  function canon(s) {
+    var t = str(s);
+    var out = "";
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      out += Object.prototype.hasOwnProperty.call(VARIANT_CHARS, ch) ? VARIANT_CHARS[ch] : ch;
+    }
+    return out;
   }
 
   /** 去掉括号读音（`(かな)`）和空白后的匹配文本 + 每个字在原文里的下标 */
