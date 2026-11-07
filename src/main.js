@@ -4651,15 +4651,27 @@
       var mine = [];
       for (var i = 0; i < whole.length; i++) {
         var tk = whole[i];
-        var a = Math.max(tk.start, nodeStart);
-        var b = Math.min(tk.end, groupEnd);
+        /*
+         * 起点兜底：整行文字和这一轮 DOM 算出来的偏移偶尔会差一两格（重复词
+         * `ずっとずっと`、别人插了节点、RNP 重排）。差一点就用附近能找到的位置，
+         * 对不上才放弃 —— 不然读音会整体贴到隔壁字上（真机：`星` 头上的 すたー
+         * 跑到 `と` 和 `消` 之间）。
+         */
+        var tkFrom = tk.start;
+        if (line.charAt(tkFrom) !== tk.text.charAt(0)) {
+          var near = line.indexOf(tk.text, Math.max(0, tkFrom - 4));
+          if (near >= 0 && Math.abs(near - tkFrom) <= 4) tkFrom = near;
+        }
+        var tkTo = tkFrom + (tk.end - tk.start);
+        var a = Math.max(tkFrom, nodeStart);
+        var b = Math.min(tkTo, groupEnd);
         if (b <= a) continue; // 不在这一组里
         /*
          * 对齐校验：这一段文字必须和词里对应位置的文字一模一样。
          * 节点偏移量在"注音完一遍之后"可能因为空文本节点/我们插的节点算歪一格，
          * 歪了就会把 帳 注成 帷 的读音（とばり）。对不上就宁可不注。
          */
-        if (s.charAt(a - offset) !== tk.text.charAt(a - tk.start)) continue;
+        if (s.charAt(a - offset) !== tk.text.charAt(a - tkFrom)) continue;
         /*
          * 词的底字取整段（可能比这一格长）：这一格是第一格时，把整个词都写在这里，
          * 组里后面几格会被 absorb 清空。
