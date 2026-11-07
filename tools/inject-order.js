@@ -22,6 +22,7 @@ const WANT_ORDER = [
   "core/hangul.js",
   "core/cjk.js",
   "core/cn-line.js",
+  "core/external.js",
   "core/numbers.js",
   "core/furigana.js",
   "core/reading.js",

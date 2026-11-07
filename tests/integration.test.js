@@ -5164,6 +5164,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="annotateAll"]',
     '[data-k="annotateNonJapanese"]',
     '[data-k="online"]',
+    '[data-k="externalUtaten"]',
     '[data-k="colorBySource"]',
     '[data-a="learnClear"]',
     ".wk-layers",
@@ -5179,7 +5180,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["外观", "自定义读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "自定义读音", "外部网站读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });
@@ -5643,6 +5644,270 @@ test("候选按后面的语法过滤：良い 才给 い，良かった / 皆さ
   dbl(rubies()[3]); // 皆で
   await sleep(50);
   assert.deepStrictEqual(chips().map((b) => b.textContent), ["みな", "みんな"], "皆で 两个都给");
+});
+
+test("单字多读法：歌 うた/か、詩 し/うた、花 はな/か 也能给候选", async () => {
+  /*
+   * 这些单字的另一种读法在 IPADIC 里可能是「接尾」（歌 か、星 ぼし）或者根本没有
+   * （詩 うた），以前候选里没有。现在单字的接尾读音也收，词典缺的手写补一行。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>歌詩花の</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 歌: "ウタ", 詩: "シ", 花: "ハナ", の: "ノ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
+  assert.deepStrictEqual(
+    rubies().map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]),
+    [["歌", "うた"], ["詩", "し"], ["花", "はな"]],
+    "初始：" + p.innerHTML
+  );
+
+  dbl(rubies()[0]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["うた", "か"], "歌 的候选");
+  dbl(rubies()[1]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["し", "うた"], "詩 的候选");
+  mdown(chips().filter((b) => b.textContent === "うた")[0]);
+  await sleep(400);
+  assert.strictEqual(rubies()[1].querySelector(".wk-rt").textContent, "うた", "詩 = うた：" + p.innerHTML);
+  dbl(rubies()[2]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["はな", "か"], "花 的候选");
+});
+
+test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、微笑 びしょう/ほほえみ）", async () => {
+  /*
+   * 背負 在词典里只有 せおい 一条（背負う / 背負った 的 せお / しょ 拿不到）；
+   * 微笑 名词只有 びしょう（ほほえみ 在 微笑み 那条里）。都补进候选；
+   * 微笑む / 微笑ましい 这种动词活用不给「ほほえみ」（会注成 ほほえみむ）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>背負う微笑灯す寂しい道標</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 背負: "セオ", う: "ウ", 微笑: "ビショウ", 灯: "トモ", す: "ス", 寂しい: "サビシイ", 道標: "ミチシルベ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
+  assert.deepStrictEqual(
+    rubies().map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]),
+    [["背負", "せお"], ["微笑", "びしょう"], ["灯", "とも"], ["寂", "さび"], ["道標", "みちしるべ"]],
+    "初始：" + p.innerHTML
+  );
+
+  dbl(rubies()[0]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["せお", "しょ", "せおい", "しょい"], "背負 的候选");
+  dbl(rubies()[1]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["びしょう", "ほほえみ"], "微笑 的候选");
+  mdown(chips().filter((b) => b.textContent === "ほほえみ")[0]);
+  await sleep(400);
+  assert.strictEqual(rubies()[1].querySelector(".wk-rt").textContent, "ほほえみ", "微笑 = ほほえみ：" + p.innerHTML);
+
+  // 灯す / 灯る 这种活用形：按钮给的是「灯」这个字的所有读法，不只是 灯す 那一条
+  dbl(rubies()[2]);
+  await sleep(50);
+  assert.deepStrictEqual(
+    chips().map((b) => b.textContent),
+    ["あかり", "ひ", "とう", "とぼし", "あかし", "ともし", "とも"],
+    "灯 的候选：" + env.document.querySelector(".wk-edit-box").innerHTML
+  );
+
+  // 寂しい：さびしい / さみしい
+  dbl(rubies()[3]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["さびしい", "さみしい"], "寂しい 的候选");
+  mdown(chips().filter((b) => b.textContent === "さみしい")[0]);
+  await sleep(400);
+  assert.strictEqual(rubies()[3].querySelector(".wk-rt").textContent, "さみ", "寂しい = さみしい：" + p.innerHTML);
+
+  // 道標：みちしるべ / どうひょう
+  dbl(rubies()[4]);
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["みちしるべ", "どうひょう"], "道標 的候选");
+});
+
+test("数字也有候选：4 よん/し、7 なな/しち、四 し/よん、七 しち/なな", async () => {
+  /*
+   * 数字的读法也不止一种：4 よん/し、7 なな/しち、9 きゅう/く；汉字数字同理。
+   * 阿拉伯数字走 core/numbers.js（WKNumbers），汉字数字走词典，双击都给候选。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>4と7と四と七の</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ と: "ト", の: "ノ", 四: "シ", 七: "シチ" }));
+  await env.runLoad();
+  await sleep(400);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const byWord = (w) => rubies().filter((r) => (r.childNodes[0].nodeValue || "").trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
+  assert.deepStrictEqual(
+    rubies().map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]),
+    [["4", "よん"], ["7", "なな"], ["四", "し"], ["七", "しち"]],
+    "初始：" + p.innerHTML
+  );
+
+  dbl(byWord("4"));
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["よん", "し"], "4 的候选");
+  mdown(chips().filter((b) => b.textContent === "し")[0]);
+  await sleep(400);
+  assert.strictEqual(byWord("4").querySelector(".wk-rt").textContent, "し", "4 = し：" + p.innerHTML);
+
+  dbl(byWord("7"));
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["なな", "しち"], "7 的候选");
+  dbl(byWord("四"));
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["し", "よん"], "四 的候选");
+  dbl(byWord("七"));
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["しち", "なな"], "七 的候选");
+});
+
+test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不上的行回退词典", async () => {
+  /*
+   * 外部网站默认关；打开并同意条款后按歌名 / 歌手查 UtaTen，命中行的振假名压过
+   * 词典（泥水 どろみず → でいすい），对不上的行照旧用词典。
+   * 这里不联网：直接塞一条缓存记录，验解析 / 对齐 / 应用这三步。
+   */
+  const SEARCH_HTML = `<!doctype html><html><body><table><tr>
+    <td class="searchResult__title"><a href="/lyric/abc/"><span class="songlist-title">External Song</span></a></td>
+    <td class="searchResult__artist"><p><a href="/artist/1/">Artist</a></p></td>
+  </tr></table></body></html>`;
+  const LYRIC_HTML = `<!doctype html><html><body>
+    <h3><a href="/artist/1/">Artist</a></h3>
+    <div class="newLyricTitle__main">External Song<span>（読み）</span></div>
+    <div class="lyricBody"><div class="hiragana">
+      <span class="ruby"><span class="rb">泥水</span><span class="rt">でいすい</span></span>の夜<br>
+      <span class="ruby"><span class="rb">風</span><span class="rt">かぜ</span></span>の歌<br>
+    </div></div>
+  </body></html>`;
+
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">External Song</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>泥水の夜</p></li>
+  <li class="line"><p>知らない街</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル", 知: "シ", 街: "マチ" }));
+  // 缓存键 = 歌名 + "\0" + 歌手
+  env.window.localStorage.setItem(
+    "lyric-ruby.external.v1",
+    JSON.stringify({
+      "External Song\u0000Artist": {
+        at: Date.now(),
+        title: "External Song",
+        artists: ["Artist"],
+        url: "https://utaten.com/lyric/abc/",
+        lines: [
+          { text: "泥水の夜", segments: [{ text: "泥水", rt: "でいすい" }, { text: "の夜" }] },
+          { text: "風の歌", segments: [{ text: "風", rt: "かぜ" }, { text: "の歌" }] },
+        ],
+      },
+    })
+  );
+  await env.runLoad();
+  await sleep(600);
+
+  const X = env.window.WKExternal;
+  assert.ok(X, "WKExternal 要注入");
+  const cands = X.parseSearch(SEARCH_HTML);
+  assert.strictEqual(
+    JSON.stringify(cands),
+    JSON.stringify([{ title: "External Song", artists: ["Artist"], url: "https://utaten.com/lyric/abc/" }]),
+    "搜索结果：" + JSON.stringify(cands)
+  );
+  assert.ok(X.pick(cands, "External Song", "Artist"), "歌名 / 歌手对得上要能选中");
+  assert.strictEqual(X.pick(cands, "Other Song", "Artist"), null, "歌名不对不许套");
+
+  const rec = X.parseLyric(LYRIC_HTML, "https://utaten.com/lyric/abc/");
+  assert.strictEqual(
+    JSON.stringify(rec.lines[0]),
+    JSON.stringify({ text: "泥水の夜", segments: [{ text: "泥水", rt: "でいすい" }, { text: "の夜" }] }),
+    "歌词页解析"
+  );
+  const idx = X.buildIndex(rec);
+  assert.strictEqual(
+    JSON.stringify(X.tokensFor("泥水の夜", idx)),
+    JSON.stringify([{ text: "泥水", start: 0, end: 2, kana: "でいすい" }]),
+    "对齐到当前歌词行"
+  );
+
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs(ps[0]), [["泥水", "でいすい"], ["夜", "よる"]], "命中的行用网站读音：" + ps[0].innerHTML);
+  assert.deepStrictEqual(pairs(ps[1]), [["知", "し"], ["街", "まち"]], "对不上的行回退词典：" + ps[1].innerHTML);
+});
+
+test("外部网站读音：没有缓存时按歌名 / 歌手联网取（请求可被测试替身接管）", async () => {
+  /*
+   * 真机的请求走 utaten.com 的隐形 iframe（main.js 的 fetchExternalHtml）；
+   * 这里用 window.__WK_EXTERNAL_FETCH__ 替身接管，验「搜索 -> 选歌 -> 解析 -> 应用 -> 写缓存」
+   * 这条链路，不碰真网络。
+   */
+  const SEARCH_HTML = `<!doctype html><html><body><table><tr>
+    <td class="searchResult__title"><a href="/lyric/net/"><span class="songlist-title">Net Song</span></a></td>
+    <td class="searchResult__artist"><p><a href="/artist/9/">Net Artist</a></p></td>
+  </tr></table></body></html>`;
+  const LYRIC_HTML = `<!doctype html><html><body>
+    <div class="lyricBody"><div class="hiragana">
+      <span class="ruby"><span class="rb">泡沫</span><span class="rt">うたかた</span></span>の夢<br>
+    </div></div>
+  </body></html>`;
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">Net Song</a></span>
+  <span class="by"><a href="#">Net Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>泡沫の夢</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  const requested = [];
+  env.window.__WK_EXTERNAL_FETCH__ = function (url) {
+    requested.push(url);
+    return Promise.resolve(url.indexOf("/search") >= 0 ? SEARCH_HTML : LYRIC_HTML);
+  };
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泡沫: "ホウマツ", 夢: "ユメ" }));
+  await env.runLoad();
+  await sleep(900);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs, [["泡沫", "うたかた"], ["夢", "ゆめ"]], "网站读音要覆盖词典：" + p.innerHTML);
+  assert.ok(requested.some((u) => u.indexOf("title=Net%20Song") >= 0), "要按歌名搜：" + JSON.stringify(requested));
+  assert.ok(requested.some((u) => u.indexOf("/lyric/net/") >= 0), "要取命中的歌词页：" + JSON.stringify(requested));
+  const cache = JSON.parse(env.window.localStorage.getItem("lyric-ruby.external.v1") || "{}");
+  assert.ok(cache["Net Song\u0000Net Artist"], "成功之后要写缓存：" + JSON.stringify(cache));
 });
 
 test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら", async () => {

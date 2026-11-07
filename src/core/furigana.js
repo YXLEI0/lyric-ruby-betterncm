@@ -1186,6 +1186,7 @@
     if (!s) return [];
     if (allReadingsCache.has(s)) return allReadingsCache.get(s);
     var out = [];
+    var suffix = [];
     var d = deps();
     var tok = d.tokenizer;
     try {
@@ -1210,8 +1211,13 @@
             if (!reading || reading === "*") continue;
             var hira = toHira(reading);
             if (!/^[\u3041-\u3096\u30FC]+$/.test(hira)) continue;
-            if (parts[1] === "接頭詞" || parts[2] === "接尾" || parts[2] === "固有名詞") continue;
-            if (out.indexOf(hira) < 0) out.push(hira);
+            if (parts[1] === "接頭詞" || parts[2] === "固有名詞") continue;
+            // 接尾读音（星 ぼし、山 さん、歌 か）对**单字**来说是另一种读法，留着当候选；
+            // 多字词里的接尾读音（日 にち 在 今日 里）不是这个词的读法，剔掉。
+            // 排的时候一般读法在前、接尾在后（灯 あかり / ひ 在前，とう 在后）。
+            if (parts[2] === "接尾" && s.length > 1) continue;
+            var bucket = parts[2] === "接尾" ? suffix : out;
+            if (bucket.indexOf(hira) < 0) bucket.push(hira);
           }
         }
       }
@@ -1219,8 +1225,8 @@
       out = [];
     }
     if (allReadingsCache.size > 4000) allReadingsCache.clear();
-    allReadingsCache.set(s, out);
-    return out;
+    allReadingsCache.set(s, out.concat(suffix));
+    return out.concat(suffix);
   }
 
   /**

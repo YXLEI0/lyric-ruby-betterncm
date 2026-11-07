@@ -217,6 +217,9 @@
     furiganaKana: "hiragana",
     // 自定义读音：一行一条 `底字=假名`（面板里「高级设置 → 自定义读音」）
     furiganaOverrides: "",
+    // 外部网站读音来源（UtaTen）：默认关，第一次开要确认第三方内容的使用条款
+    externalUtaten: false,
+    externalConsent: false,
     // 歌词界面里就地改的读音（老版本，按词；启动时迁到下面那套）
     furiganaLineFixes: {},
     // 就地改的读音（按位置）：{ 整行原文: [[起点, 底字, 假名], ...] }
@@ -2356,6 +2359,56 @@
     "何": ["なに", "なん"],
     "良": [{ kana: "よ" }, { kana: "い", after: /^い/ }],
     "皆": [{ kana: "みな" }, { kana: "みんな", notAfter: /^(さん|様|さま)/ }],
+    "歌": ["うた", "か"],
+    "詩": ["し", "うた"],
+    "花": ["はな", "か"],
+    "鳥": ["とり", "ちょう"],
+    "星": ["ほし", "せい"],
+    "声": ["こえ", "せい"],
+    "恋": ["こい", "れん"],
+    "夢": ["ゆめ", "む"],
+    "涙": ["なみだ", "るい"],
+    "虹": ["にじ", "こう"],
+    "命": ["いのち", "めい"],
+    "窓": ["まど", "そう"],
+    "扉": ["とびら", "ひ"],
+    "耳": ["みみ", "じ"],
+    "髪": ["かみ", "はつ"],
+    "光": ["ひかり", "ひか", "こう"],
+    "影": ["かげ", "えい"],
+    "灯": ["あかり", "ひ", "とう", "とぼし", "あかし", "ともし", "とも"],
+    "背負": ["せお", "しょ", "せおい", "しょい"],
+    "道標": ["みちしるべ", "どうひょう"],
+    "微笑": [{ kana: "びしょう" }, { kana: "ほほえみ", notAfter: /^[むまめんっ]/ }],
+    "寂": [{ kana: "さび", label: "さびしい" }, { kana: "さみ", label: "さみしい" }],
+    // 数字：阿拉伯数字（WKNumbers 注的音）和汉字数字都给另一套读法
+    "0": ["ぜろ", "れい", "まる"],
+    "1": ["いち", "ひと"],
+    "2": ["に", "ふた"],
+    "3": ["さん", "み"],
+    "4": ["よん", "し"],
+    "5": ["ご", "いつ"],
+    "6": ["ろく", "む"],
+    "7": ["なな", "しち"],
+    "8": ["はち", "や"],
+    "9": ["きゅう", "く"],
+    "10": ["じゅう", "とお"],
+    "100": ["ひゃく", "もも"],
+    "1000": ["せん", "ち"],
+    "一": ["いち", "ひと"],
+    "二": ["に", "ふた"],
+    "三": ["さん", "み"],
+    "四": ["し", "よん"],
+    "五": ["ご", "いつ"],
+    "六": ["ろく", "む"],
+    "七": ["しち", "なな"],
+    "八": ["はち", "や"],
+    "九": ["きゅう", "く"],
+    "十": ["じゅう", "とお"],
+    "百": ["ひゃく", "もも"],
+    "千": ["せん", "ち"],
+    "万": ["まん", "よろず"],
+    "零": ["れい", "ぜろ"],
     "泥水": ["どろみず", "でいすい"],
     "泡沫": ["ほうまつ", "うたかた"],
     "行": [{ kana: "い", label: "いく" }, { kana: "ゆ", label: "ゆく" }],
@@ -3245,14 +3298,343 @@
     return "";
   }
 
+  // ------------------------------------------------------------ 外部网站读音（UtaTen）
+
+  /*
+   * 外部网站默认关，第一次开要在面板里确认（歌词 / 读音的著作权属于权利人及相应网站，
+   * 以程序方式获取可能违反网站的使用条款，仅限个人学习）。确认后按"歌名 + 歌手"查
+   * UtaTen，歌词页里的振假名缓存在 localStorage，按行对齐当前歌词；对不上的行照旧
+   * 用词典 / 音译 / 大模型。网站请求走 utaten.com 的隐形 iframe（站点要求 Referer，
+   * 跨域 fetch 也会被 CORS 拦住）。
+   */
+  var EXTERNAL_CACHE_KEY = "lyric-ruby.external.v1";
+  var EXTERNAL_CACHE_MAX = 8;
+  var externalState = { key: null, index: null, status: "", loading: false };
+
+  function externalEnabled() {
+    return config.externalUtaten === true && config.externalConsent === true;
+  }
+
+  /** 当前歌曲的歌名 / 歌手（播放栏；RNP 页面也共用这一条播放栏） */
+  function externalIdentity() {
+    var title = "";
+    var artist = "";
+    try {
+      var n = document.querySelector(".m-playbar .words .name a, .m-playbar .words .name");
+      var b = document.querySelector(".m-playbar .words .by a, .m-playbar .words .by");
+      if (n) title = String(n.textContent || "").replace(/^\s+|\s+$/g, "");
+      if (b) artist = String(b.textContent || "").replace(/^\s+|\s+$/g, "");
+    } catch (e) {
+      title = "";
+    }
+    if (!title) {
+      try {
+        var t = String(document.title || "").replace(/\s*[-–—]\s*网易云音乐.*$/, "");
+        var parts = t.split(/\s+[-–—]\s+/);
+        if (parts.length >= 2) {
+          title = parts[0];
+          if (!artist) artist = parts[1];
+        }
+      } catch (e2) {
+        title = "";
+      }
+    }
+    return { title: title, artist: artist };
+  }
+
+  function externalKeyOf(id) {
+    return String(id.title || "") + "\u0000" + String(id.artist || "");
+  }
+
+  function externalCacheAll() {
+    try {
+      var raw = localStorage.getItem(EXTERNAL_CACHE_KEY);
+      var obj = raw ? JSON.parse(raw) : {};
+      return obj && typeof obj === "object" ? obj : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function externalCacheSave(all) {
+    try {
+      var keys = Object.keys(all);
+      keys.sort(function (a, b) {
+        return (all[b].at || 0) - (all[a].at || 0);
+      });
+      for (var i = EXTERNAL_CACHE_MAX; i < keys.length; i++) delete all[keys[i]];
+      localStorage.setItem(EXTERNAL_CACHE_KEY, JSON.stringify(all));
+    } catch (e) {
+      /* 存不下就只本次会话用 */
+    }
+  }
+
+  function externalCacheGet(key) {
+    var rec = externalCacheAll()[key];
+    return rec && rec.lines && rec.lines.length ? rec : null;
+  }
+
+  function refreshExternalUI() {
+    try {
+      var el = document.querySelector('[data-v="extStatus"]');
+      if (!el) return;
+      if (!config.externalUtaten) el.textContent = "未启用";
+      else if (externalState.loading) el.textContent = externalState.status || "正在获取…";
+      else el.textContent = externalState.status || (externalState.index ? "已获取" : "等待获取");
+    } catch (e) {
+      /* 面板没开 */
+    }
+  }
+
+  /** 把一条网站记录挂到当前歌词上（缓存命中 / 刚获取都走这里） */
+  function applyExternalRecord(rec, key, note) {
+    if (typeof WKExternal === "undefined") return false;
+    var built = null;
+    try {
+      built = WKExternal.buildIndex(rec);
+    } catch (e) {
+      built = null;
+    }
+    if (!built || !built.count) {
+      externalState.status = "网站歌词解析失败";
+      refreshExternalUI();
+      return false;
+    }
+    externalState.key = key;
+    externalState.index = built;
+    externalState.status = note + " · " + built.count + " 行";
+    try {
+      if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+    } catch (e2) {
+      /* 缓存清不掉就下一轮再说 */
+    }
+    refreshExternalUI();
+    try {
+      /*
+       * 不能在 pass() 里直接 rescan（会递归）：延迟到这一轮扫描结束后再 restore + 重扫。
+       * 只 schedule(0) 不够 —— 已经有注音的行会被当成"注过、没变"跳过，网站读音换不上去。
+       */
+      setTimeout(function () {
+        try {
+          rescan();
+        } catch (eR) {
+          /* 扫描还没起来 */
+        }
+      }, 0);
+    } catch (e3) {
+      /* 定时器都排不上就算了 */
+    }
+    return true;
+  }
+
+  /** 从 utaten.com 的隐形 iframe 里取 HTML（站点要求 Referer；跨域 fetch 会被 CORS 拦） */
+  function fetchExternalHtml(url) {
+    if (typeof WKExternal === "undefined" || !WKExternal.allowedURL(url)) {
+      return Promise.reject(new Error("只允许访问 UtaTen"));
+    }
+    var override = typeof window !== "undefined" ? window.__WK_EXTERNAL_FETCH__ : null;
+    if (typeof override === "function") return Promise.resolve(override(url));
+    return new Promise(function (resolve, reject) {
+      var frame = null;
+      var timer = null;
+      var done = false;
+      function finish(err, html) {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        if (frame) {
+          frame.onload = null;
+          frame.onerror = null;
+          if (frame.parentNode) frame.parentNode.removeChild(frame);
+        }
+        if (err) reject(err);
+        else resolve(html);
+      }
+      timer = setTimeout(function () {
+        finish(new Error("请求超时"));
+      }, 25000);
+      try {
+        frame = document.createElement("iframe");
+        frame.setAttribute("sandbox", "allow-same-origin");
+        frame.setAttribute("aria-hidden", "true");
+        frame.style.display = "none";
+        frame.onload = function () {
+          try {
+            var win = frame.contentWindow;
+            if (!win || !win.location || win.location.origin !== "https://utaten.com") {
+              finish(new Error("网站来源页没有加载"));
+              return;
+            }
+            win
+              .fetch(url, { credentials: "omit", referrer: "https://utaten.com/", referrerPolicy: "origin", cache: "no-store" })
+              .then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.text();
+              })
+              .then(function (html) {
+                finish(null, html);
+              }, function (err) {
+                finish(err || new Error("请求失败"));
+              });
+          } catch (e) {
+            finish(e);
+          }
+        };
+        frame.onerror = function () {
+          finish(new Error("网站来源页没有加载"));
+        };
+        frame.src = "https://utaten.com/robots.txt";
+        (document.body || document.documentElement).appendChild(frame);
+      } catch (e2) {
+        finish(e2);
+      }
+    });
+  }
+
+  function loadExternalSong(key, title, artist) {
+    if (externalState.loading || typeof WKExternal === "undefined") return;
+    var searchUrl = WKExternal.searchURL(title, artist);
+    if (!searchUrl) {
+      externalState.status = "没有可搜索的歌名";
+      refreshExternalUI();
+      return;
+    }
+    externalState.loading = true;
+    externalState.key = key;
+    externalState.status = "正在查询 UtaTen…";
+    refreshExternalUI();
+    fetchExternalHtml(searchUrl)
+      .then(function (html) {
+        return WKExternal.parseSearch(html);
+      })
+      .then(function (candidates) {
+        var hit = WKExternal.pick(candidates, title, artist);
+        if (!hit) throw new Error("UtaTen 没找到匹配的歌曲");
+        return fetchExternalHtml(hit.url).then(function (html) {
+          return WKExternal.parseLyric(html, hit.url);
+        });
+      })
+      .then(
+        function (rec) {
+          externalState.loading = false;
+          var all = externalCacheAll();
+          all[key] = {
+            at: Date.now(),
+            title: rec.title || title,
+            artists: rec.artists || [],
+            url: rec.url || "",
+            lines: rec.lines || [],
+          };
+          externalCacheSave(all);
+          applyExternalRecord(rec, key, "UtaTen 已获取");
+        },
+        function (err) {
+          externalState.loading = false;
+          externalState.status = "UtaTen 获取失败：" + String((err && err.message) || err);
+          refreshExternalUI();
+        }
+      );
+  }
+
+  /** 每轮扫描前看一眼：换歌 / 开关变了就重新取（缓存命中不联网） */
+  function maybeExternal() {
+    if (!externalEnabled()) {
+      if (externalState.index) {
+        externalState.index = null;
+        externalState.status = "";
+        refreshExternalUI();
+      }
+      return;
+    }
+    var id = externalIdentity();
+    if (!id.title) {
+      externalState.status = "没拿到歌名，跳过外部网站";
+      refreshExternalUI();
+      return;
+    }
+    var key = externalKeyOf(id);
+    // 换歌了：先把上一首的索引清掉，别把上一首的读音套到这一首上（非日语歌也一样）
+    if (externalState.key !== key) externalState.index = null;
+    if (!songLooksJapanese()) {
+      externalState.key = key;
+      externalState.status = "非日语歌，跳过外部网站";
+      refreshExternalUI();
+      return;
+    }
+    // 这首已经试过了（成功 / 失败 / 正在请求）就不再自动重来；失败要用户点「重新获取本首」
+    if (externalState.key === key) return;
+    var rec = externalCacheGet(key);
+    if (rec) {
+      if (applyExternalRecord(rec, key, "本地缓存")) return;
+    }
+    loadExternalSong(key, id.title, id.artist);
+  }
+
+  /** 外部网站这一行匹配到的读音 token（对不上返回 null） */
+  function externalTokensFor(line) {
+    if (!externalEnabled() || !externalState.index) return null;
+    if (typeof WKExternal === "undefined") return null;
+    try {
+      return WKExternal.tokensFor(line, externalState.index);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 外部网站读音压过词典 / 探测 / 罗马音，但**不压用户自己改的**（kind:"user"）、
+   * 也不碰留空和藏起来的括号。
+   */
+  function mergeExternalTokens(line, list) {
+    var ext = externalTokensFor(line);
+    if (!ext || !ext.length) return list;
+    var base = list || [];
+    var out = [];
+    var i;
+    var j;
+    for (i = 0; i < base.length; i++) {
+      var tk = base[i];
+      if (!tk) continue;
+      if (tk.kind === "user" || tk.hide || tk.blank) {
+        out.push(tk);
+        continue;
+      }
+      var hit = false;
+      for (j = 0; j < ext.length; j++) {
+        if (ext[j].start < tk.end && tk.start < ext[j].end) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) out.push(tk);
+    }
+    for (j = 0; j < ext.length; j++) {
+      var blocked = false;
+      for (i = 0; i < base.length; i++) {
+        var keepTk = base[i];
+        if (!keepTk) continue;
+        if (keepTk.kind !== "user" && !keepTk.hide && !keepTk.blank) continue;
+        if (ext[j].start < keepTk.end && keepTk.start < ext[j].end) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      out.push({ text: ext[j].text, start: ext[j].start, end: ext[j].end, kana: kanaByConfig(ext[j].kana), kind: "external" });
+    }
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return out;
+  }
+
   /**
    * 日语行的振假名 token：汉字片段交给 core/furigana.js（kuromoji + IPADIC）。
    *
    * 词典是懒加载的：这一趟读不到就返回 null，等 onReady 触发重扫时再补上。
    * 面板里关掉之后一条都不产出（现有注音由 rescan 里的 restore 撤掉）。
    */
-  function furiganaTokens(s, context, host, offset, lineText) {
-    if (config.furigana === false) return null;
+  function furiganaTokens(s, context, host, offset, lineText) {    if (config.furigana === false) return null;
     if (typeof WKFurigana === "undefined") return null;
     /*
      * 用哪段文字当"整行"：优先注音层算好的 __wkLineText（只含原文、不含翻译层），
@@ -3291,7 +3673,8 @@
         spans: spans,
         romaji: romajiLine,
       });
-      if (!whole || !whole.length) return null;
+      whole = mergeExternalTokens(line, whole || []);
+      if (!whole.length) return null;
       var mine = [];
       for (var i = 0; i < whole.length; i++) {
         var tk = whole[i];
@@ -3336,7 +3719,8 @@
       spans: spans,
       romaji: romajiLine,
     });
-    return out && out.length ? out : null;
+    out = mergeExternalTokens(s, out || []);
+    return out.length ? out : null;
   }
 
   /**
@@ -3702,6 +4086,7 @@
        */
       updateSongScope();
       updateJapaneseFont();
+      maybeExternal();
       var regions = null;
       if (config.scope === "lyrics") regions = state.annotator.findRegions("lyrics");
       else if (config.scope === "titles") regions = state.annotator.findRegions("titles");
@@ -4330,6 +4715,12 @@
       '<div class="wk-row"><button data-a="ovClear">清空</button> <span data-v="ovState"></span></div>' +
       '<div class="wk-hint">只对日语歌词的振假名生效；命中的词整条替换，优先级高于词典和分词。<br>' +
       '平假名 / 片假名写法都可以，会跟着面板上的「振假名写法」自动转换</div>' +
+      "<h3>外部网站读音</h3>" +
+      '<div class="wk-row"><label><input type="checkbox" data-k="externalUtaten"> 从 UtaTen 取这首歌的振假名（外部网站，需要联网）</label></div>' +
+      '<div class="wk-hint">按播放栏的歌名 / 歌手查 UtaTen：命中的行用网站读音，对不上的行照旧用词典 / 音译 / 大模型。<br>' +
+      "歌词和读音的著作权属于权利人及相应网站；以程序方式获取可能违反网站使用条款，请自行判断并仅用于个人学习。每首歌缓存在本机。</div>" +
+      '<div class="wk-row"><span data-v="extStatus">未启用</span> ' +
+      '<button data-a="extRetry">重新获取本首</button> <button data-a="extRevoke">撤销网站同意</button></div>' +
       "<h3>范围</h3>" +
       '<div class="wk-row"><label>标注范围 <select data-k="scope">' +
       '<option value="all">歌词 + 播放栏 (默认)</option>' +
@@ -4798,6 +5189,7 @@
       refreshUsage();
       refreshLearned();
       refreshLlmState();
+      refreshExternalUI();
     }
 
     /*
@@ -4816,9 +5208,10 @@
       refreshUsage();
       refreshLlmState();
       refreshLearned();
+      refreshExternalUI();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides"];
+    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides", "externalUtaten"];
     // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
     var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
     var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
@@ -4832,6 +5225,30 @@
         else el.value = config[key];
 
         var commit = function () {
+          /*
+           * 外部网站第一次打开：先把条款说清楚，确认过才联网。
+           * 取消就保持原样（复选框也退回去），不会悄悄发请求。
+           */
+          if (key === "externalUtaten" && el.checked && !config.externalConsent) {
+            var agreed = false;
+            try {
+              agreed = window.confirm(
+                "外部网站读音来自 UtaTen。\n\n" +
+                  "歌词和读音的著作权属于权利人及相应网站；以程序方式获取可能违反网站的使用条款，请自行判断并仅用于个人学习。\n\n" +
+                  "确认后会按歌名 / 歌手联网获取当前歌曲的振假名，并缓存在本机。可以随时在面板里撤销同意。"
+              );
+            } catch (eConfirm) {
+              agreed = false;
+            }
+            if (!agreed) {
+              el.checked = false;
+              config.externalUtaten = false;
+              saveConfig();
+              refreshExternalUI();
+              return;
+            }
+            config.externalConsent = true;
+          }
           if (el.type === "checkbox") config[key] = el.checked;
           else if (el.type === "range" || el.type === "number") config[key] = Number(el.value);
           else config[key] = el.value;
@@ -4863,6 +5280,13 @@
           var out = root.querySelector('[data-v="' + key + '"]');
           if (out) out.textContent = fmt(key);
           updateStyles();
+          if (key === "externalUtaten") {
+            externalState.key = null;
+            externalState.index = null;
+            externalState.loading = false;
+            externalState.status = config.externalUtaten ? "等待获取" : "";
+            refreshExternalUI();
+          }
           if (key === "enabled") {
             config.enabled ? enable() : disable();
           } else if (key === "online") {
@@ -4930,6 +5354,32 @@
         b.addEventListener("click", function () {
           var what = b.dataset.a;
           if (what === "rescan") {
+            rescan();
+          } else if (what === "extRetry") {
+            var extId = externalIdentity();
+            var extKey = externalKeyOf(extId);
+            var cacheAll = externalCacheAll();
+            if (extKey && Object.prototype.hasOwnProperty.call(cacheAll, extKey)) {
+              delete cacheAll[extKey];
+              externalCacheSave(cacheAll);
+            }
+            externalState.key = null;
+            externalState.index = null;
+            externalState.loading = false;
+            externalState.status = "重新获取…";
+            refreshExternalUI();
+            rescan();
+          } else if (what === "extRevoke") {
+            config.externalUtaten = false;
+            config.externalConsent = false;
+            saveConfig();
+            var extCb = root.querySelector('[data-k="externalUtaten"]');
+            if (extCb) extCb.checked = false;
+            externalState.key = null;
+            externalState.index = null;
+            externalState.loading = false;
+            externalState.status = "";
+            refreshExternalUI();
             rescan();
           } else if (what === "resetSong") {
             // 清掉这一首里"就地改过的读音"（面板里的通用规则 / 模型缓存都不动）
