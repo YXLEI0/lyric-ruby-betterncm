@@ -6960,6 +6960,80 @@ test("外部网站：客户端只切了网站一行的中间一段、网站用�
   );
 });
 
+test("外部网站：片假名注音也要收（`午前一時 = エーエムワンオクロック`），并且照原样显示", async () => {
+  /*
+   * 真机：UtaTen 给 `午前一時` 标的是片假名读音（エーエムワンオクロック）。
+   * 1.31.1 之前解析只认平假名（KANA 正则只有 3041-3096），整条读音被丢掉，
+   * 缓存里就只剩没有 rt 的底字，页面上按词典读成 ごぜんいちじ / 或者被音译层带歪。
+   * 现在：解析收片假名，而且**照原样显示**，不跟着面板的平假名设置转。
+   */
+  const LYRIC = `<!doctype html><html><body>
+    <div class="lyricBody"><div class="hiragana">
+      <span class="ruby"><span class="rb">午前一時</span><span class="rt">エーエムワンオクロック</span></span>、<span class="ruby"><span class="rb">瞼</span><span class="rt">まぶた</span></span><br>
+    </div></div></body></html>`;
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const X = ctx.window.WKExternal;
+  const rec = X.parseLyric(LYRIC, "https://utaten.com/lyric/piece/");
+  assert.strictEqual(rec.lines[0].segments[0].rt, "エーエムワンオクロック", "片假名读音要收下：" + JSON.stringify(rec.lines[0]));
+
+  // 应用时也不许转成平假名（config 默认就是平假名）
+  const cacheDir = tempCacheDir();
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">片仮名の歌</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>これはそう</p></li>
+  <li class="line"><p>午前一時、瞼。</p></li>
+</ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_TRACK__ = { id: "1000000002", title: "片仮名の歌", artists: ["Artist"] };
+  writeCacheFile(cacheDir, "1000000002", {
+    schema: 1,
+    parser: 2,
+    songId: "1000000002",
+    fetchedAt: new Date().toISOString(),
+    provider: "utaten",
+    url: "https://utaten.com/lyric/katakana/",
+    title: "片仮名の歌",
+    artists: ["Artist"],
+    lines: [
+      {
+        text: "午前一時、瞼。",
+        segments: [{ text: "午前一時", rt: "エーエムワンオクロック" }, { text: "、" }, { text: "瞼", rt: "まぶた" }, { text: "。" }],
+      },
+    ],
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 午前: "ゴゼン", 一時: "イチジ", 瞼: "マブタ" }));
+  await env.runLoad();
+  await sleep(700);
+  const lines = env.document.querySelectorAll("ul.lyric li p");
+  const p = lines[1];
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs, [["午前一時", "エーエムワンオクロック"], ["瞼", "まぶた"]], "片假名照原样：" + p.innerHTML);
+});
+
+test("署名行：日文 / 舊字體标签也要认（唄:鏡 音リン）", () => {
+  /*
+   * 真机：`唄:鏡 音リン` 被逐字注成 うた きょう おと，下一行 `翻譯:阿點` 反倒对了 ——
+   * 因为 翻譯 在署名标签表里、唄 不在。这批是日文 / 舊字體的工种词。
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const A = ctx.window.WKAnnotate;
+  assert.strictEqual(A.creditMatch("唄:鏡 音リン").isCredit, true);
+  assert.strictEqual(A.creditMatch("翻譯:阿點").isCredit, true);
+  assert.strictEqual(A.creditMatch("歌:鏡音リン").isCredit, true);
+  assert.strictEqual(A.creditMatch("作詞：某某").isCredit, true);
+  // 真歌词不能误伤
+  assert.strictEqual(A.creditMatch("歌を歌えば").isCredit, false);
+  assert.strictEqual(A.creditMatch("Music と light の中で").isCredit, false);
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>

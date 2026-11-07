@@ -13,7 +13,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  var KANA = /^[\u3041-\u3096\u30FC]+$/;
+  var KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]+$/;
 
   function str(v) {
     return String(v == null ? "" : v);

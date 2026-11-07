@@ -3718,7 +3718,17 @@
     var fs0 = fsApi();
     var legacy = legacyCacheDir();
     if (!fs0 || !legacy || typeof fs0.readDir !== "function") return Promise.resolve(result);
-    return Promise.resolve(fs0.readDir(legacy)).then(
+    /*
+     * readDir 在有些环境里是同步抛异常的（目录不存在 / 权限）：一定要包成 reject，
+     * 否则这个"清理旧缓存"的启动任务会把整个初始化一起炸掉。
+     */
+    var listing;
+    try {
+      listing = Promise.resolve(fs0.readDir(legacy));
+    } catch (eRead) {
+      return Promise.resolve(result);
+    }
+    return listing.then(
       function (names) {
         var jobs = [];
         for (var i = 0; i < (names || []).length; i++) {
@@ -3770,14 +3780,25 @@
     } catch (e) {
       return;
     }
-    purgeLegacyCache().then(function (r) {
-      if (r.moved || r.removed || r.ls) {
-        log(
-          "清掉旧版外部读音缓存：本地存储 " + (r.ls ? "1 份" : "无") +
-            "、老目录搬过来 " + r.moved + " 首、删除 " + r.removed + " 个文件"
-        );
-      }
-    });
+    /*
+     * 这个任务是"顺手清一清"，任何异常都不许冒泡到初始化 ——
+     * 之前 fs.readDir 同步抛 ENOENT 时，整个插件初始化跟着失败（真机就是"注音全没了"）。
+     */
+    try {
+      purgeLegacyCache().then(
+        function (r) {
+          if (r.moved || r.removed || r.ls) {
+            log(
+              "清掉旧版外部读音缓存：本地存储 " + (r.ls ? "1 份" : "无") +
+                "、老目录搬过来 " + r.moved + " 首、删除 " + r.removed + " 个文件"
+            );
+          }
+        },
+        function () {}
+      );
+    } catch (ePurge) {
+      /* 清理失败不影响注音 */
+    }
   }
 
   function refreshExternalUI() {
@@ -4170,6 +4191,12 @@
     if (!id) return Promise.resolve(false);
     var data = {
       schema: 1,
+      /*
+       * 解析器版本：2 = 认片假名读音（UtaTen 有 `午前一時 = エーエムワンオクロック`
+       * 这种片假名注音，1 版的解析把它整条丢掉，缓存里就只剩没有读音的底字）。
+       * 读到没有这个字段的旧文件时会在后台重抓一次（见 refreshExternal）。
+       */
+      parser: 2,
       songId: String(id),
       fetchedAt: new Date().toISOString(),
       provider: rec.provider === "utanet" ? "utanet" : "utaten",
@@ -4328,7 +4355,22 @@
       refreshExternalUI();
       readSongFile(id.id).then(function (fileRec) {
         externalState.loading = false;
-        if (fileRec && applyExternalRecord(fileRec, key, "本地歌词")) return;
+        if (fileRec && applyExternalRecord(fileRec, key, "本地歌词")) {
+          /*
+           * 老解析器写的缓存（没有 parser:2）里片假名读音是缺的 —— 先用着，
+           * 后台按歌名 / 歌手重抓一次，成功后 writeSongFile 会把它改写掉。
+           */
+          if (fileRec.parser !== 2) {
+            setTimeout(function () {
+              try {
+                loadExternalSong(key, id.id, id.title, id.artists || []);
+              } catch (eStale) {
+                /* 重抓失败就算了，下次换歌再试 */
+              }
+            }, 2000);
+          }
+          return;
+        }
         loadExternalSong(key, id.id, id.title, id.artists || []);
       });
       return;
@@ -4472,7 +4514,11 @@
         }
       }
       if (blocked) continue;
-      out.push({ text: ext[j].text, start: ext[j].start, end: ext[j].end, kana: kanaByConfig(ext[j].kana), kind: "external" });
+      /*
+       * 网站给的读音**照原样显示**：它标的是片假名（`午前一時 = エーエムワンオクロック`）
+       * 就出片假名，不跟着面板的平假名设置转 —— 和括号读音同一个规矩（用户要求）。
+       */
+      out.push({ text: ext[j].text, start: ext[j].start, end: ext[j].end, kana: ext[j].kana, kind: "external" });
     }
     out.sort(function (a, b) {
       return a.start - b.start;
