@@ -4511,9 +4511,26 @@
       }
       if (contiguous && sameKana(joined, ext[j].kana)) coarser[j] = true;
     }
+    /*
+     * 同一条读音、网站切得更窄时用网站的：作者写 `翔ろ天(スターダム)`，网站只把 `天` 标成
+     * スターダム（翔 是 かけ）—— 括号那种"连同前面几个字一起"的底字范围太宽，
+     * 会把 翔 的读音也盖掉。判据：读音一样、结尾对齐、网站那段更短。
+     */
+    var narrowInline = [];
+    for (j = 0; j < ext.length; j++) {
+      for (i = 0; i < base.length; i++) {
+        var itk = base[i];
+        if (!itk || itk.kind !== "inline" || !itk.kana) continue;
+        if (itk.end !== ext[j].end || itk.start >= ext[j].start) continue;
+        if (!sameKana(itk.kana, ext[j].kana)) continue;
+        narrowInline.push(itk);
+        break;
+      }
+    }
     for (i = 0; i < base.length; i++) {
       var tk = base[i];
       if (!tk) continue;
+      if (narrowInline.indexOf(tk) >= 0) continue; // 让给网站更窄的那一段
       /*
        * 用户自己改的（user）、括号里作者标的读音（inline）、留空（blank）、藏起来的括号（hide）
        * 都不许被网站覆盖：作者在括号里写的就是官方读法。
@@ -4540,6 +4557,7 @@
       for (i = 0; i < base.length; i++) {
         var keepTk = base[i];
         if (!keepTk) continue;
+        if (narrowInline.indexOf(keepTk) >= 0) continue; // 这条已经让给网站了，不算阻挡
         if (keepTk.kind !== "user" && keepTk.kind !== "inline" && !keepTk.hide && !keepTk.blank) continue;
         if (ext[j].start < keepTk.end && keepTk.start < ext[j].end) {
           blocked = true;

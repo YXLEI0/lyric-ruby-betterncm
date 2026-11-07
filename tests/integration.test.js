@@ -7108,6 +7108,54 @@ test("括号不总是读音：`0点（エンド）` 整体注、`もう一回（
   );
 });
 
+test("括号读音的底字太宽、网站有更窄的同读法时用网站的（翔ろ天(スターダム) → 天）", async () => {
+  /*
+   * 真机：客户端 `諦めない！翔ろ天(スターダム)！`，网站把 翔 标成 かけ、天 标成 スターダム ——
+   * 括号那种"连前面几个字一起"的底字太宽，会把 翔 的读音也盖掉。
+   * 判据：读音一样、结尾对齐、网站那段更短。
+   */
+  const cacheDir = tempCacheDir();
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">翔べ</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>諦めない！翔ろ天(スターダム)！</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_TRACK__ = { id: "1000000004", title: "翔べ", artists: ["Artist"] };
+  writeCacheFile(cacheDir, "1000000004", {
+    schema: 1,
+    parser: 2,
+    songId: "1000000004",
+    fetchedAt: new Date().toISOString(),
+    provider: "utaten",
+    url: "https://utaten.com/lyric/stardom/",
+    title: "翔べ",
+    artists: ["Artist"],
+    lines: [
+      {
+        text: "諦めない！翔ろ天！",
+        segments: [{ text: "諦", rt: "あきら" }, { text: "めない！" }, { text: "翔", rt: "かけ" }, { text: "ろ" }, { text: "天", rt: "スターダム" }, { text: "！" }],
+      },
+    ],
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 諦: "アキラ", 翔: "カケ", 天: "テン" }));
+  await env.runLoad();
+  await sleep(700);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const stardom = pairs.filter((x) => x[1] === "スターダム")[0];
+  assert.deepStrictEqual(stardom, ["天", "スターダム"], "底字收到 天（网站更窄）：" + p.innerHTML);
+  assert.ok(
+    pairs.some((x) => x[0] === "翔" && x[1] === "かけ"),
+    "翔 仍要保留 かけ：" + JSON.stringify(pairs)
+  );
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>
