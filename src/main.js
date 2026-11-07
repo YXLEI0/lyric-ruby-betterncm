@@ -4303,33 +4303,12 @@
       return a.start - b.start;
     });
     /*
-     * 相邻的两个汉字读音合成一个注音单元。
-     *
-     * 网站的振假名是按"词"给的（共 とも + 鳴 な），中间没有假名隔开时，
-     * 分成两个 ruby 会变成 `共` 一个读音、`鳴` 一个读音，看着像两个词 ——
-     * 而 `共鳴らせ` 里 共鳴 是一个整体（ともな）。只在"两边都是汉字、紧挨着、
-     * 都有读音"时才合，跨假名 / 跨标点不动。
+     * 注意：这里曾经把"相邻的两个汉字读音"合并成一个注音单元（为了 共鳴 ともな），
+     * 但逐字歌词里每个字是一个节点、token 边界和宿主切分并不总一致，合并会把
+     * 两段读音拼起来（`自分` 显示成 じぶんぶん）。合并改由编辑器的「←」「→」按钮
+     * 手动做，这里不再自动合。
      */
-    var merged = [];
-    for (i = 0; i < out.length; i++) {
-      var tk2 = out[i];
-      var prev = merged.length ? merged[merged.length - 1] : null;
-      if (
-        prev &&
-        tk2.kind === "external" &&
-        prev.kind === "external" &&
-        prev.end === tk2.start &&
-        /^[\u4E00-\u9FFF\u3005]+$/.test(prev.text) &&
-        /^[\u4E00-\u9FFF\u3005]+$/.test(tk2.text)
-      ) {
-        prev.text += tk2.text;
-        prev.end = tk2.end;
-        prev.kana += tk2.kana;
-        continue;
-      }
-      merged.push(tk2);
-    }
-    return merged;
+    return out;
   }
 
   /**

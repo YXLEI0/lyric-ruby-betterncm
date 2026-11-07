@@ -6922,23 +6922,3 @@ test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async (
   assert.ok(chips().indexOf('な（训）') >= 0, '鳴 的训读 な：' + chips().join('/'));
 });
 
-test("外部网站读音：相邻汉字合成一个注音单元（共鳴 ともな，不是 共 きょう + 鳴 な）", async () => {
-  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>共鳴らせたなら</p></li></ul></div></div></body></html>";
-  const env = bootPlugin(HTML, {
-    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true },
-  });
-  env.window.__WK_TRACK__ = { id: '4242', title: '共鳴', artists: ['x'] };
-  env.window.localStorage.setItem('lyric-ruby.external.v1', "{\"id:4242\":{\"at\":1,\"title\":\"共鳴\",\"artists\":[\"x\"],\"url\":\"https://utaten.com/lyric/abc/\",\"lines\":[{\"text\":\"共鳴らせたなら\",\"segments\":[{\"text\":\"共\",\"rt\":\"とも\"},{\"text\":\"鳴\",\"rt\":\"な\"},{\"text\":\"らせたなら\"}]}]}}");
-  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 共: 'キョウ', 鳴: 'メイ', らせたなら: 'ラセタナラ' }));
-  await env.runLoad();
-  await sleep(1200);
-  const p = env.document.querySelector('ul.lyric li p');
-  const pairs = Array.from(p.querySelectorAll('ruby.wk-ruby')).map((r) => [r.childNodes[0].nodeValue, r.querySelector('.wk-rt').textContent]);
-  assert.deepStrictEqual(pairs, [['共鳴', 'ともな']], '相邻汉字要合成一个：' + p.innerHTML);
-  // 双击这个合并后的注音，候选里有 きょうめい
-  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
-  dbl(p.querySelector('ruby.wk-ruby'));
-  await sleep(50);
-  const chips = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
-  assert.ok(chips.indexOf('きょうめい') >= 0, '共鳴 的候选：' + chips.join('/'));
-});
