@@ -7038,6 +7038,50 @@ test("署名行：日文 / 舊字體标签也要认（唄:鏡 音リン）", () 
   assert.strictEqual(A.creditMatch("Music と light の中で").isCredit, false);
 });
 
+test("括号里作者标的读音不许被网站覆盖（限界超え（みのり））", async () => {
+  /*
+   * 真机：`Jump!! 限界超え（みのり）` 网站上标的是 限界 = げんかい / 超 = こ ——
+   * 让网站压过去的话，括号被藏了、读音却换成词典那套，看着就是「（みのり）直接不见了」。
+   * 作者在括号里写的读法优先级高于网站（和用户自己改的读音同级）。
+   */
+  const cacheDir = tempCacheDir();
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">ジャンプ</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>Jump!! 限界超え（みのり）</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_TRACK__ = { id: "1000000003", title: "ジャンプ", artists: ["Artist"] };
+  writeCacheFile(cacheDir, "1000000003", {
+    schema: 1,
+    parser: 2,
+    songId: "1000000003",
+    fetchedAt: new Date().toISOString(),
+    provider: "utaten",
+    url: "https://utaten.com/lyric/jump/",
+    title: "ジャンプ",
+    artists: ["Artist"],
+    lines: [
+      {
+        text: "Jump!! 限界超え",
+        segments: [{ text: "Jump!! " }, { text: "限界", rt: "げんかい" }, { text: "超", rt: "こ" }, { text: "え" }],
+      },
+    ],
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 限界: "ゲンカイ", 超: "コ" }));
+  await env.runLoad();
+  await sleep(700);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs, [["Jump", "ジャンプ"], ["限界超え", "みのり"]], "括号读音要压过网站：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段要藏起来：" + p.innerHTML);
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>

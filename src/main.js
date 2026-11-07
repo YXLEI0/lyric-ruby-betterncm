@@ -4487,7 +4487,13 @@
     for (i = 0; i < base.length; i++) {
       var tk = base[i];
       if (!tk) continue;
-      if (tk.kind === "user" || tk.hide || tk.blank) {
+      /*
+       * 用户自己改的（user）、括号里作者标的读音（inline）、留空（blank）、藏起来的括号（hide）
+       * 都不许被网站覆盖：作者在括号里写的就是官方读法。
+       * 真机：`限界超え（みのり）` 网站标的是 限界 = げんかい / 超 = こ，一旦让网站压过去，
+       * 括号被藏了、读音却换成词典的（= 括号读音整段消失）。
+       */
+      if (tk.kind === "user" || tk.kind === "inline" || tk.hide || tk.blank) {
         out.push(tk);
         continue;
       }
@@ -4507,7 +4513,7 @@
       for (i = 0; i < base.length; i++) {
         var keepTk = base[i];
         if (!keepTk) continue;
-        if (keepTk.kind !== "user" && !keepTk.hide && !keepTk.blank) continue;
+        if (keepTk.kind !== "user" && keepTk.kind !== "inline" && !keepTk.hide && !keepTk.blank) continue;
         if (ext[j].start < keepTk.end && keepTk.start < ext[j].end) {
           blocked = true;
           break;
