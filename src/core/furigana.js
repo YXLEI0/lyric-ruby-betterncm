@@ -134,6 +134,7 @@
         state.tokenizer = tokenizer;
         state.loadedAt = Date.now();
         cache.clear();
+        allReadingsCache.clear();
         if (state.onReady) {
           try {
             state.onReady();
@@ -1166,6 +1167,118 @@
 
   function clearCache() {
     cache.clear();
+    allReadingsCache.clear();
+  }
+
+  /*
+   * 词典里同一个表层形的**全部**读音。
+   *
+   * tokenizer 只给 Viterbi 选中的那一条，拿不到同一个写法在别的词性下的读法：
+   *   良 リョウ / ヨ / イ、皆 ミナ / ミンナ / カイ、灯 アカリ / ヒ / トウ / トモシ …
+   * 这里直接翻 IPADIC 的 trie（base.dat）和词条表（tid_pos.dat）：
+   *   表层形 -> trie 值 -> 若干 token_info_id -> 每条 features 的「读音」。
+   * 只收纯假名读音，并剔掉固有名詞 / 接頭詞 / 接尾 —— 那几种不是这个词单独唱出来的读法
+   * （光 アキラ、達 イタル、日 ニチ 是名字 / 接尾的读法）。
+   */
+  var allReadingsCache = new Map();
+  function allReadings(surface) {
+    var s = String(surface == null ? "" : surface);
+    if (!s) return [];
+    if (allReadingsCache.has(s)) return allReadingsCache.get(s);
+    var out = [];
+    var d = deps();
+    var tok = d.tokenizer;
+    try {
+      var trie = tok && tok.viterbi_builder && tok.viterbi_builder.trie;
+      var tid = tok && tok.token_info_dictionary;
+      if (trie && tid) {
+        var found = trie.commonPrefixSearch(s) || [];
+        for (var i = 0; i < found.length; i++) {
+          var f = found[i];
+          if (!f || f.k !== s) continue;
+          var ids = tid.target_map[f.v] || [];
+          for (var j = 0; j < ids.length; j++) {
+            var feat = null;
+            try {
+              feat = tid.getFeatures(ids[j]);
+            } catch (eFeat) {
+              feat = null;
+            }
+            if (!feat) continue;
+            var parts = feat.split(",");
+            var reading = parts[8];
+            if (!reading || reading === "*") continue;
+            var hira = toHira(reading);
+            if (!/^[\u3041-\u3096\u30FC]+$/.test(hira)) continue;
+            if (parts[1] === "接頭詞" || parts[2] === "接尾" || parts[2] === "固有名詞") continue;
+            if (out.indexOf(hira) < 0) out.push(hira);
+          }
+        }
+      }
+    } catch (eAll) {
+      out = [];
+    }
+    if (allReadingsCache.size > 4000) allReadingsCache.clear();
+    allReadingsCache.set(s, out);
+    return out;
+  }
+
+  /**
+   * 就地编辑器用：这个词（底字 + 后面的送假名）在词典里的**所有**读法。
+   *
+   * 返回 `[{kana, label}]`：kana 是底字那一段的读音（注音存的就是它），
+   * label 是按整个词显示的读音 —— `行く` 的候选是 {kana:'ゆ', label:'ゆく'}，
+   * 点一下把 行 注成 ゆ，く 留在底字外面；`弄る` 是 いじく / いじ。
+   */
+  function variants(line, at, word) {
+    var s = String(line == null ? "" : line);
+    var w = String(word == null ? "" : word);
+    if (!s || !w || !(at >= 0)) return [];
+    var d = deps();
+    if (!d.tokenizer || !d.core) return [];
+    var surface = w;
+    try {
+      var toks = d.tokenizer.tokenize(s);
+      var pos = 0;
+      for (var i = 0; i < toks.length; i++) {
+        var sf = String(toks[i].surface_form || "");
+        if (pos === at && sf.indexOf(w) === 0) {
+          surface = sf;
+          break;
+        }
+        pos += sf.length;
+        if (pos > at) break;
+      }
+    } catch (eTok) {
+      surface = w;
+    }
+    var tail = surface.slice(w.length);
+    // 词后面跟的是汉字（今日中 的 中）就不是送假名，退回按底字本身查
+    if (tail && !/^[\u3041-\u3096\u30FC]+$/.test(tail)) {
+      surface = w;
+      tail = "";
+    }
+    var out = [];
+    var list = allReadings(surface);
+    for (var k = 0; k < list.length; k++) {
+      var r = list[k];
+      var base = r;
+      if (tail) {
+        // 读音必须真以送假名收尾，否则这条候选和这个词对不上（食べる べる -> た）
+        if (r.slice(r.length - tail.length) !== tail) continue;
+        base = r.slice(0, r.length - tail.length);
+      }
+      if (!base) continue;
+      var dup = false;
+      for (var q = 0; q < out.length; q++) {
+        if (out[q].kana === base) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) out.push({ kana: base, label: r });
+    }
+    return out;
   }
 
   return {
@@ -1177,11 +1290,13 @@
     tokens: tokens,
     clearCache: clearCache,
     candidates: candidates,
+    variants: variants,
     /** 给测试用：直接塞一个分词器 */
     setTokenizer: function (tokenizer) {
       state.tokenizer = tokenizer;
       state.loadedAt = Date.now();
       cache.clear();
+      allReadingsCache.clear();
     },
   };
 });

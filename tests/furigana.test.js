@@ -403,6 +403,22 @@ test("单字 + 固定语法：良 よ / 皆 みな（皆一緒 かいいっし�
   assert.deepStrictEqual(pairs("達する"), [["達", "たっ"]], "達する 是 たっする，不是 たち：" + JSON.stringify(pairs("達する")));
   assert.deepStrictEqual(pairs("故"), [["故", "ゆえ"]], "单独一个 故：" + JSON.stringify(pairs("故")));
   assert.deepStrictEqual(pairs("故郷"), [["故郷", "こきょう"]], "整词 こ 不动");
+
+  /*
+   * 候选：同一个写法在 IPADIC 里的**所有**读法（不是 tokenizer 选中的那一条）。
+   * 灯 七个、弄る 两个；行く 的候选只取词干（い / ゆ），按钮上显示整个词的读音。
+   */
+  const vars = (line, at, word) => Array.from(W.WKFurigana.variants(line, at, word) || [], (v) => [v.kana, v.label]);
+  assert.deepStrictEqual(
+    vars("灯", 0, "灯"),
+    [["あかり", "あかり"], ["ひ", "ひ"], ["とう", "とう"], ["とぼし", "とぼし"], ["あかし", "あかし"], ["ともし", "ともし"], ["とも", "とも"]],
+    "灯 的全部读音：" + JSON.stringify(vars("灯", 0, "灯"))
+  );
+  assert.deepStrictEqual(vars("弄る", 0, "弄"), [["いじく", "いじくる"], ["いじ", "いじる"]], "弄る いじくる / いじる");
+  assert.deepStrictEqual(vars("空", 0, "空"), [["そら", "そら"], ["から", "から"], ["くう", "くう"]], "空 そら / から / くう");
+  assert.deepStrictEqual(vars("泡沫", 0, "泡沫"), [["ほうまつ", "ほうまつ"], ["うたかた", "うたかた"]], "泡沫");
+  assert.deepStrictEqual(vars("行く", 0, "行"), [["い", "いく"], ["ゆ", "ゆく"]], "行く 取词干");
+  assert.deepStrictEqual(vars("入る", 0, "入"), [["はい", "はいる"], ["い", "いる"]], "入る はい / い");
 });
 
 test("词典读不出的汉字：用「字 + 送假名」探读音（掻 か）", async () => {

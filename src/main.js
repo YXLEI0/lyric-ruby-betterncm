@@ -2342,9 +2342,9 @@
    * 日语里一个写法有多个读法的常用词：双击注音时给一排候选，点一下直接切过去
    * （不用整串重打）。键是注音的**底字**：
    *   - 明日 / 今日 / 何 是整词，候选就是整词的读音；
-   *   - 行 / 抱 / 解 是动词词干，送假名在底字外面，编辑器存的也是词干读音
-   *     （行く → 行=い / ゆ、抱く → 抱=だ / いだ、解く → 解=と / ほど）。
-   * 想加词就往这里补一行，值按"常用 → 少见"排。
+   *   - 行 / 抱 / 解 / 弄 是动词词干，送假名在底字外面，存的是词干读音
+   *     （行く → 行=い / ゆ、弄る → 弄=いじく / いじ），候选按钮上显示整个词的读音。
+   * 手写表里没有的词交给 core/furigana.js 的 variants() 现查 IPADIC（所有读法）。
    */
   var JP_READING_VARIANTS = {
     "明日": ["あした", "あす", "みょうにち"],
@@ -2353,11 +2353,14 @@
     "一昨日": ["おととい", "おとつい"],
     "今朝": ["けさ", "こんちょう"],
     "大人": ["おとな", "たいじん"],
-    "今年": ["ことし", "こんねん"],
     "何": ["なに", "なん"],
-    "行": ["い", "ゆ", "おこな"],
-    "抱": ["だ", "いだ", "かか"],
-    "解": ["と", "ほど"]
+    "良": [{ kana: "よ" }, { kana: "い", after: /^い/ }],
+    "皆": [{ kana: "みな" }, { kana: "みんな", notAfter: /^(さん|様|さま)/ }],
+    "泥水": ["どろみず", "でいすい"],
+    "泡沫": ["ほうまつ", "うたかた"],
+    "行": [{ kana: "い", label: "いく" }, { kana: "ゆ", label: "ゆく" }],
+    "抱": [{ kana: "だ", label: "だく" }, { kana: "いだ", label: "いだく" }],
+    "解": [{ kana: "と", label: "とく" }, { kana: "ほど", label: "ほどく" }]
   };
 
   /** 片假名 → 平假名（候选和当前读音都比较平假名，面板切到片假名时也算同一个） */
@@ -2376,6 +2379,49 @@
     });
   }
 
+  /**
+   * 这个底字的候选读音：手写表优先（完整的常用读法），表里没有就现查 IPADIC
+   * （`灯` アカリ / ヒ / トウ / トモシ…、`弄る` いじくる / いじる），按底字切成
+   * `{kana, label}` —— kana 是注音存的词干读音，label 是按钮上显示的整个词读音。
+   */
+  function editorVariants(word, lineText, at) {
+    var list = JP_READING_VARIANTS[word];
+    var out = [];
+    var i;
+    /*
+     * 候选也跟着后面的语法过滤：
+     *   良 只有在 良い 里才给「い」（良かった / 良く 读 い 是错的）；
+     *   皆さん / 皆様 只给「みな」（みんなさん 不成立），皆で 这类才给「みんな」。
+     */
+    var after = at >= 0 ? String(lineText == null ? "" : lineText).substr(at + word.length) : "";
+    function keep(v) {
+      if (v.after && !v.after.test(after)) return false;
+      if (v.notAfter && v.notAfter.test(after)) return false;
+      return true;
+    }
+    if (list && list.length) {
+      for (i = 0; i < list.length; i++) {
+        var v = list[i];
+        if (typeof v === "string") out.push({ kana: v, label: v });
+        else if (v && v.kana && keep(v)) out.push({ kana: v.kana, label: v.label || v.kana });
+      }
+      return out;
+    }
+    if (typeof WKFurigana === "undefined" || !WKFurigana.variants) return out;
+    var found = [];
+    try {
+      found = WKFurigana.variants(lineText, at, word) || [];
+    } catch (eVar) {
+      found = [];
+    }
+    for (i = 0; i < found.length; i++) {
+      var f = found[i];
+      if (!f || !f.kana) continue;
+      out.push({ kana: f.kana, label: f.label || f.kana });
+    }
+    return out;
+  }
+
   function openEditor(rubyEl) {
     if (!rubyEl || !rubyEl.parentNode) return;
     var parts = rubyParts(rubyEl);
@@ -2391,8 +2437,8 @@
      * 合起来的那一段（`辛` + `辛` → `辛辛` からがら、`日` + `々` → `日々` ひび）。
      */
     var span = { at: startAt, word: word };
-    // 这个底字有没有多个读法（明日 / 行 / 抱 / 解 / 何…），有就在下面放一排候选按钮
-    var variantReadings = JP_READING_VARIANTS[word] || null;
+    // 这个底字有没有多个读法（明日 / 行 / 抱 / 解 / 灯 / 弄…），有就在下面放一排候选按钮
+    var variantReadings = editorVariants(word, lineText, startAt);
     var variantChips = null;
     var variantButtons = [];
     if (variantReadings && variantReadings.length < 2) variantReadings = null;
@@ -2495,13 +2541,15 @@
       variantChips.style.flexBasis = "100%";
       variantChips.style.marginTop = "4px";
       for (var vr = 0; vr < variantReadings.length; vr++) {
-        (function (reading) {
+        (function (item) {
+          var reading = item.kana;
+          var label = item.label || reading;
           var vb = document.createElement("button");
           vb.type = "button";
           vb.className = "wk-edit-variant";
           vb.setAttribute("data-kana", reading);
-          vb.textContent = kanaByConfig(reading);
-          vb.title = "切到「" + kanaByConfig(reading) + "」";
+          vb.textContent = kanaByConfig(label);
+          vb.title = "切到「" + kanaByConfig(label) + "」";
           vb.style.fontSize = "12px";
           vb.style.padding = "1px 6px";
           vb.addEventListener("mousedown", function (ev) {

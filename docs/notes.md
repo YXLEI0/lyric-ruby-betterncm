@@ -578,7 +578,7 @@ node tools/read-trace.js
 - 逐字歌词 (RNP karaoke) 是 `div.rnp-karaoke-word > span`, 字后面还跟着**排版用的空格**。行文本 / 节点偏移 / 就地编辑三处都要把这格空格去掉 (只去贴着汉字 / 假名的那一头, 英文词之间的空格照留), 否则一行会变成 `燃 え 上 が る`, kuromoji 只能按单字读 (体 からだ、温 ゆたか)
 - 日语歌里夹的西文有**单独开关** (`annotateLatinJa`, 默认开): 总开关 `annotateLatin` 管所有歌, 这一档只影响日语歌。注音器拿的是函数 (`annotateLatin: function () {...}`), 换歌 / 改开关都不用重建注音器
 - **西文词的读音也能就地改**: 西文读音是注音层自己那套切词器给的 (base tokens), 日语 furigana 那档和中文 cjk 那档都插不进手。做法: `extraTokens` 里把落在这一段的 spans 也交出去 (`userSpanTokens`), 合并时**同起点以 extra 为准** (`mergeTokens` 的 `base[i].start < extra[j].start`) —— 不然用户改的那条会被切词器的 token 顶掉
-- **多读法的词双击出候选** (`main.js` 的 `JP_READING_VARIANTS`): 明日 / 今日 / 昨日 / 今朝 / 大人 / 今年 / 何 是整词, 行 / 抱 / 解 是动词**词干** (送假名在底字外面, 编辑器存的也是词干读音: 行く → 行=い / ゆ)。候选点一下直接 `saveInlineFix`, 编辑器不关 (可以接着点另一个比较), 当前读音那个置灰加粗; 合并相邻注音之后底字变了, 候选要收起来 (`display:none`), 否则点出个错的。平/片假名跟着面板 `furiganaKana` 走
+- **多读法的词双击出候选** (`main.js` 的 `JP_READING_VARIANTS` + `core/furigana.js` 的 `variants()`): 手写表里有的词用表 (明日 / 今日 / 何 / 良 / 皆 / 泥水 / 泡沫…; 行 / 抱 / 解 是动词**词干**, 按钮上显示整个词的读音 いく / ゆく), 表里没有的现查 IPADIC (`allReadings()` 直接翻 `tid_pos.dat` 的 surface/pos/reading, 同一个表层的全部读音: 灯 7 个、弄る いじくる/いじる、空 そら/から/くう), 剔掉固有名詞 / 接頭詞 / 接尾 的读法。候选跟着后面的语法过滤 (`良` 只有 良い 给 い, `皆さん` 只给 みな, 规则在表里的 `after` / `notAfter`)。点一下直接 `saveInlineFix`, 编辑器不关; 合并相邻注音后底字变了, 候选收起来; 平/片假名跟着 `furiganaKana`
 - **符号也能被音译兜底**: `× ÷ ∞ ★ ☆ ♪ ♡ ♥ 〆 ※ ∑ √` 这些会被唱出来的符号在 `alignRomaji` 里算"读不出的格" (`イナイイナイ×点` + `i na i i na i ba te n` → × ば)。标点 / 数字 / 拉丁字母仍然是"不占拍"
 - `lineSpans()` 有一层按行缓存 (`spansGen` 跟着 `saveConfig()` 走), 因为 `extraTokens` 每个文本节点都要问它一次
 - **括号读音的底字可以是符号**: `〆（シメ）` / `∞回(なんかい)` 里 〆 / ∞ 不是汉字 (vendor 的 KANJI 表里没有 〆), 括号正则要单独认 `〆` `〇` `々`; 括号两边的空格也要允许 (`〆（ シメ ）`)
