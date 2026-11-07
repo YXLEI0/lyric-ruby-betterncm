@@ -17,6 +17,7 @@ const WANT_ORDER = [
   "vendor/furigana.js",
   "core/letters.js",
   "core/dict.js",
+  "core/kanji-readings.js",
   "core/enwords.js",
   "core/hanzi.js",
   "core/hangul.js",

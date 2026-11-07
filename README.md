@@ -124,7 +124,11 @@ npm run build:hanzi  # 重新生成普通话读音表
 
 插件自身的代码采用 MIT，见 [LICENSE](LICENSE)。
 
-外部网站读音（UtaTen）的方案参考 [jp-furigana](https://github.com/Leleawa/jp-furigana)（MIT）；
+外部网站读音（UtaTen / Uta-net）的方案参考 [jp-furigana](https://github.com/Leleawa/jp-furigana)（MIT）；
 歌词与读音的著作权属于权利人及相应网站，程序化获取仅限个人学习。
+
+常用汉字的音读 / 训读表（`src/core/kanji-readings.js`）由
+[davidluzgouveia/kanji-data](https://github.com/davidluzgouveia/kanji-data)（MIT）的常用漢字数据生成，
+原始 JSON 在 `tools/vendor/kanji/`，重新生成用 `node tools/build-kanji-readings.js`。
 
 第三方组件（kuromoji / IPADIC / furigana.js，以及 JapaneseFonts 的字表与字体默认值）与数据来源见 [NOTICE.md](NOTICE.md)。

@@ -2327,6 +2327,21 @@
     "今日": ["きょう", "こんにち"],
     "昨日": ["きのう", "さくじつ"],
     "一昨日": ["おととい", "おとつい"],
+    "一日": ["いちにち", "ついたち"],
+    "二日": ["ふつか"],
+    "三日": ["みっか"],
+    "四日": ["よっか"],
+    "五日": ["いつか"],
+    "六日": ["むいか"],
+    "七日": ["なのか"],
+    "八日": ["ようか"],
+    "九日": ["ここのか"],
+    "十日": ["とおか"],
+    "二十日": ["はつか"],
+    "一人": ["ひとり"],
+    "二人": ["ふたり"],
+    "一番": ["いちばん"],
+    "一緒": ["いっしょ"],
     "今朝": ["けさ", "こんちょう"],
     "大人": ["おとな", "たいじん"],
     "何": ["なに", "なん"],
@@ -2353,6 +2368,12 @@
     "背負": ["せお", "しょ", "せおい", "しょい"],
     "道標": ["みちしるべ", "どうひょう"],
     "微笑": [{ kana: "びしょう" }, { kana: "ほほえみ", notAfter: /^[むまめんっ]/ }],
+    // 常用漢字表里没有、但歌词里很常见的字：手写补上另一种读法
+    "綴": ["つづ", "てつ"],
+    "逢": ["あ", "ほう"],
+    "惹": ["ひ", "じゃく"],
+    // 共鳴：歌词里常写「共鳴らせたなら」= ともならせたなら（共 = とも、鳴 = な）
+    "共鳴": ["ともな", "きょうめい"],
     "寂": [{ kana: "さび", label: "さびしい" }, { kana: "さみ", label: "さみしい" }],
     // 数字：阿拉伯数字（WKNumbers 注的音）和汉字数字都给另一套读法
     // 阿拉伯数字另外给英文片假名读法（ワン / ツー…），逐个数字分开读在 numberVariants 里生成
@@ -2386,7 +2407,12 @@
     "泥水": ["どろみず", "でいすい"],
     "泡沫": ["ほうまつ", "うたかた"],
     "行": [{ kana: "い", label: "いく" }, { kana: "ゆ", label: "ゆく" }],
-    "抱": [{ kana: "だ", label: "だく" }, { kana: "いだ", label: "いだく" }],
+    "抱": [
+      { kana: "だ", label: "だく" },
+      { kana: "いだ", label: "いだく" },
+      { kana: "かか", label: "かかえる" },
+      { kana: "だっ", label: "だっこ" }
+    ],
     "解": [{ kana: "と", label: "とく" }, { kana: "ほど", label: "ほどく" }]
   };
 
@@ -2485,20 +2511,114 @@
       }
       return res;
     }
+    /**
+     * 单个汉字：把常用漢字表里这个字的**所有音读 / 训读**也列进候选。
+     *
+     * 注音层拿到的是"分词之后这个词"的读音（`間違` まちが），词里的 間 只露得出 ま；
+     * 用户想换成 あいだ / かん 时以前没有按钮。这里补上，标成「（音）」「（训）」。
+     *
+     * 再加上**音便**（连浊 / 半浊 / 促音便）：同一个字在词里常常变音 ——
+     *   手 て → で（拍手 はくしゅ）、花 はな → ばな / ぱな、人 ひと → びと、日 ひ → び；
+     *   一 いち → いっ（一回 いっかい）、発 はつ → はっ、学 がく → がっ、十 じゅう → じゅっ。
+     * 这些在歌词里都真的会出现，但常用漢字表里没有单列，所以按规则生成。
+     */
+    var VOICE_MAP = {
+      か: "が", き: "ぎ", く: "ぐ", け: "げ", こ: "ご",
+      さ: "ざ", し: "じ", す: "ず", せ: "ぜ", そ: "ぞ",
+      た: "だ", ち: "ぢ", つ: "づ", て: "で", と: "ど",
+      は: "ば", ひ: "び", ふ: "ぶ", へ: "べ", ほ: "ぼ",
+    };
+    var SEMI_MAP = { は: "ぱ", ひ: "ぴ", ふ: "ぷ", へ: "ぺ", ほ: "ぽ" };
+    /** 促音便：以 つ / く / き 收尾的读音，在词里常变成 っ（発 はつ → はっ、学 がく → がっ） */
+    function sokuonForm(kana) {
+      var s = String(kana || "");
+      if (!s) return "";
+      // いち / はち 是特例（一回 いっかい、八回 はっかい）；别的 ち 不收（七 しち 不会变成 しっ）
+      if (s === "いち" || s === "はち") return s.slice(0, -1) + "っ";
+      if (s === "じゅう") return "じゅっ";
+      var last = s.charAt(s.length - 1);
+      if (last === "つ" || last === "く" || last === "き") return s.slice(0, -1) + "っ";
+      return "";
+    }
+    function withKanjiReadings(single, items) {
+      if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return items;
+      if (!/^[\u4E00-\u9FFF]$/.test(single)) return items;
+      function have(kana) {
+        var h = hiraOnly(kana);
+        for (var q = 0; q < items.length; q++) if (hiraOnly(items[q].kana) === h) return true;
+        return false;
+      }
+      function add(kana, suffix) {
+        if (!kana || have(kana)) return;
+        items.push({ kana: kana, label: kana + suffix });
+      }
+      var on = WKKanjiReadings.onOf(single);
+      var kun = WKKanjiReadings.kunOf(single);
+      var i;
+      for (i = 0; i < on.length; i++) add(on[i], "（音）");
+      for (i = 0; i < kun.length; i++) add(kun[i], "（训）");
+      // 促音便：音读也做（一 いち → いっ、発 はつ → はっ、学 がく → がっ）
+      for (i = 0; i < on.length; i++) add(sokuonForm(on[i]), "（促）");
+      for (i = 0; i < kun.length; i++) add(sokuonForm(kun[i]), "（促）");
+      // 连浊 / 半浊：训读首字变音（手 て → で、花 はな → ばな / ぱな）
+      for (i = 0; i < kun.length; i++) {
+        var head = kun[i].charAt(0);
+        if (VOICE_MAP[head]) add(VOICE_MAP[head] + kun[i].slice(1), "（浊）");
+        if (SEMI_MAP[head]) add(SEMI_MAP[head] + kun[i].slice(1), "（半浊）");
+      }
+      return items;
+    }
+
+    /**
+     * 音便：促音便对**所有**候选读音都生成；连浊 / 半浊只对第一个读音，
+     * 而且只认 は 行（花 はな → ばな / ぱな、人 ひと → びと）——
+     * 别的行大量生成只会冒出「かか → がか」这种不存在的音。
+     */
+    function withOnbin(single, items) {
+      if (!/^[\u4E00-\u9FFF]$/.test(single)) return items;
+      function have(kana) {
+        var h = hiraOnly(kana);
+        for (var q = 0; q < items.length; q++) if (hiraOnly(items[q].kana) === h) return true;
+        return false;
+      }
+      function add(kana, suffix) {
+        if (!kana || have(kana)) return;
+        items.push({ kana: kana, label: kana + suffix });
+      }
+      var base = items.slice();
+      var i;
+      for (i = 0; i < base.length; i++) add(sokuonForm(base[i].kana), "（促）");
+      if (base.length) {
+        var first = String(base[0].kana || "");
+        var h0 = first.charAt(0);
+        if (h0 && SEMI_MAP[h0]) {
+          add(VOICE_MAP[h0] + first.slice(1), "（浊）");
+          add(SEMI_MAP[h0] + first.slice(1), "（半浊）");
+        }
+      }
+      return items;
+    }
     if (list && list.length) {
       for (i = 0; i < list.length; i++) {
         var v = list[i];
         if (typeof v === "string") out.push({ kana: v, label: v });
         else if (v && v.kana && keep(v)) out.push({ kana: v.kana, label: v.label || v.kana });
       }
-      return dedupe(out);
+      /*
+       * 手写表已经列过这个字（行 / 抱 / 解 / 寂 / 良 / 皆 / 四 / 七 / 灯…）就不再拿
+       * 常用漢字表往上堆：那些字的候选是"动词 / 形容词词干"这一档，堆上 ぎょう・せき・じゃく
+       * 只会把按钮撑满。表只在"没有任何专门候选"的字上补（共 / 間 / 夢 / 鳴…）。
+       */
+      return dedupe(withOnbin(word, out));
     }
     // 多位数（12 / 105）：整串读法 + 逐个数字读（日语 / 英文片假名）
     if (/^[0-9]+$/.test(norm)) {
       var nums = numberVariants(norm);
       if (nums.length) return dedupe(nums);
     }
-    if (typeof WKFurigana === "undefined" || !WKFurigana.variants) return out;
+    if (typeof WKFurigana === "undefined" || !WKFurigana.variants) {
+      return dedupe(withOnbin(word, withKanjiReadings(word, out)));
+    }
     var found = [];
     try {
       found = WKFurigana.variants(lineText, at, word) || [];
@@ -2510,7 +2630,7 @@
       if (!f || !f.kana) continue;
       out.push({ kana: f.kana, label: f.label || f.kana });
     }
-    return dedupe(out);
+    return dedupe(withOnbin(word, withKanjiReadings(word, out)));
   }
 
   function openEditor(rubyEl) {
@@ -4182,7 +4302,34 @@
     out.sort(function (a, b) {
       return a.start - b.start;
     });
-    return out;
+    /*
+     * 相邻的两个汉字读音合成一个注音单元。
+     *
+     * 网站的振假名是按"词"给的（共 とも + 鳴 な），中间没有假名隔开时，
+     * 分成两个 ruby 会变成 `共` 一个读音、`鳴` 一个读音，看着像两个词 ——
+     * 而 `共鳴らせ` 里 共鳴 是一个整体（ともな）。只在"两边都是汉字、紧挨着、
+     * 都有读音"时才合，跨假名 / 跨标点不动。
+     */
+    var merged = [];
+    for (i = 0; i < out.length; i++) {
+      var tk2 = out[i];
+      var prev = merged.length ? merged[merged.length - 1] : null;
+      if (
+        prev &&
+        tk2.kind === "external" &&
+        prev.kind === "external" &&
+        prev.end === tk2.start &&
+        /^[\u4E00-\u9FFF\u3005]+$/.test(prev.text) &&
+        /^[\u4E00-\u9FFF\u3005]+$/.test(tk2.text)
+      ) {
+        prev.text += tk2.text;
+        prev.end = tk2.end;
+        prev.kana += tk2.kana;
+        continue;
+      }
+      merged.push(tk2);
+    }
+    return merged;
   }
 
   /**

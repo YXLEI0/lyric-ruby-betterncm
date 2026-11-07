@@ -5442,7 +5442,7 @@ test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 / �
   assert.strictEqual(read()[0][1], "みょうにち", "点候选直接切过去：" + p.innerHTML);
   assert.ok(env.document.querySelector("input.wk-edit"), "点了候选编辑器别关，能接着点另一个");
 
-  // 行：按钮显示 いく / ゆく，存的是词干 い / ゆ
+  // 行：按钮显示 いく / ゆく，存的是词干 い / ゆ（后面还会跟单字表的音读 / 训读）
   dbl(rubyOf("行"));
   await sleep(50);
   assert.deepStrictEqual(chipTexts(), ["いく", "ゆく"], "行 的候选");
@@ -5450,10 +5450,10 @@ test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 / �
   await sleep(500);
   assert.strictEqual(read()[1][1], "ゆ", "行 = ゆ：" + p.innerHTML);
 
-  // 抱：だく / いだく
+  // 抱：だく / いだく / かかえる / だっこ（后面是单字表的读音）
   dbl(rubyOf("抱"));
   await sleep(50);
-  assert.deepStrictEqual(chipTexts(), ["だく", "いだく"], "抱 的候选");
+  assert.deepStrictEqual(chipTexts(), ["だく", "いだく", "かかえる", "だっこ"], "抱 的候选");
   mdown(chip("だく"));
   await sleep(500);
   assert.strictEqual(read()[2][1], "だ", "抱 = だ：" + p.innerHTML);
@@ -5609,7 +5609,11 @@ test("单字多读法：歌 うた/か、詩 し/うた、花 はな/か 也能�
   assert.strictEqual(rubies()[1].querySelector(".wk-rt").textContent, "うた", "詩 = うた：" + p.innerHTML);
   dbl(rubies()[2]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["はな", "か"], "花 的候选");
+  assert.deepStrictEqual(
+    chips().map((b) => b.textContent),
+    ["はな", "か", "ばな（浊）", "ぱな（半浊）"],
+    "花 的候选（后面是音便）"
+  );
 });
 
 test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、微笑 びしょう/ほほえみ）", async () => {
@@ -6811,4 +6815,130 @@ test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假�
   en.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(byWord('105').querySelector('.wk-rt').textContent, 'ワンゼロファイブ', p.innerHTML);
+});
+
+test("单字候选：补上常用漢字表里的所有音读 / 训读（标「音」「训」）", async () => {
+  /*
+   * 词里的单字只露得出词内读法（間違 的 間 = ま），用户想换成 あいだ / かん 时以前没按钮。
+   * 现在双击一个汉字，会把常用漢字表里的音读 / 训读也列出来。
+   */
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>間と夢</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 間: "マ", と: "ト", 夢: "ユメ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector('ul.lyric li p');
+  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  dbl(byWord('間'));
+  await sleep(50);
+  const got = chips();
+  assert.ok(got.indexOf('かん（音）') >= 0, '要有音读 かん（音）：' + got.join('/'));
+  assert.ok(got.indexOf('けん（音）') >= 0, '要有音读 けん（音）：' + got.join('/'));
+  assert.ok(got.indexOf('あいだ（训）') >= 0, '要有训读 あいだ（训）：' + got.join('/'));
+  assert.ok(got.indexOf('ま（训）') >= 0, '训读 ま 也在：' + got.join('/'));
+  // 点「あいだ（训）」要立刻换过去
+  const kun = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'あいだ（训）')[0];
+  kun.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(byWord('間').querySelector('.wk-rt').textContent, 'あいだ', p.innerHTML);
+  dbl(byWord('夢'));
+  await sleep(50);
+  const got2 = chips();
+  assert.ok(got2.some((t) => t.indexOf('む') >= 0), '夢 的音读：' + got2.join('/'));
+  assert.ok(got2.some((t) => t.indexOf('ゆめ') >= 0), '夢 的训读：' + got2.join('/'));
+});
+
+test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async () => {
+  /*
+   * 同一个字在词里会变音：手 て → で（拍手）、花 はな → ばな / ぱな、一 いち → いっ（一回）。
+   * 这些读音常用漢字表里没有单列，按规则生成后一起列进候选。
+   */
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>手と一と花</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 手: "テ", と: "ト", 一: "イチ", 花: "ハナ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector('ul.lyric li p');
+  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  dbl(byWord('手'));
+  await sleep(50);
+  assert.ok(chips().indexOf('で（浊）') >= 0, '手 的连浊 で：' + chips().join('/'));
+  dbl(byWord('一'));
+  await sleep(50);
+  assert.ok(chips().indexOf('いっ（促）') >= 0, '一 的促音便 いっ：' + chips().join('/'));
+  dbl(byWord('花'));
+  await sleep(50);
+  assert.ok(chips().indexOf('ばな（浊）') >= 0, '花 的连浊 ばな：' + chips().join('/'));
+  assert.ok(chips().indexOf('ぱな（半浊）') >= 0, '花 的半浊 ぱな：' + chips().join('/'));
+});
+
+test("日期词：一日 给 いちにち / ついたち，二日~十日 也给另一种读法", async () => {
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>一日の</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 一日: "イチニチ", の: "ノ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector('ul.lyric li p');
+  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  dbl(byWord('一日'));
+  await sleep(50);
+  assert.deepStrictEqual(chips(), ['いちにち', 'ついたち'], '一日 的候选：' + chips().join('/'));
+  // 点 ついたち 要立刻换过去
+  const t = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'ついたち')[0];
+  t.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(byWord('一日').querySelector('.wk-rt').textContent, 'ついたち', p.innerHTML);
+});
+
+test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async () => {
+  /*
+   * 歌词里「共鳴らせたなら」读 ともならせたなら（共 = とも），
+   * 词典按 共鳴 きょうめい 注成 きょう 时，双击 共 要能换成 とも。
+   */
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>共鳴らせたなら</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 共: "キョウ", 鳴: "メイ", らせたなら: "ラセタナラ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector('ul.lyric li p');
+  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  dbl(byWord('共'));
+  await sleep(50);
+  assert.ok(chips().indexOf('とも（训）') >= 0, '共 的训读 とも：' + chips().join('/'));
+  const t = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'とも（训）')[0];
+  t.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(byWord('共').querySelector('.wk-rt').textContent, 'とも', p.innerHTML);
+  dbl(byWord('鳴'));
+  await sleep(50);
+  assert.ok(chips().indexOf('な（训）') >= 0, '鳴 的训读 な：' + chips().join('/'));
+});
+
+test("外部网站读音：相邻汉字合成一个注音单元（共鳴 ともな，不是 共 きょう + 鳴 な）", async () => {
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>共鳴らせたなら</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true },
+  });
+  env.window.__WK_TRACK__ = { id: '4242', title: '共鳴', artists: ['x'] };
+  env.window.localStorage.setItem('lyric-ruby.external.v1', "{\"id:4242\":{\"at\":1,\"title\":\"共鳴\",\"artists\":[\"x\"],\"url\":\"https://utaten.com/lyric/abc/\",\"lines\":[{\"text\":\"共鳴らせたなら\",\"segments\":[{\"text\":\"共\",\"rt\":\"とも\"},{\"text\":\"鳴\",\"rt\":\"な\"},{\"text\":\"らせたなら\"}]}]}}");
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 共: 'キョウ', 鳴: 'メイ', らせたなら: 'ラセタナラ' }));
+  await env.runLoad();
+  await sleep(1200);
+  const p = env.document.querySelector('ul.lyric li p');
+  const pairs = Array.from(p.querySelectorAll('ruby.wk-ruby')).map((r) => [r.childNodes[0].nodeValue, r.querySelector('.wk-rt').textContent]);
+  assert.deepStrictEqual(pairs, [['共鳴', 'ともな']], '相邻汉字要合成一个：' + p.innerHTML);
+  // 双击这个合并后的注音，候选里有 きょうめい
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  dbl(p.querySelector('ruby.wk-ruby'));
+  await sleep(50);
+  const chips = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  assert.ok(chips.indexOf('きょうめい') >= 0, '共鳴 的候选：' + chips.join('/'));
 });
