@@ -37,6 +37,27 @@ function baseText(el) {
   return clone.textContent;
 }
 
+/**
+ * 整行改写的那个 wrap（`span.wk-line`）。
+ * 一行一行重写之后，这一行的内容全在里面，宿主自己只剩这一个子节点。
+ */
+function lineWrap(el) {
+  return el.querySelector("span.wk-line");
+}
+
+/**
+ * 框架（React）攥着的那个原文本节点。
+ *
+ * 整行改写**不删**它、只把值清空，然后塞进 wrap 的末尾（见 annotate.js 的
+ * buildWrapEl）。所以它是 wrap 里最后一个文本节点。
+ */
+function keptTextNode(el) {
+  const wrap = lineWrap(el);
+  if (!wrap) return null;
+  const texts = [...wrap.childNodes].filter((n) => n.nodeType === 3);
+  return texts.length ? texts[texts.length - 1] : null;
+}
+
 test("把拉丁词包成 ruby，注音是片假名读音", () => {
   const ctx = newCtx();
   const ann = makeAnnotator(ctx);
@@ -80,11 +101,14 @@ test("词正好在文本开头时，注音不能跑到行尾", () => {
 
   const p = ctx.document.querySelector("p");
   /*
+   * 整行改写之后这一行的内容都在 `span.wk-line` 里（见 annotate.js 的 wrapLineNow）。
    * 行首那个空的原文本节点是刻意留着的（框架还攥着它的引用，摘掉就收不到
-   * 换歌时写进来的新歌词 —— 见 annotate.js 里 leadIsRuby 那段）。所以判"注音在行首"
-   * 要看第一个看得见的东西，而不是 firstChild。
+   * 换歌时写进来的新歌词 —— 见 buildWrapEl 那段），它在 wrap 的末尾、不占位置。
+   * 所以判"注音在行首"要看 wrap 里第一个看得见的东西。
    */
-  const firstVisible = [...p.childNodes].find(
+  const wrap = lineWrap(p);
+  assert.ok(wrap, "整行要被一个 wrap 包住：" + p.innerHTML);
+  const firstVisible = [...wrap.childNodes].find(
     (n) => n.nodeType === 1 || (n.nodeValue || "").length > 0
   );
   assert.strictEqual(firstVisible.nodeType, 1);
@@ -112,7 +136,8 @@ test("换歌：行首是拉丁词的行，框架改写原文本节点之后必�
   );
 
   // 换歌：框架复用同一个文本节点，只把值换成新歌词（React 的老套路）
-  const orig = p.firstChild;
+  const orig = keptTextNode(p);
+  assert.ok(orig, "原文本节点必须还在 DOM 里（不能被我们摘掉）");
   assert.strictEqual(orig.nodeType, 3, "原文本节点必须还在 DOM 里（不能被我们摘掉）");
   assert.strictEqual(orig.nodeValue, "", "行首形态下我们把它清空，词都在 ruby 里");
   orig.nodeValue = "そして light が 消えた";
@@ -251,8 +276,7 @@ test("换歌：框架复用同一行只换文字时，上一首的注音必须�
   assert.strictEqual(baseText(p), "きらめく light と clover", "前提：先注上音");
 
   // 模拟换歌：复用第一个文本节点，只换值
-  let firstText = null;
-  for (const n of p.childNodes) if (n.nodeType === 3) { firstText = n; break; }
+  const firstText = keptTextNode(p);
   assert.ok(firstText, "前提：宿主里有我们的原文本节点");
   firstText.nodeValue = "新しい歌の clover";
 
@@ -329,8 +353,8 @@ test("换歌：禁用/重扫时的还原也不能把上一首的歌词写回去"
   ann.pass();
   const p = ctx.document.querySelector("p");
 
-  let firstText = null;
-  for (const n of p.childNodes) if (n.nodeType === 3) { firstText = n; break; }
+  const firstText = keptTextNode(p);
+  assert.ok(firstText, "前提：宿主里有我们的原文本节点");
   firstText.nodeValue = "新しい歌の メロディ";
 
   // restoreAll 是禁用插件、改设置、大模型结果回来时都会走的路径

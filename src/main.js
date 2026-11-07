@@ -10,8 +10,11 @@
  *   2. 日式罗马音切分（sekai -> セカイ，歌词里官方写的罗马音）
  *   3. 西文各语种的拼读（core/langs.js：法 / 德 / 拉 / 葡 / 荷 / 斯瓦希里 / 拼音 / 俄 / 希）
  *      以及各语言的借词表（core/loan.js）
- *   4. 大模型校正 / 免费接口（配了 key 或开着在线时，只查"猜的、没把握"的词）
+ *   4. 免费接口（开着在线时，只查"猜的、没把握"的词）
  *   5. 英文音译规则（light -> ライト，兜底，永远给得出结果）
+ *
+ * 日语读音不走大模型（只留离线词典 / 罗马音 / 网站读音 / 规则，可复现、不花钱）；
+ * 大模型那层只服务中文歌词的多音字。
  *
  * 另外两档"整首 / 整句专属读音"排在所有层前面（core/songs.js 与本文件里的
  * LINE_READINGS）；"连字符标记长音"是在常规读音之后再补一拍。
@@ -140,7 +143,7 @@
   var DEFAULTS = {
     enabled: true,
     online: true, // 词典/规则都没把握时是否联网校正（Google 接口，不用填 key）
-    // ---- 大模型校正（质量比规则高一个数量级，需要自己填 key）
+    // ---- 大模型（只用于中文歌词的多音字；日语读音不走它）
     llmEnabled: true,
     llmEndpoint: "https://api.deepseek.com/chat/completions",
     llmModel: "deepseek-chat",
@@ -150,7 +153,7 @@
      * 记号 / 缩写 / 字母名 / 长音符罗马字不在这张表里 —— 那是"这个词该怎么断"，
      * 不是"读音该信谁"，永远最先判（见 core/reading.js 的 lookup）。
      */
-    layerOrder: ["dict", "romaji", "llm", "google", "rule"],
+    layerOrder: ["dict", "romaji", "google", "rule"],
     // ---- API 用量统计：单价只用来"估算花费"，0 = 不算（单位：元 / 百万 token）
     usagePriceIn: 0,
     usagePriceOut: 0,
@@ -207,6 +210,12 @@
     uniformLineHeight: true,
     // 统一行距用的行高（有注音/没注音都按它）
     lineHeight: 1.6,
+    /*
+     * 整行改写（照 jp-furigana 的模型）：一行一次切词、整行重建 + 一个 wrap 包住，
+     * 逐字歌词按格子长度分发。关掉就回到"一个文本节点打一次补丁"的老路径。
+     * 留着这个开关是为了出问题时能一个键退回去（改配置不用重装插件）。
+     */
+    wrapLines: true,
     // 日语歌的歌词换成日文字体（中文字体里的日文汉字字形是中文写法，`直` / `骨` 这种一眼看出）
     jpnFont: true,
     jpnFontFamily: JP_FONT_DEFAULT,
@@ -226,11 +235,10 @@
    * 记号 / 缩写 / 字母名 / 长音符罗马字（`D/N/A`、`I'll`、`LDK`、`Tōkyō`）不在这张表里，
    * 它们决定的不是"读音该信谁"，而是"这个词该怎么断"，永远最先判。
    */
-  var LAYER_IDS = ["dict", "romaji", "llm", "google", "rule"];
+  var LAYER_IDS = ["dict", "romaji", "google", "rule"];
   var LAYER_NAMES = {
     dict: "离线词典",
     romaji: "日式罗马音",
-    llm: "大模型校正",
     google: "免费接口",
     rule: "英文音译规则",
   };
@@ -1865,19 +1873,12 @@
           var guessKana = guessRomaji;
           if (guessKana) return { kana: guessKana, source: "romaji", confident: false };
           /*
-           * 罗马音也读不出来（`KRO`）：先用表里的**本地兜底**顶着（クロ，标成没把握，
-           * 大模型仍可改）；表里也没有才空着、只把这个词记进大模型的待问队列。
+           * 罗马音也读不出来（`KRO`）：先用表里的**本地兜底**顶着（クロ，标成没把握）；
+           * 表里也没有就空着，等下次词典/词表更新。
            */
           var capsKey = capsWord.toLowerCase();
           var fallbackKana = own(UNCERTAIN_FALLBACK, capsKey) ? UNCERTAIN_FALLBACK[capsKey] : null;
           if (fallbackKana) return { kana: fallbackKana, source: "rule", confident: false };
-          if (state.llm && state.llm.want) {
-            try {
-              state.llm.want(capsWord, line);
-            } catch (e) {
-              /* 记不上不影响注音 */
-            }
-          }
           return null;
         }
       }
@@ -2036,34 +2037,7 @@
       if (!ASYNC_LAYERS[id]) continue;
       // 排在当前答案后面的在线层不参与：不发请求、也不覆盖
       if (i >= mine) break;
-      /*
-       * 大模型这一层现在用不了（没配 key / 没开）也要记一笔：
-       * 注音层只在注音那一刻走这里一次，不记的话等 key 补上/这一层重新打开时
-       * 就没人再问那个词了 —— 页面上看到的正是「这个单词一直是黄的」
-       * （`sieh` 就是这么一直黄着的）。记下来之后，这一层一可用就会补问。
-       */
-      if (id === "llm" && !layerAvailable(id)) {
-        if (state.llm.want) {
-          try {
-            state.llm.want(word, line);
-          } catch (e) {
-            /* 记不上不影响注音 */
-          }
-        }
-        continue;
-      }
       if (!layerAvailable(id)) continue;
-
-      if (id === "llm") {
-        if (line !== undefined && line !== null) {
-          var llm = state.llm.lookup(word, line);
-          if (llm) return { kana: llm, source: "llm" };
-        }
-        // 这个词还没问到结果：先用在别的句子里拿到的读音，其次用当前这层的读音顶上
-        var seen = state.llm.peek(word);
-        if (seen) return { kana: seen, source: "llm" };
-        return { kana: r.kana, source: r.source };
-      }
 
       // 免费接口（Google）
       var fixed = state.corrector.lookup(word);
@@ -2110,11 +2084,7 @@
       if (!ASYNC_LAYERS[id]) continue;
       if (i >= mine) break; // 这一层不参与，后面的更不参与
       if (!layerAvailable(id)) continue;
-      if (id === "llm") {
-        if (state.llm.isWaiting && state.llm.isWaiting(word, line)) return true;
-      } else if (state.corrector.isWaiting && state.corrector.isWaiting(word)) {
-        return true;
-      }
+      if (state.corrector.isWaiting && state.corrector.isWaiting(word)) return true;
       // 这一层已经答过了（或确定给不出）—— 显示的就是最终答案，不是暂定
       return false;
     }
@@ -2270,7 +2240,7 @@
         var qc = typeof q.className === "string" ? q.className : "";
         // 到了我们自己的 ruby 就停：里面是底字，要算进位置里
         if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(qc)) break;
-        if (q !== lineEl && fontSkipped(q)) {
+        if (q !== lineEl && (fontSkipped(q) || RE_FILLER_TWIN.test(qc))) {
           skippedLayer = true;
           break;
         }
@@ -3482,45 +3452,6 @@
       if (line.indexOf(rules[i].scope) < 0) continue;
       fixes[rules[i].word] = rules[i].kana;
     }
-    /*
-     * 模型的答案不在本地词表里，而是"这句歌词 + 这个词"的缓存 ——
-     * 同一句里问过就带上，换一句重新问（读数本来就可能不同）。
-     */
-    if (llmAvailable() && state.llm && state.llm.lookup && typeof WKFurigana !== "undefined" && WKFurigana.candidates) {
-      var list = null;
-      try {
-        list = WKFurigana.candidates(text, romajiOf(host), {
-          kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
-        });
-      } catch (e) {
-        list = null;
-      }
-      /*
-       * 只带**这一句**（用户明确要求）：以前还塞了前后各一句，模型会照着邻句
-       * 猜读音 —— 上一句里的 上々 会把这一句的 上 答成 じょうじょう。
-       * 句子本身就是它自己最好的语境。
-       */
-      var extra = { kind: "ja", romaji: romajiOf(host) || "" };
-      for (var j = 0; list && j < list.length; j++) {
-        var word = list[j].text;
-        if (Object.prototype.hasOwnProperty.call(fixes, word)) continue; // 手填的优先
-        var got = null;
-        try {
-          got = state.llm.lookup(word, line, null, extra);
-        } catch (e2) {
-          got = null;
-        }
-        if (got) {
-          fixes[word] = got;
-          continue;
-        }
-        try {
-          state.llm.want(word, line, null, extra);
-        } catch (e3) {
-          /* 记不上不影响注音 */
-        }
-      }
-    }
     return fixes;
   }
 
@@ -3529,6 +3460,27 @@
    * 都要往上爬三层找一次 `-romaji` 兄弟节点，纯属重复劳动。
    */
   var romajiCache = { gen: -1, map: new WeakMap() };
+
+  /**
+   * 整行切词时"从哪个元素往上找音译层"。
+   *
+   * `romajiOf(host)` 是从 host 的**父元素**的子节点里找 `-romaji` 那一层的
+   * （逐字层是 line > karaoke > word > span，音译是 line > -romaji）。
+   * 整行改写交给它的 host 是"区域"自己（rnp-lyrics-line），音译层就在它**里面**，
+   * 从区域往上找永远找不到 —— 于是音译兜底（读不出的汉字用页面音译补读音）整条失效。
+   * 所以先钻到"原文"那一层（音译层和它是兄弟）。
+   */
+  function lineTokenHost(region) {
+    if (!region || region.nodeType !== 1) return region;
+    var kids = region.children || [];
+    for (var i = 0; i < kids.length; i++) {
+      var el = kids[i];
+      if (fontSkipped(el)) continue;
+      var own = ownText(el);
+      if (own && own.replace(/\s+/g, "")) return el;
+    }
+    return region;
+  }
 
   /** 同一条歌词的音译层（RNP / NCM 都可能把罗马音放在兄弟节点里） */
   function romajiOf(host) {
@@ -5002,6 +4954,15 @@
   var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
   var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
   var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
+  /*
+   * RNP slide 动画的替身（`span.rnp-karaoke-word-filler`）：内容与本体一字不差，
+   * 绝对定位叠在本体上。它**不是歌词** —— 算进行文本的话整行每个字都会出现两遍
+   * （就地改读音存的键、判语种、量行宽全都跟着错）。注音层的 originalTextOf
+   * 一直跳过它，这里必须一致。
+   */
+  var RE_FILLER_TWIN = /(^|\s)rnp-karaoke-word-filler(\s|$)/;
+  /** 注音层整行改写的那个 wrap（`span.wk-line`） */
+  var RE_WRAP_LINE = /(^|\s)wk-line(\s|$)/;
   function karaokeTextOf(node) {
     var t = node && node.nodeValue ? node.nodeValue : "";
     if (!t || !/[\s\u3000]/.test(t)) return t;
@@ -5054,7 +5015,7 @@
            * （真机现象：`(aha) 唸る 808` 的行文本变成 `() 唸る 808`，就地改读音对不上）。
            */
           if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(cn)) break;
-          if (q !== region && fontSkipped(q)) {
+          if (q !== region && (fontSkipped(q) || RE_FILLER_TWIN.test(cn))) {
             skipped = true;
             break;
           }
@@ -5404,6 +5365,15 @@
     try {
       for (var n = el.firstChild; n; n = n.nextSibling) {
         if (n.nodeType === 3) t += n.nodeValue || "";
+        /*
+         * 整行改写之后，这一行自己的文字全在 `span.wk-line` 里（注音层把
+         * 一行的内容包成一个 wrap，见 annotate.js 的 wrapLineNow）。
+         * 不把它算成"这一层自己的文本"，行高 / 日文字体的目标就会落到 wrap 上 ——
+         * 真机现象：`line-height` 写进了 span，统一行距看起来完全没生效。
+         */
+        else if (n.nodeType === 1 && RE_WRAP_LINE.test(String(n.className || ""))) {
+          t += originalText(n);
+        }
       }
     } catch (e) {
       return "";
@@ -5872,10 +5842,17 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateLatinJa"> 日语歌里夹的西文也标</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 中文歌词标普通话读音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 朝鲜语歌词标朝鲜语读音</label></div>' +
-      "<h3>大模型校正</h3>" +
-      '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
+      "<h3>大模型</h3>" +
+      /*
+       * 日语读音**不走大模型**了（用户明确要求删掉那一路）：本插件给日语歌词
+       * 标的读音只来自词典 / 罗马音 / 网站 / 规则，可复现、不花钱、不会因为
+       * 模型换个答案就变。这里留着的大模型只服务一件事：中文歌词里的多音字
+       * （`行` 读 xíng 还是 háng）—— 中文没有网站读音兜底，离线表只能给最常见那档。
+       */
+      '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型挑中文多音字读音</label></div>' +
       '<div class="wk-row"><input type="password" data-k="llmKey" placeholder="大模型 API Key（留空则不用）"> ' +
       '<button data-a="llmTest">测试</button> <span data-v="llmTest"></span></div>' +
+      '<div class="wk-hint">只影响中文歌词（普通话读音）；日语读音不用大模型。</div>' +
       "<h3>预览</h3>" +
       '<div class="wk-preview"></div>' +
       '<details class="wk-adv"><summary>高级设置</summary>' +
@@ -5952,7 +5929,6 @@
       if (id === "dict") return "(" + (typeof WKDict !== "undefined" ? WKDict.count : "?") + " 条, 纯离线)";
       if (id === "romaji") return "(歌词里的日式罗马字, 纯离线)";
       if (id === "rule") return "(拼写音译, 永远给得出结果)";
-      if (id === "llm") return llmAvailable() ? "(已启用)" : "(没启用 / 没填 key)";
       if (id === "google") return googleAvailable() ? "(已开启)" : "(已关闭)";
       return "";
     }
@@ -7013,6 +6989,17 @@
         extraTokens: function (text, context, host, offset, lineText) {
           return extraTokens(text, context, host, offset, lineText);
         },
+        /*
+         * 整行改写引擎要的 token：整行一次切完（见 core/annotate.js 的 wrapOneLine）。
+         *
+         * 和老路径的 extraTokens 是同一套判据，区别只在"切什么"：
+         * 老路径切的是一个文本节点的文字（逐字歌词一行几十个格子就要把整行切几十遍，
+         * 那是卡顿的主因），这里切的是整行原文 —— 一行一次。
+         */
+        lineTokens: function (text, region) {
+          return extraTokens(text, text, lineTokenHost(region), undefined, text);
+        },
+        wrapLines: config.wrapLines !== false,
         annotateAll: config.annotateAll !== false,
         /*
          * 西文要不要标：总开关 + 日语歌里那一档（每个节点都会问一次，

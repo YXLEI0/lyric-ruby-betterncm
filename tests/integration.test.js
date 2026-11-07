@@ -352,55 +352,6 @@ const LLM_HTML = `<!doctype html><html><head></head><body>
 </div>
 </body></html>`;
 
-test("大模型层：规则读歪的词，结果回来之后注音会被换上（先即时、后修正）", async () => {
-  // 走整条真实链路：boot -> 规则先给一个即时读音 -> 入队 -> 一批问完 ->
-  // onUpdate 重扫 -> DOM 里的注音被换成大模型的写法。
-  const requests = [];
-  const env = bootPlugin(LLM_HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      // 免费那层（core/correct.js）也会调 fetch，而且是 GET、没有 body ——
-      // 这里一并当"离线"拒掉，免得它把下面的 JSON.parse 搞炸（测试噪音）
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      // 提示词里的条目是 [{i, w, line}]：w 是词，line 是整句歌词（语境）
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      const words = items.map((it) => it.w);
-      requests.push({ url: url, words: words, items: items, auth: init.headers.Authorization });
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = it.w === "kaleidoscope" ? "カレイドスコープ" : "ダミー";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-
-  assert.ok(requests.length >= 1, "应该向大模型发过请求");
-  assert.strictEqual(requests[0].auth, "Bearer sk-test", "key 要按 Bearer 发出去");
-  assert.ok(requests[0].words.indexOf("kaleidoscope") >= 0, "词典里没有的词要进队列：" + requests[0].words.join(","));
-  assert.ok(requests[0].words.indexOf("light") < 0, "词典命中的词不该浪费请求：" + requests[0].words.join(","));
-  // 语境要一起发过去：line 是那一整句歌词
-  assert.ok(
-    requests[0].items[0].line.indexOf("kaleidoscope") >= 0,
-    "请求里要带上整句歌词当语境：" + JSON.stringify(requests[0].items)
-  );
-
-  const s = env.api.stats().llm;
-  assert.ok(s && s.hasKey === true && s.requests >= 1 && s.hits >= 1, JSON.stringify(s));
-
-  // 关键：DOM 里那个词现在必须是大模型给的读音，不是规则拼出来的
-  const line = env.document.querySelector("ul.lyric li p");
-  const pairs = [...line.querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
-  assert.ok(pairs.indexOf("カレイドスコープ") >= 0, "注音应该被换成大模型的读音：" + pairs.join(","));
-  assert.strictEqual(baseText(line), "きらめく kaleidoscope の light", "底字不许动");
-});
-
 test("大模型层没配 key 时：一切照旧走本地，不发任何请求", async () => {
   let called = 0;
   const env = bootPlugin(NCM_HTML, {
@@ -1252,35 +1203,22 @@ test("控制台诊断：WK 短别名存在，llm.check() 能一句话回答「�
   assert.ok(idle.indexOf("全在离线词典里") >= 0, idle);
 });
 
-test("控制台诊断：WK.display() 给的是页面上实际用的读音（可能是大模型换过的）", async () => {
-  const env = bootPlugin(LLM_HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = it.w === "kaleidoscope" ? "カレイドスコープ" : "ダミー";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
+test("控制台诊断：WK.display() 给的是页面上实际用的读音", async () => {
+  /*
+   * display() 是"给排障看的那一份答案"：它必须和页面上写着的注音一致，
+   * 否则用户照着它去核对，永远对不上。（以前它比 page 多一层大模型改写，
+   * 那条路已经删了 —— 日语读音只走词典 / 罗马音 / 网站 / 规则。）
+   */
+  const env = bootPlugin(LLM_HTML, { config: { online: false, llmEnabled: false } });
   await env.runLoad();
-  await sleep(1400);
+  await sleep(600);
 
-  // 本地规则给的是一个拼出来的读音，display() 应该是大模型换上的那个
-  const local = env.window.WK.read("kaleidoscope");
-  assert.strictEqual(local.source, "rule", "前提：词典里没有这个词：" + JSON.stringify(local));
-  assert.strictEqual(env.window.WK.display("kaleidoscope"), "カレイドスコープ");
-  assert.notStrictEqual(env.window.WK.display("kaleidoscope"), local.kana, "display 和 read 应该不一样");
+  const ruby = env.document.querySelector("ruby.wk-ruby");
+  assert.ok(ruby, "前提：先注上音");
+  const shown = ruby.querySelector(".wk-rt").textContent;
+  assert.strictEqual(env.window.WK.display("kaleidoscope"), shown, "display 要和页面上的注音一致");
+  assert.strictEqual(env.window.WK.read("kaleidoscope").source, "rule", "词典里没有这个词，走规则层");
 
-  const verdict = env.window.WK.llm.check();
-  assert.ok(verdict.indexOf("已经生效") >= 0, verdict);
 });
 
 test("带变音符号的 Ō 也要注音（Tōkyō -> トーキョー）", async () => {
@@ -1417,117 +1355,43 @@ test("层序可调：把英文规则提到在线层前面 = 一个请求都不�
   assert.strictEqual(s.llm.requests, 0, "大模型一次都没问");
 });
 
-test("层序可调：把大模型提到词典前面，词典命中的词也会被模型改写", async () => {
-  // 词典偶有错条目（tick / ave 这类已知的），这是逃生门：
-  // 把大模型排到词典上面，词典命中的词也交给它判一遍。
-  const requests = [];
-  const env = bootPlugin(LLM_HTML, {
-    config: {
-      llmEnabled: true,
-      llmKey: "sk-test",
-      llmEndpoint: "https://api.example.com/v1/chat/completions",
-      layerOrder: ["llm", "dict", "romaji", "google", "rule"],
-    },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      requests.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        // 必须给合法片假名：读音会被 looksLikeTransliteration 校验，
-        // 带全角括号这种"不是音译"的答案会被丢掉（那正是那层该干的事）
-        out[String(i + 1)] = it.w === "light" ? "レフト" : "カレイドスコープ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-
-  const words = [].concat.apply([], requests);
-  assert.ok(words.indexOf("light") >= 0, "词典命中的 light 也要问（它排在模型下面）：" + words.join(","));
-  const p = env.document.querySelector("ul.lyric li p");
-  const got = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
-  assert.deepStrictEqual(
-    got,
-    [
-      ["kaleidoscope", "カレイドスコープ"],
-      ["light", "レフト"],
-    ],
-    "两个词都要换成模型给的读音：" + JSON.stringify(got)
-  );
-  assert.strictEqual(baseText(p), "きらめく kaleidoscope の light");
-});
-
-test("层序可调：默认顺序下词典压过大模型（词典命中的词不进队列）", async () => {
-  // 这是默认口径，上面那条测试正是它的反面 —— 两条一起钉住"顺序真的起作用"
-  const requests = [];
-  const env = bootPlugin(LLM_HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      requests.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "カレイドスコープ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-  const words = [].concat.apply([], requests);
-  assert.ok(words.indexOf("light") < 0, "默认顺序下词典命中不该问模型：" + words.join(","));
-});
-
 test("层序可调：设置面板的 ↑↓ 按钮能改顺序、落盘，并立刻重扫", async () => {
   const env = bootPlugin(NCM_HTML, { dev: true });
   await env.runLoad();
   // `[...]` 是必须的：WK.layers() 里那个数组来自 jsdom 的 realm，
   // 直接 deepStrictEqual 会因为原型不同而假报错
-  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "llm", "google", "rule"], "默认顺序");
+  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "google", "rule"], "默认顺序");
 
   const root = env.listeners.config[0]();
   const rows = root.querySelectorAll(".wk-layers .wk-layer");
-  assert.strictEqual(rows.length, 5, "五层都要列出来：" + root.querySelector(".wk-layers").innerHTML);
+  assert.strictEqual(rows.length, 4, "四层都要列出来：" + root.querySelector(".wk-layers").innerHTML);
 
   // 第一层的 ↓：词典和罗马音对调
   const down = rows[0].querySelector('[data-dir="down"]');
   assert.ok(down, "第一层要有 ↓ 按钮");
   down.dispatchEvent(new env.window.Event("click"));
 
-  assert.deepStrictEqual([...env.api.layers()], ["romaji", "dict", "llm", "google", "rule"], "点完就要换过来");
+  assert.deepStrictEqual([...env.api.layers()], ["romaji", "dict", "google", "rule"], "点完就要换过来");
   const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
-  assert.deepStrictEqual(saved.layerOrder, ["romaji", "dict", "llm", "google", "rule"], "顺序要落盘");
+  assert.deepStrictEqual(saved.layerOrder, ["romaji", "dict", "google", "rule"], "顺序要落盘");
 
   // 面板上第一层的 ↑ 现在是禁用的（已经在最上面）
   const rows2 = env.listeners.config[0]().querySelectorAll(".wk-layers .wk-layer");
   assert.strictEqual(rows2[0].querySelector('[data-dir="up"]').disabled, true, "最上面那层不该还能往上");
-  assert.strictEqual(rows2[4].querySelector('[data-dir="down"]').disabled, true, "最下面那层不该还能往下");
+  assert.strictEqual(rows2[3].querySelector('[data-dir="down"]').disabled, true, "最下面那层不该还能往下");
 
   // 「恢复默认顺序」
   const reset = [...env.listeners.config[0]().querySelectorAll("[data-a]")].find((b) => b.dataset.a === "layersReset");
   assert.ok(reset, "要有恢复默认按钮");
   reset.dispatchEvent(new env.window.Event("click"));
-  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "llm", "google", "rule"], "恢复默认");
+  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "google", "rule"], "恢复默认");
 });
 
 test("层序可调：配置里的顺序坏了也不会少一层（去重 + 补齐）", async () => {
   const env = bootPlugin(NCM_HTML, { config: { layerOrder: ["rule", "rule", "乱七八糟"] } });
   await env.runLoad();
   await sleep(200); // 注音是排在下一帧做的
-  assert.deepStrictEqual([...env.api.layers()], ["rule", "dict", "romaji", "llm", "google"], "认识的留下、缺的补上");
+  assert.deepStrictEqual([...env.api.layers()], ["rule", "dict", "romaji", "google"], "认识的留下、缺的补上");
   assert.strictEqual(rubyCount(env.document.querySelector("ul.lyric li p")), 2, "坏配置也要正常注音");
 });
 
@@ -1632,133 +1496,6 @@ test("Georgette：专有名词要注成 ジョージェット，不能是规则�
   const p = env.document.querySelector("ul.lyric li p");
   assert.deepStrictEqual(PAIRS(p), [["Georgette", "ジョージェット"]]);
   assert.strictEqual(baseText(p), "Georgette の ドレスを着て", "原文一字不改");
-});
-
-test("全英文的一行：等待在线结果期间先用暂定读音顶上，拿到结果就地改写（不消失、不重建）", async () => {
-  /*
-   * 全英文行"标注后有概率消失"。
-   *
-   * 两个原因叠在一起：层序是在线优先、规则垫底，等待期间原来写的是"先不标" ——
-   * 一行里只要有一个词在等，这一行就空着；而这个词所在的原文本节点已经有记录了，
-   * 后面拿到结果也不会再补注（一行的首个词尤其明显）。另一个是在线结果回来时
-   * 走的是 restoreAll + 重注，等于把整行先清空再补回来。
-   * 现在：等待期间用规则读音当暂定值（ruby 带 wk-pending，样式淡一点），
-   * 结果回来由 annotate.relabel() 就地改写，DOM 节点一个都不动。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root">
-  <div class="m-lyric">
-    <ul class="lyric">
-      <li class="line"><p>kaleidoscope zephyr serendipity light</p></li>
-    </ul>
-  </div>
-</div>
-</body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      asked.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        if (it.w === "zephyr") out[String(i + 1)] = "ゼファー"; // 其余"给不出"
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(300);
-
-  const p = env.document.querySelector("ul.lyric li p");
-  // 一个词都不许空着：四个词全在，词典外的三个带"暂定"标记
-  assert.deepStrictEqual(
-    PAIRS(p).map((x) => x[0]),
-    ["kaleidoscope", "zephyr", "serendipity", "light"],
-    "等待期间也不许空着：" + p.innerHTML
-  );
-  const zephyrEl = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
-  assert.ok(zephyrEl.classList.contains("wk-pending"), "词典外的词先标成暂定：" + zephyrEl.className);
-  const lightEl = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "light");
-  assert.ok(!lightEl.classList.contains("wk-pending"), "词典命中的词不是暂定");
-
-  await sleep(600);
-  // 结果回来：读音就地改写、暂定标记去掉，ruby 还是原来那个节点对象
-  const zephyrAfter = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
-  assert.strictEqual(zephyrAfter, zephyrEl, "不许把注音拆掉重建（那样就是一闪）");
-  assert.strictEqual(zephyrAfter.querySelector(".wk-rt").textContent, "ゼファー");
-  assert.ok(!zephyrAfter.classList.contains("wk-pending"), "有确定结果了就不是暂定");
-  // 模型给不出的词保持规则读音（不再标暂定），light 一直在
-  const names = PAIRS(p).map((x) => x[0]);
-  assert.deepStrictEqual(names, ["kaleidoscope", "zephyr", "serendipity", "light"]);
-  assert.ok(PAIRS(p).some((x) => x[0] === "light" && x[1] === "ライト"));
-  // 同一个「词 + 语境」不该被问第二遍
-  const flat = asked.flat();
-  assert.strictEqual(flat.length, new Set(flat).size, "同一个词被重复问了：" + JSON.stringify(asked));
-  assert.strictEqual(baseText(p), "kaleidoscope zephyr serendipity light", "底字一字不改");
-});
-
-test("在线答案回来改写（relabel）时，连字符片段 / 打码词 / 回声片段的读音不许被换掉", async () => {
-  /*
-   * 真机轨迹（00:16:45 那一轮）：`Up, up, ar-ar-ar-ar` 注音那一刻写的是 `arア-arア-ar`，
-   * 在线答案回来触发 relabel 之后变成了 アール —— 这就是"问题有反复"的来源。
-   *
-   * relabel 手头只有 DOM，它就地拼的 token 原来只有 text + label，没有"这个词左右挨着
-   * 什么"（连字符、假名、空格），于是：
-   *   `ar-` 掉回词典里的 アール（本该 ア）、`wa-` 掉回 ワ（本该 ウェ）、
-   *   `ny`（deny 的尾音）掉回词典里的 NY = ニューヨーク（本该 ナイ）。
-   * 现在 tokenAt 会把邻字和连字符信息一起还原，relabel 与注音那一刻同解。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>Up, up, ar-ar-ar-ar</p></li>
-  <li class="line"><p>the process (wa-wa-wait)</p></li>
-  <li class="line"><p>You can't deny, ny ny ny</p></li>
-  <li class="line"><p>Oh, I'll be ****ed up</p></li>
-  <li class="line"><p>kaleidoscope light</p></li>
-</ul></div></div>
-</body></html>`;
-  let asked = 0;
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      asked++;
-      // 只给最后一行一个答案：够触发 relabel（整篇的 ruby 都会被重读一遍）就行
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({ 1: "カレイドスコープ" }) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1200);
-  assert.ok(asked > 0, "大模型应该被问过（否则测不到 relabel）");
-
-  const ps = env.document.querySelectorAll("ul.lyric li p");
-  const readings = (p, word) => {
-    const el = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === word);
-    return el ? el.querySelector(".wk-rt").textContent : null;
-  };
-  assert.deepStrictEqual(
-    PAIRS(ps[0]).map((x) => x[1]),
-    ["アップ", "アップ", "ア", "ア", "ア", "ア"],
-    "relabel 之后 `ar-` 还是 ア：" + ps[0].innerHTML
-  );
-  assert.deepStrictEqual(
-    PAIRS(ps[1]).map((x) => x[1]).slice(-3),
-    ["ウェ", "ウェ", "ウェイト"],
-    "relabel 之后 `wa-` 还是 ウェ：" + ps[1].innerHTML
-  );
-  assert.strictEqual(readings(ps[2], "ny"), "ナイ", "relabel 之后 `ny`（deny 的尾音）还是 ナイ：" + ps[2].innerHTML);
-  assert.strictEqual(readings(ps[3], "****ed"), "ファックド", "打码词按被隐去的原词读：" + ps[3].innerHTML);
 });
 
 test("制作信息行：长尾写法（`Strings Arranged & Conducted by` / `Recorded at` / `OP:` / `ISRC`）也整行不注音", async () => {
@@ -1879,50 +1616,6 @@ test("断网时依然能标（词典 + 罗马音 + 规则全在本地）", async
   assert.ok(stats.reading.dictHits + stats.reading.romajiHits + stats.reading.ruleHits >= 3, JSON.stringify(stats.reading));
 });
 
-test("用量：大模型返回的 token 数会记进账本（本次 / 今天 / 累计 + 落盘）", async () => {
-  const env = bootPlugin(LLM_HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "カレイドスコープ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            // 真接口会带 usage —— 账本要的就是这个
-            usage: { prompt_tokens: 321, completion_tokens: 45, total_tokens: 366 },
-            choices: [{ message: { content: JSON.stringify(out) } }],
-          }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-
-  const u = env.api.usage();
-  assert.ok(u, "要有账本");
-  assert.strictEqual(u.session.llm.requests, 1, "一次请求");
-  assert.strictEqual(u.session.llm.ok, 1);
-  assert.strictEqual(u.session.llm.promptTokens, 321, "输入 token 取自响应里的 usage");
-  assert.strictEqual(u.session.llm.completionTokens, 45, "输出 token 同上");
-  assert.strictEqual(u.session.llm.words, 1, "这批只问了词典外的那个词（light 在词典里）");
-  assert.strictEqual(u.session.llm.chars, "kaleidoscope".length, "送出去的字符数");
-  assert.strictEqual(u.session.google.requests, 0, "大模型排在免费接口前面，Google 那层不该被咨询");
-  assert.deepStrictEqual(
-    [u.session.llm.requests, u.today.llm.requests, u.total.llm.requests],
-    [1, 1, 1],
-    "本次 / 今天 / 累计 三份账一起涨"
-  );
-  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.usage"));
-  assert.strictEqual(saved.total.llm.promptTokens, 321, "累计要落盘");
-});
-
 test("用量：设置面板显示账本，三个清零按钮各管一段", async () => {
   const env = bootPlugin(NCM_HTML, { dev: true });
   // 预置一份账本（在 onLoad 之前写进去）：证明面板读的是 localStorage 里那份
@@ -1990,41 +1683,6 @@ test("用量：core/usage.js 没注入时注音照常，只是没有账本", asy
   assert.strictEqual(rubyCount(env.document.querySelector("ul.lyric li p")), 2, "注音不受影响");
 });
 
-test("暂定标记不会卡住：大模型失败后那一行立刻恢复成确定值", async () => {
-  // 「这句不透明度怎么这么低」。等待期间是暂定（淡），失败后必须马上不再淡 ——
-  // 老版本失败路径没叫 onUpdate，那行会淡一整个退避周期（60 秒起）。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root">
-  <div class="m-lyric">
-    <ul class="lyric">
-      <li class="line"><p>KiLLKiSS judy jude juda</p></li>
-    </ul>
-  </div>
-</div>
-</body></html>`;
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function () {
-      return Promise.reject(new Error("offline (test)"));
-    },
-  });
-  await env.runLoad();
-  // 攒批窗口 400ms 之后才发请求，失败立刻回来
-  await sleep(1500);
-
-  const p = env.document.querySelector("ul.lyric li p");
-  assert.strictEqual(rubyCount(p), 4, "四个词都要标上：" + p.innerHTML);
-  assert.strictEqual(
-    p.querySelectorAll("ruby.wk-ruby.wk-pending").length,
-    0,
-    "失败之后不该还淡着（wk-pending 会一直挂着就是那个 bug）：" + p.innerHTML
-  );
-  // 退避期间再扫一轮，也不能又淡上
-  env.api.pass();
-  await sleep(80);
-  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby.wk-pending").length, 0, "重扫也不许再淡");
-});
-
 test("注音不透明度真的生效（老版本被一条 !important 压掉了）", () => {
   const ctx = loadCore(NCM_HTML);
   ctx.WKAnnotate.applyStyles(ctx.document, { rtSize: 55, rtOpacity: 40 });
@@ -2053,68 +1711,6 @@ test("设置面板：粘进来的 key 会自动洗掉引号 / 空格 / Bearer，
   assert.strictEqual(env.api.config.llmKey, "sk-abc123456789012345");
   const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.strictEqual(saved.llmKey, "sk-abc123456789012345", "落盘的也要是干净的");
-});
-
-test("罗马音像英文词时交给大模型仲裁；真罗马音一个请求都不发", async () => {
-  // 「the pretender up, … shake, shake, shake it up, it up 里只有 the 没被矫正」。
-  // the/up/it 是词典命中（本来就对，按设计不问模型）；shake 是罗马音层读成了 シャケ。
-  // 现在：罗马音答案若在英文词表里就标成"没把握"，让在线层接手；
-  // 真正的日语罗马字（sekai）仍然是确定的，不会被无谓地送去问模型。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root">
-  <div class="m-lyric">
-    <ul class="lyric">
-      <li class="line"><p>sake sekai the shake</p></li>
-    </ul>
-  </div>
-</div>
-</body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      asked.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = it.w === "sake" ? "セイク" : "ダミー";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(200); // 趁模型还没回来：本地答案是"暂定"
-  const p = env.document.querySelector("ul.lyric li p");
-  const pendingNow = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.childNodes[0].nodeValue);
-  assert.ok(pendingNow.indexOf("sake") >= 0, "sake 要先标上（暂定）：" + p.innerHTML);
-
-  await sleep(1400);
-  const words = [].concat.apply([], asked);
-  assert.deepStrictEqual(words, ["sake"], "只该问 sake：词典词和真罗马音都不该浪费请求（实际 " + words.join(",") + "）");
-
-  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
-    r.childNodes[0].nodeValue,
-    r.querySelector(".wk-rt").textContent,
-  ]);
-  assert.deepStrictEqual(
-    pairs,
-    [
-      ["sake", "セイク"],
-      ["sekai", "セカイ"],
-      ["the", "ザ"],
-      ["shake", "シェイク"],
-    ],
-    "sake 要被模型换成 セイク；其它三个保持本地答案：" + JSON.stringify(pairs)
-  );
-  const shakeRuby = p.querySelectorAll("ruby.wk-ruby")[3];
-  assert.ok(shakeRuby.classList.contains("wk-src-dict"), "shake 现在是词典命中：" + shakeRuby.className);
-  assert.strictEqual(baseText(p), "sake sekai the shake");
 });
 
 test("罗马音像英文词：把「英文规则」提到在线层前面时，照样一个请求都不发", async () => {
@@ -2214,30 +1810,27 @@ test("层序：面板不让把「英文音译规则」换到词典/罗马音前�
   const env = bootPlugin(NCM_HTML, { dev: true });
   await env.runLoad();
   const rows = env.listeners.config[0]().querySelectorAll(".wk-layers .wk-layer");
-  // 默认序：1 词典 2 罗马音 3 大模型 4 免费接口 5 规则
+  // 默认序：1 词典 2 罗马音 3 免费接口 4 规则
   assert.strictEqual(rows[0].querySelector('[data-dir="down"]').disabled, false, "词典往下换（和罗马音）是允许的");
-  assert.strictEqual(rows[2].querySelector('[data-dir="up"]').disabled, false, "大模型往上换（和罗马音）是允许的");
-  assert.strictEqual(rows[3].querySelector('[data-dir="down"]').disabled, false, "免费接口和规则互换是允许的");
+  assert.strictEqual(rows[1].querySelector('[data-dir="up"]').disabled, false, "罗马音往上换（和词典）是允许的");
+  assert.strictEqual(rows[2].querySelector('[data-dir="down"]').disabled, false, "免费接口和规则互换是允许的");
 
-  // 但要和"规则"互换同步层就不行：先点两次把罗马音挪到规则下面，再试
+  // 但要和"规则"互换同步层就不行：先把罗马音挪到规则下面，再试
   const click = (rowIndex, dir) =>
     env.listeners.config[0]().querySelectorAll(".wk-layers .wk-layer")[rowIndex].querySelector('[data-dir="' + dir + '"]').dispatchEvent(new env.window.Event("click"));
-  // 现序：dict romaji llm google rule
-  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "llm", "google", "rule"]);
-  // 罗马音的 ↓（与 llm 换）-> dict llm romaji google rule
+  // 现序：dict romaji google rule
+  assert.deepStrictEqual([...env.api.layers()], ["dict", "romaji", "google", "rule"]);
+  // 罗马音的 ↓（与 google 换）-> dict google romaji rule
   click(1, "down");
-  assert.deepStrictEqual([...env.api.layers()], ["dict", "llm", "romaji", "google", "rule"]);
-  // 罗马音再 ↓（与 google 换）-> dict llm google romaji rule
-  click(2, "down");
-  assert.deepStrictEqual([...env.api.layers()], ["dict", "llm", "google", "romaji", "rule"]);
+  assert.deepStrictEqual([...env.api.layers()], ["dict", "google", "romaji", "rule"]);
   // 现在罗马音紧挨着规则：它的 ↓ 必须被禁用（换了就等于把罗马音藏起来）
   const rows2 = env.listeners.config[0]().querySelectorAll(".wk-layers .wk-layer");
-  assert.strictEqual(rows2[3].querySelector('[data-dir="down"]').disabled, true, "罗马音不能换到规则后面");
-  assert.strictEqual(rows2[4].querySelector('[data-dir="up"]').disabled, true, "规则不能换到罗马音前面");
-  assert.ok(rows2[4].querySelector('[data-dir="up"]').title.indexOf("永远用不上") >= 0, "要说清为什么禁用");
+  assert.strictEqual(rows2[2].querySelector('[data-dir="down"]').disabled, true, "罗马音不能换到规则后面");
+  assert.strictEqual(rows2[3].querySelector('[data-dir="up"]').disabled, true, "规则不能换到罗马音前面");
+  assert.ok(rows2[3].querySelector('[data-dir="up"]').title.indexOf("永远用不上") >= 0, "要说清为什么禁用");
 
   // 手改配置（控制台 WK.layers）绕过去的话，面板要报警告
-  env.api.layers(["llm", "romaji", "google", "rule", "dict"]);
+  env.api.layers(["romaji", "google", "rule", "dict"]);
   const root = env.listeners.config[0]();
   const warn = root.querySelector(".wk-layer-warn");
   assert.ok(warn, "要有挡路提醒：" + root.querySelector(".wk-layers").textContent);
@@ -3888,55 +3481,6 @@ test("日文字体不碰罗马音行和中文翻译行", async () => {
   assert.strictEqual(card.style.getPropertyValue("font-family"), "", "容器本身不许写字体（否则三行一起变）");
 });
 
-test("词典读不出的汉字交给大模型（按整句问，答案是平假名）", async () => {
-  /*
-   * IPADIC 对生词给不出读音（`謎` 这种在歌词里很常见），以前整段留白。
-   * 现在把这种词连整句一起交给大模型：kind=ja 的条目，模型按语境给平假名，
-   * 答案按「词 + 这句」缓存（不做全局词表 —— 换个句子读音可能就不一样）。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>謎のまま</p></li>
-</ul></div></div>
-</body></html>`;
-
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: {
-      online: false,
-      llmEnabled: true,
-      llmKey: "sk-test",
-      llmEndpoint: "https://api.example.com/v1/chat/completions",
-    },
-    fetch: function (url, init) {
-      const content = JSON.parse(init.body).messages[0].content;
-      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
-      asked.push({ items: items, prompt: content.slice(0, 400) });
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "なぞ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ の: "ノ", まま: "ママ" }));
-  await env.runLoad();
-  await sleep(1500);
-
-  assert.ok(asked.length >= 1, "读不出来的汉字要问模型：" + JSON.stringify(asked.map((a) => a.items)));
-  const first = asked[0].items[0];
-  assert.strictEqual(first.w, "謎", "问的是那个读不出来的词：" + JSON.stringify(first));
-  assert.strictEqual(first.kind, "ja", "要标成日语汉字条目：" + JSON.stringify(first));
-
-  const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
-  assert.deepStrictEqual(pairs, [["謎", "なぞ"]], "模型给的读音要注上去：" + p.innerHTML);
-});
-
 test("逐字歌词：每个字一个文本节点时也要注音（不只空格前那个字）", async () => {
   /*
    * 真机现象：开了逐字歌词之后，只有空格前那一个字有读音，其它字都没有。
@@ -4343,102 +3887,6 @@ test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", a
   );
 });
 
-test("外语行不做首音校验：拉丁语 vacuum 的 ワクーム 也会被收下（英文行仍然卡）", async () => {
-  // 「Vacuum 的读音一直是黄的」：黄的 = 规则层（暂定），说明模型答案没被收下。
-  // 根因是首音校验 —— 那套判据按英语拼写定的（v → バ行/ヴ），拉丁语的
-  // vacuum 读 ワクーム 就被判成"不是音译"丢掉，而 miss 是永久的（还落盘），
-  // 于是那个词永远停在规则层。现在外语行整行跳过这道校验。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>Vacuum, fatuus</p></li>
-  <li class="line"><p>the blorf is loud</p></li>
-</ul></div></div>
-</body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const content = JSON.parse(init.body).messages[0].content;
-      const items = JSON.parse(content.slice(content.indexOf("[")));
-      asked.push(items.map((it) => it.w + "@" + String(it.line).slice(0, 12)));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "ワクーム"; // 模型给的拉丁语读音（英语口径下会被判掉）
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1800);
-
-  const ps = env.document.querySelectorAll("ul.lyric li p");
-  assert.ok(asked.length >= 1, "应该问过模型：" + JSON.stringify(asked));
-  assert.ok(asked.some((batch) => batch.some((w) => w.indexOf("vacuum@") === 0)), "vacuum 要问模型：" + JSON.stringify(asked));
-  assert.ok(asked.some((batch) => batch.some((w) => w.indexOf("blorf@") === 0)), "英文行的 blorf 也要问：" + JSON.stringify(asked));
-
-  const latin = linePairs(ps, 0);
-  assert.strictEqual(latin.get("Vacuum"), "ワクーム", "外语行要收下模型答案：" + JSON.stringify([...latin]));
-  assert.strictEqual(latin.get("fatuus"), "ワクーム", "外语行要收下模型答案：" + JSON.stringify([...latin]));
-
-  // 英文行：同一个答案仍然要被首音校验拦住（b 开头的音译首音必须落在 バ行）
-  const en = linePairs(ps, 1);
-  assert.notStrictEqual(en.get("blorf"), "ワクーム", "英文行不许放这种答案进来：" + JSON.stringify([...en]));
-  const rejected = env.api.llm.rejects().filter((r) => String(r.word).toLowerCase() === "blorf");
-  assert.ok(rejected.length >= 1 && rejected[0].why === "没通过首音校验", "英文行要记一条被拒：" + JSON.stringify(env.api.llm.rejects()));
-});
-
-test("一次性清掉旧的「问过但没收下」记录：被误伤的答案会重新问一遍", async () => {
-  // 「Vacuum 一直是黄的」还有第二层原因：那条 miss 是永久的、
-  // 还落了盘（当时被首音校验判掉了）。校验放宽之后老记录就成了误伤，所以
-  // core/llm.js 载入缓存时会一次性把它们清掉（用一个小标记记住，命中不动）。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>Vacuum, fatuus</p></li>
-</ul></div></div>
-</body></html>`;
-  const legacy = {};
-  legacy["vacuum\u0000Vacuum, fatuus"] = { miss: true, t: Date.now(), said: "ワクーム", why: "没通过首音校验", at: Date.now() };
-  legacy["fatuus\u0000Vacuum, fatuus"] = { k: "ファトゥウス", t: Date.now() }; // 命中：一条都不许动
-
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    legacyKeys: { "lyric-ruby.llm.v1": JSON.stringify(legacy) },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const content = JSON.parse(init.body).messages[0].content;
-      const items = JSON.parse(content.slice(content.indexOf("[")));
-      asked.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "ワクーム";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1800);
-
-  const words = [].concat.apply([], asked).map((w) => String(w).toLowerCase());
-  assert.ok(words.indexOf("vacuum") >= 0, "被误伤的 vacuum 要重新问：" + JSON.stringify(asked));
-  assert.strictEqual(words.indexOf("fatuus"), -1, "命中过的词不该重问：" + JSON.stringify(asked));
-  // 页面上的 Vacuum 换成了模型答案（不再是规则层的暂定值）
-  const got = linePairs(env.document.querySelectorAll("ul.lyric li p"), 0);
-  assert.strictEqual(got.get("Vacuum"), "ワクーム", JSON.stringify([...got]));
-  // 落盘的缓存里也不该再有那条 miss
-  const raw = JSON.parse(env.window.localStorage.getItem("lyric-ruby.llm.v1"));
-  assert.ok(!raw["vacuum\u0000Vacuum, fatuus"] || raw["vacuum\u0000Vacuum, fatuus"].miss !== true, "老的 miss 要清掉：" + JSON.stringify(raw));
-});
-
 test("拉丁语行的呼语 O 与连词 o：大写读 オー、小写读 オ（`(O … o …`）", async () => {
   // `Lucis, lapsus (O tragedia o splendidae)` 一类行 —— 大写的 O
   // （呼语，读 オー）标上了，小写的 o（拉丁语连词"或"，读 オ）全空着。
@@ -4765,145 +4213,6 @@ test("非日语歌是否注音可以开关（默认注音，关掉只标日语�
   assert.ok(rubyCount(ps[1]) >= 3, "日语歌里的纯英文行也要注音：" + ps[1].innerHTML);
 });
 
-test("导出词库素材：已学会的词 + 两层缓存命中", async () => {
-  // 从学会的词和缓存中筛选填进离线词典：运行期写不进 src/core/dict.js，
-  // 所以先导出素材，再由 npm run promote:learned 筛选、npm run build:dict 合并。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>serendipity の 夜</p></li>
-  <li class="line"><p>また serendipity を 探して</p></li>
-</ul></div></div>
-</body></html>`;
-  const CONFIG = {
-    llmEnabled: true,
-    llmKey: "sk-test",
-    llmEndpoint: "https://api.example.com/v1/chat/completions",
-    online: false,
-  };
-  const env = bootPlugin(HTML, {
-    config: CONFIG,
-    fetch: function (url, init) {
-      const items = JSON.parse(JSON.parse(init.body).messages[0].content.slice(JSON.parse(init.body).messages[0].content.indexOf("[")));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "セレンディピティ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1600);
-
-  const dump = env.api.exportWords();
-  assert.strictEqual(dump.version, 1);
-  assert.deepStrictEqual(
-    [...dump.learned].map((x) => [x.word, x.kana]),
-    [["serendipity", "セレンディピティ"]],
-    "已学会的词要出现在素材里：" + JSON.stringify(dump.learned)
-  );
-  // 大模型缓存也按词归并导出（构建期靠 lines / consistent 决定收不收）
-  const llmHit = [...dump.llm].find((x) => x.word === "serendipity");
-  assert.ok(llmHit, "缓存命中要出现在素材里：" + JSON.stringify(dump.llm));
-  assert.strictEqual(llmHit.kana, "セレンディピティ");
-  assert.ok(llmHit.lines >= 1);
-  assert.strictEqual(llmHit.consistent, true);
-  // JSON 版给面板按钮用（要能 parse 回来）
-  const back = JSON.parse(env.api.exportWordsJson());
-  assert.strictEqual(back.learned.length, 1);
-  // 免费接口那层即使没开也占一个字段，构建期脚本不用判空
-  assert.ok(Array.isArray(dump.google));
-});
-
-test("罗马音节行：这些短音节标成「没把握」，会送去问大模型按语境判", async () => {
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>PA PI PU PE PO MA MI MU ME MO</p></li>
-  <li class="line"><p>No, no, I need you so</p></li>
-</ul></div></div>
-</body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      asked.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "テスト";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-
-  const words = [].concat.apply([], asked).map((w) => String(w).toLowerCase());
-  for (const w of ["pi", "pe", "po", "mi", "me", "mo"]) {
-    assert.ok(words.indexOf(w) >= 0, w + " 该送去问模型（罗马音节行，词典会读歪）：" + words.join(","));
-  }
-  // 「PA」没有词典条目、罗马音本来就是对的，不必浪费请求
-  assert.ok(words.indexOf("pa") < 0, "PA 不用问：" + words.join(","));
-  // 两可的英文短词也要问：`no` 既可能是 ノー（英文）也可能是 ノ（唱名/罗马字），
-  // 只能靠整句语境 —— 模型给不出来就保持词典读音。
-  assert.ok(words.indexOf("no") >= 0, "no 两可，要问模型：" + words.join(","));
-  // 确定的英文词不问
-  assert.ok(words.indexOf("need") < 0, "need 是确定的，不该问：" + words.join(","));
-});
-
-test("两可的短音节：大模型按整句语境判（Do→ド / Re→レ），英文里仍是 ドゥー/リー", async () => {
-  // 「Do」「Re」「Meet」 を重ねて 效果差 —— 词典给的是英文读音
-  // （Do ドゥー、Re リー），但唱名/罗马音节要 ド/レ。光看拼写分不出来，
-  // 所以这些词标成"没把握"，交给模型按那句话决定。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>「Do」「Re」「Meet」 を重ねて</p></li>
-</ul></div></div>
-</body></html>`;
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      asked.push(items.map((it) => it.w));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = it.w === "Do" || it.w === "do" ? "ド" : it.w === "Re" || it.w === "re" ? "レ" : "テスト";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1500);
-
-  const words = [].concat.apply([], asked).map((w) => String(w).toLowerCase());
-  assert.ok(words.indexOf("do") >= 0 && words.indexOf("re") >= 0, "do/re 要问模型：" + words.join(","));
-
-  const p = env.document.querySelector("ul.lyric li p");
-  const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
-  );
-  assert.strictEqual(got.get("Do"), "ド", "唱名要按语境读成 ド：" + JSON.stringify([...got]));
-  assert.strictEqual(got.get("Re"), "レ", "唱名要按语境读成 レ：" + JSON.stringify([...got]));
-  assert.strictEqual(got.get("Meet"), "ミート", "确定的词保持词典读音");
-  assert.strictEqual(baseText(p), "「Do」「Re」「Meet」 を重ねて");
-});
-
 test("Shoo / Gimme / Yeah：词典里补上，不再被罗马音层抢走", async () => {
   // Shoo 读成 ショオ、Gimme 读成 ギッメ（这两个词词典里根本没有，
   // 于是被"能切成音节就收"的罗马音层抢走了）；Yeah 读成 イェア（该是 イェイ）。
@@ -4923,140 +4232,6 @@ test("Shoo / Gimme / Yeah：词典里补上，不再被罗马音层抢走", asyn
   assert.strictEqual(got.get("Gimme"), "ギミー", "Gimme 该是 ギミー");
   assert.strictEqual(got.get("more"), "モア", "more 该是 モア");
   assert.strictEqual(got.get("Yeah"), "イェイ", "Yeah 该是 イェイ");
-});
-
-test("学会的词：模型在两个句子里答同一个读音 -> 沉淀成离线词条，重启后不再问", async () => {
-  // 运行期模型给的答案自动沉淀进词典。
-  // 模型那层是按「词 + 那一句」缓存的，换首歌同一句再来就得重新花钱问；
-  // 沉淀之后它就是离线词条（source: learned），以后一个请求都不发。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>serendipity の 夜</p></li>
-  <li class="line"><p>また serendipity を 探して</p></li>
-</ul></div></div>
-</body></html>`;
-  // 前提：这个词词典里没有（不然根本不会去问模型）
-  assert.strictEqual(envDictHas("serendipity"), false, "前提：serendipity 不在离线词典里");
-
-  const asked = [];
-  const fakeLlm = (answer) =>
-    function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const items = JSON.parse(JSON.parse(init.body).messages[0].content.slice(JSON.parse(init.body).messages[0].content.indexOf("[")));
-      asked.push(items.map((it) => String(it.w).toLowerCase()));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = answer(it.w);
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    };
-  const CONFIG = {
-    llmEnabled: true,
-    llmKey: "sk-test",
-    llmEndpoint: "https://api.example.com/v1/chat/completions",
-    online: false,
-  };
-
-  const env = bootPlugin(HTML, { config: CONFIG, fetch: fakeLlm(() => "セレンディピティ") });
-  await env.runLoad();
-  await sleep(1600);
-
-  // 页面用的是模型答案
-  const ps = env.document.querySelectorAll("ul.lyric li p");
-  for (const p of ps) {
-    const rt = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
-    assert.deepStrictEqual(rt, ["セレンディピティ"], "两句都要用模型答案：" + p.innerHTML);
-  }
-  // 两句 -> 收下
-  const learned = env.api.learn.list();
-  assert.deepStrictEqual(
-    [...learned].map((x) => [x.word, x.kana]),
-    [["serendipity", "セレンディピティ"]],
-    "两句答同一个读音就该沉淀：" + JSON.stringify(learned)
-  );
-  // 沉淀之后页面上的来源就是 learned（排障上色会显示成"学会的词"）
-  assert.strictEqual(env.api.state.learned.peek("serendipity"), "セレンディピティ");
-
-  /*
-   * 重开一次（模拟重启网易云）：把沉淀下来的那份 localStorage 搬到新的页面里，
-   * 换成"什么都不许问"的 fetch —— 只要还在注音，就说明它没再花请求。
-   */
-  const saved = env.window.localStorage.getItem("lyric-ruby.learned.v1");
-  assert.ok(saved && saved.indexOf("セレンディピティ") >= 0, "要落盘：" + saved);
-
-  let calls = 0;
-  const env2 = bootPlugin(HTML, {
-    config: CONFIG,
-    fetch: function () {
-      calls++;
-      return Promise.reject(new Error("不该有任何请求"));
-    },
-  });
-  env2.window.localStorage.setItem("lyric-ruby.learned.v1", saved);
-  await env2.runLoad();
-  await sleep(600);
-
-  const ps2 = env2.document.querySelectorAll("ul.lyric li p");
-  const got2 = [...ps2[0].querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
-  assert.deepStrictEqual(got2, ["セレンディピティ"], "重启后离线也要读对：" + ps2[0].innerHTML);
-  assert.strictEqual(calls, 0, "已经学会的词一个字都不该再问模型（这就是省钱的地方）");
-  // 来源标记也要是 learned（按来源上色时显示成"学会的词"）
-  assert.ok(ps2[0].querySelector("ruby.wk-src-learned"), "要标成 learned 来源：" + ps2[0].innerHTML);
-  // 面板上那一行也要报出来
-  assert.ok(
-    env2.api.learn.stats().count === 1 && env2.api.learn.stats().usedSession >= 1,
-    "本次用上了几个要能数出来：" + JSON.stringify(env2.api.learn.stats())
-  );
-
-  // 读音不对时能忘掉：忘掉之后它又变成"要问模型"的词
-  assert.strictEqual(env2.api.learn.forget("serendipity"), true);
-  assert.strictEqual(env2.api.learn.stats().count, 0);
-  assert.strictEqual(env2.api.learn.list().length, 0);
-});
-
-test("学会的词：只答过一次不收、两可的短音节不收、模型改口就撤销", async () => {
-  // 收词的边界（收错了就是"错读音被钉成离线权威"）。三种都过一遍：只在一个句子里答过的不收；
-  // 两可的短音节（do/re/mi…）不收，读音取决于那句话；后来改成别的读音的，把已收的撤销。
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>serendipity の 夜</p></li>
-  <li class="line"><p>「Do」を 重ねて</p></li>
-</ul></div></div>
-</body></html>`;
-  const CONFIG = {
-    llmEnabled: true,
-    llmKey: "sk-test",
-    llmEndpoint: "https://api.example.com/v1/chat/completions",
-    online: false,
-  };
-  const answerFor = (w) => (String(w).toLowerCase() === "do" ? "ド" : "セレンディピティ");
-  const env = bootPlugin(HTML, {
-    config: CONFIG,
-    fetch: function (url, init) {
-      const items = JSON.parse(JSON.parse(init.body).messages[0].content.slice(JSON.parse(init.body).messages[0].content.indexOf("[")));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = answerFor(it.w);
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1600);
-
-  const learned = [...env.api.learn.list()].map((x) => x.word);
-  assert.deepStrictEqual(learned, [], "只答过一次的不收；do 是两可的不收：" + JSON.stringify(learned));
-  assert.ok(env.api.learn.stats().pending >= 1, "serendipity 要记成'待定'：" + JSON.stringify(env.api.learn.stats()));
-  // do 连待定都不该有（两可词由上层直接挡掉）
-  assert.strictEqual(env.api.state.learned.peek("do"), null);
 });
 
 test("设置面板：罗马音排在词典前面时给出提醒（它会把英文词按罗马音读）", async () => {
@@ -6038,59 +5213,6 @@ test("统一行距：RNP 的三层里只改原文那一层", async () => {
   assert.strictEqual(trans.style.getPropertyValue("line-height"), "", "翻译行不许改：" + trans.getAttribute("style"));
 });
 
-test("词典读不出的汉字：探出读音（掻 か）、探不出的交给大模型（霽 は）", async () => {
-  /*
-   * 以前这类字整段留白（真机现象：「掻鳴らせ」的 掻、「霽れを待つ君」的 霽 一直空着）。
-   * 现在两层兜底：
-   *   1. 离线：拿这个字去喂"字 + 送假名"，几种写法读音一致就注（掻く / 掻き → か）；
-   *   2. 在线：探不出来的（词典里根本没有这个字的词）按整句问大模型。
-   * 两层都不成的话才留白。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div id="root"><div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>掻鳴らせ、</p></li>
-  <li class="line"><p>霽れを待つ君</p></li>
-</ul></div></div></body></html>`;
-
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: {
-      online: false,
-      llmEnabled: true,
-      llmKey: "sk-test",
-      llmEndpoint: "https://api.example.com/v1/chat/completions",
-    },
-    fetch: function (url, init) {
-      const content = JSON.parse(init.body).messages[0].content;
-      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
-      asked.push(items);
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = it.w === "霽" ? "は" : "な";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 鳴らせ: "ナラセ", 待つ: "マツ", 君: "キミ", を: "ヲ" }));
-  await env.runLoad();
-  await sleep(1600);
-
-  const ps = env.document.querySelectorAll("ul.lyric li p");
-  const ruby = (p, word) => {
-    const hit = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === word);
-    return hit.length ? hit[0].querySelector(".wk-rt").textContent : null;
-  };
-  // 1. 假分词器里没有 掻：离线照样注不上（探读音要真词典），但一定要问模型
-  assert.ok(asked.length >= 1, "读不出的汉字要问模型：" + JSON.stringify(asked));
-  const words = [].concat.apply([], asked).map((x) => x.w);
-  assert.ok(words.indexOf("霽") >= 0, "要问 霽：" + JSON.stringify(words));
-  assert.strictEqual(ruby(ps[1], "霽"), "は", "模型给的读音要注上去：" + ps[1].innerHTML);
-});
-
 test("RNP：一行三层时语种按原文判，不按翻译（今夜、不该被当成中文）", async () => {
   /*
    * RNP 一个区域是 `div.rnp-lyrics-line`，里面装着 -original / -romaji / -translated。
@@ -6276,54 +5398,6 @@ test("就地改读音 / 留空：行文本按原文那层算（RNP 里带罗马�
   await sleep(500);
   assert.ok(find("1"), "填回来之后要重新注上：" + p.innerHTML);
   assert.strictEqual(find("1").querySelector(".wk-rt").textContent, "ひとつ");
-});
-
-test("读不出的汉字：问模型只带这一句（邻句会把读音带歪）", async () => {
-  /*
-   * 以前条目里还塞前后各一句当参考。真机上反而更差：上一句里的 上々 会让这一句的
-   * 上 被答成 じょうじょう —— 邻句不是语境，是噪音。现在只给 line 这一句。
-   */
-  const HTML = `<!doctype html><html><head></head><body>
-<div class="m-lyric"><ul class="lyric">
-  <li class="line"><p>痛みと怒れる人 を喰らったらった</p></li>
-  <li class="line"><p>霽れを待つ君</p></li>
-  <li class="line"><p>じゃん！</p></li>
-</ul></div></body></html>`;
-
-  const asked = [];
-  const env = bootPlugin(HTML, {
-    config: { online: false, llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
-    fetch: function (url, init) {
-      const content = JSON.parse(init.body).messages[0].content;
-      asked.push(content);
-      const items = JSON.parse(content.slice(content.lastIndexOf("条目：") + 3));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "は";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  // 假分词器：表里没有的字等于"读不出来"（霽 就是），正好触发问模型
-  env.window.WKFurigana.setTokenizer(
-    fakeFuriganaTokenizer({ を: "ヲ", 喰: "ク", ら: "ラ", っ: "ッ", た: "タ", れ: "レ", 待: "マ", つ: "ツ", 君: "キミ", み: "ミ", と: "ト", る: "ル", じ: "ジ", ゃ: "ャ", ん: "ン" })
-  );
-  await env.runLoad();
-  await sleep(1800);
-
-  assert.ok(asked.length >= 1, "读不出的汉字要问模型");
-  const items = JSON.parse(asked[0].slice(asked[0].lastIndexOf("条目：") + 3));
-  const row = items.filter((x) => x.w === "霽")[0];
-  assert.ok(row, "要问 霽：" + JSON.stringify(items));
-  assert.strictEqual(row.line, "霽れを待つ君", "带上整句");
-  assert.strictEqual(row.prev, undefined, "不许带前一句：" + JSON.stringify(row));
-  assert.strictEqual(row.next, undefined, "不许带后一句：" + JSON.stringify(row));
-  assert.ok(asked[0].indexOf("prev / next") < 0, "提示词里不该再提前后句");
-  assert.ok(asked[0].indexOf("不要给 zhōng") >= 0, "提示词要提醒别给中文读音");
 });
 
 test("西文注音单独开关：关掉之后只注汉字，打开又回来", async () => {
@@ -6641,9 +5715,8 @@ test("逐字歌词（RNP karaoke）：slide 动画的替身节点跟着一起注
       r.querySelector(".wk-rt").textContent,
     ]);
   // 本体：整段读音挂在第一格（体温），温 那一格清空
-  const main = Array.from(root.querySelectorAll("span:not(.rnp-karaoke-word-filler)"))
-    .map((s) => rubies(s))
-    .flat();
+  // （整行改写之后每个词格里多了一层 `span.wk-line` 的 wrap，所以按词格取）
+  const main = words.map((w) => rubies(w.querySelector("span:not(.rnp-karaoke-word-filler)"))).flat();
   assert.deepStrictEqual(main, [["体温", "たいおん"]], "整段读音挂在第一格：" + root.innerHTML);
   // 替身：和本体一模一样
   for (const w of words) {
@@ -6766,7 +5839,6 @@ test("日语歌里夹的西文单独一个开关：关掉只影响日语歌", as
   const enBases = Array.from(enP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.ok(enBases.length > 0, "非日语歌的西文照旧注：" + enP.innerHTML);
 });
-
 
 test("Uta-net：搜索结果 / 歌词页解析，罗马音按行反推读音", () => {
   const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");

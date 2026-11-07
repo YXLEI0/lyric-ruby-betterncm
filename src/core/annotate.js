@@ -728,6 +728,11 @@
        */
       var cls = typeof el.className === "string" ? el.className : "";
       if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(cls)) return true;
+      /*
+       * 整行改写的那个 wrap（`span.wk-line`）：里面是这一行的全部内容。
+       * 它不是"要注音的文字"，是我们自己造出来的排版层 —— 再往里注一遍就是双份。
+       */
+      if (/(^|\s)(wk-line|wk-word)(\s|$)/.test(cls)) return true;
       if (/(^|\s)wk-blank(\s|$)/.test(cls)) return true; // 留空处的可点击壳
       if (el.tagName === "RT" || /(^|\s)(wk-rt|kt-rt|fg-rt|wk-ov-label|kt-ov-label)(\s|$)/.test(cls)) {
         return true;
@@ -1756,6 +1761,13 @@ function buildRuby(base, gloss, provisional, source) {
      *                 摘掉注音，把原节点（值是完整原文）插回原位置。
      */
     function restoreRecord(node, rec) {
+      // 整行改写那条路：整行还原（摘 wrap、原文本节点按原值放回）
+      if (rec && rec.kind === "wrap") {
+        unwrapRec(rec);
+        records.delete(rec.region);
+        untagIfClean(rec.region, rec.region);
+        return;
+      }
       var host = rec.host;
       var i;
 
@@ -1959,6 +1971,13 @@ function buildRuby(base, gloss, provisional, source) {
       records.forEach(function (rec, node) {
         var host = rec.host;
         if (!host || !host.isConnected) return;
+        /*
+         * 语境：整行改写的记录直接用"这一行的原文"（rec.text）。
+         * 走 contextOf 的话会拿到整块容器的可见文字（逐字层里替身副本还会被算一遍），
+         * 和注音那一刻用的语境对不上 —— 大模型那层按「词 + 语境」缓存，对不上就等于
+         * 从没问过，答案回来了也改不动。
+         */
+        var ctxText = rec.kind === "wrap" && rec.text != null ? rec.text : null;
         for (var i = 0; i < rec.nodes.length; i++) {
           var el = rec.nodes[i];
           if (!el || el.nodeType !== 1 || !el.classList || !el.classList.contains("wk-ruby")) continue;
@@ -1974,7 +1993,7 @@ function buildRuby(base, gloss, provisional, source) {
              * 语境要和注音时用的一致（那次用的是宿主的可见原文）——
              * 换别的东西当语境会让缓存键对不上、白白重问一次。
              */
-            var got = lookup(word, contextOf(host, word), tokenAt(el, word));
+            var got = lookup(word, ctxText != null ? ctxText : contextOf(host, word), tokenAt(el, word));
             if (typeof got === "string") {
               gloss = got;
             } else if (got && got.kana) {
@@ -2006,7 +2025,7 @@ function buildRuby(base, gloss, provisional, source) {
                  * 缓存键（host 里还有同 <li> 的翻译层），大模型永远答"这个 key 没问过"，
                  * wk-pending 就再也摘不掉 —— 读音已经是模型的答案，颜色却一直淡着。
                  */
-                stillPending = !!pending(word, contextOf(host, word), tokenAt(el, word));
+                stillPending = !!pending(word, ctxText != null ? ctxText : contextOf(host, word), tokenAt(el, word));
               } catch (e) {
                 stillPending = false;
               }
@@ -2049,6 +2068,11 @@ function buildRuby(base, gloss, provisional, source) {
     function dropDetached() {
       var dead = [];
       records.forEach(function (rec, node) {
+        // 整行改写的记录以区域元素为键：区域脱链就整条丢掉（DOM 都没了，没什么可还原）
+        if (rec.kind === "wrap") {
+          if (!rec.region || !rec.region.isConnected) dead.push(node);
+          return;
+        }
         /*
          * 除了"宿主整个脱链"，还有一种要一起清：宿主还在、但里面换成了**新的**
          * 文本节点（React / RNP 复用同一个 <p>，只把文本节点换掉）。
@@ -2060,6 +2084,10 @@ function buildRuby(base, gloss, provisional, source) {
       });
       for (var i = 0; i < dead.length; i++) {
         var rec = records.get(dead[i]);
+        if (rec.kind === "wrap") {
+          records.delete(dead[i]);
+          continue;
+        }
         for (var j = 0; j < rec.nodes.length; j++) {
           var n = rec.nodes[j];
           if (n.parentNode) n.parentNode.removeChild(n);
@@ -2330,6 +2358,771 @@ function buildRuby(base, gloss, provisional, source) {
       }
     }
 
+    /* ==================================================================
+     * 整行改写引擎
+     *
+     * 照 jp-furigana 的 buildWrap / applyWrap / groupHosts / calibrate 抄的模型：
+     * 把「一行」当成一个整体处理，而不是一个个文本节点打补丁。
+     *
+     * 为什么换：
+     *   1. 老路径是「一个文本节点切一次词」。逐字歌词一行几十个格子，于是
+     *      `WKFurigana.tokens(整行)` 一轮要跑几十遍 —— 那是卡顿的主因
+     *      （有括号读音的行还要多一遍括号正则，所以那种行更明显）。
+     *      整行改写每行只切一次，切完按格子长度分发。
+     *   2. 老路径把 ruby 插在文本节点旁边、把节点切短，每一处都要单独算偏移对齐。
+     *      整行改写是「整行重建 + 一个 wrap 包住」，位置由浏览器排版决定。
+     *   3. 逐字词格让出的高度从写死的数改成量出来的（见 calibrateWordOffset）。
+     *
+     * 接管的边界很保守：
+     *   - 只管歌词行（isLyricRegion）；播放栏标题、面板预览还是老路径
+     *   - 宿主里除了文本节点什么都没有才接管，否则整行退回老路径
+     *   - 任何一步不成立就返回 0，调用方照旧用老路径处理这个区域
+     * 所以这个引擎失效时最坏的结果是「回到上一版的行为」，不会更差。
+     * ================================================================== */
+
+    var wrapOn = options.wrapLines !== false;
+    var lineTokensFn = typeof options.lineTokens === "function" ? options.lineTokens : null;
+    // 一行最多几十个格子（RNP 逐字歌词一个字一格）；再多就别整行重建了
+    var WRAP_MAX_HOSTS = 80;
+    // 注音跨过的格子最多并这么多，再长就不并了（免得半行糊成一个词、整段一起亮）
+    var WRAP_MAX_MERGE = 8;
+    var RE_WRAP_OWN = /(^|\s)wk-line(\s|$)/;
+
+    /** 把一个元素的子节点全清掉（先摘后加，不依赖 replaceChildren） */
+    function clearKids(el) {
+      while (el.firstChild) el.removeChild(el.firstChild);
+    }
+
+    /**
+     * 这一行的原文 + 承载它的宿主（逐字歌词是「一个字一个 span」，整行是 `<p>` 自己）。
+     *
+     * 跳过的判据必须和 markNodeOffsets / originalTextOf 完全一致，否则行文本和
+     * 格子长度对不上 —— 读音会整体贴到隔壁字上。
+     */
+    function slotsOf(region) {
+      var text = "";
+      var hosts = [];
+      var walker = doc.createTreeWalker(region, NodeFilter.SHOW_TEXT, {
+        acceptNode: function () {
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      var node;
+      while ((node = walker.nextNode())) {
+        var p = node.parentNode;
+        if (!p || p.nodeType !== 1) continue;
+        /*
+         * 「这一层算不算原文」的判据和 originalText / originalTextOf 完全一致：
+         *   - <rt> / <rp> / 各家的注音（wk-rt / kt-rt / fg-rt）-> 不是原文，跳过
+         *   - 别人家的注音容器（kt-ruby / fg-ruby）-> 里面是**底字**，算原文
+         *   - RNP 的音译 / 翻译层、逐字动画的替身 -> 跳过
+         * 差一条，行文本就和 main.js 那边（就地改读音的键）对不上。
+         */
+        var skipped = false;
+        for (var up = p; up && up !== region.parentNode && up.nodeType === 1; up = up.parentNode) {
+          if (up.tagName === "RT" || up.tagName === "RP" || isAnnotationNode(up)) {
+            skipped = true;
+            break;
+          }
+          var upCn = typeof up.className === "string" ? up.className : "";
+          if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(upCn)) break; // 底字，要算
+          if (isSkippedRegion(up)) {
+            skipped = true;
+            break;
+          }
+        }
+        if (skipped) continue;
+        // 区域自己那一层的缩进/换行不算正文（和 originalTextOf 同一条）
+        if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
+        var piece = karaokeTextOf(node);
+        if (!piece) continue;
+        var last = hosts.length ? hosts[hosts.length - 1] : null;
+        if (last && last.el === p) {
+          last.parts.push({ node: node, text: piece });
+          last.to = text.length + piece.length;
+        } else {
+          hosts.push({
+            el: p,
+            parts: [{ node: node, text: piece }],
+            from: text.length,
+            to: text.length + piece.length,
+          });
+        }
+        text += piece;
+      }
+      return { text: text, hosts: hosts };
+    }
+
+    /**
+     * 这一行能不能整行重写。
+     *
+     * 判据取严：宿主里除文本节点之外**什么都不能有**（别人的 ruby、`<br>`、
+     * 嵌套结构一律不碰），宿主之间也不能互相嵌套（否则两个 wrap 会互相拆掉）。
+     * 不满足就整行退回老路径 —— 宁可慢一点，不要注错。
+     */
+    function wrapSafe(region, slots) {
+      if (!slots || !slots.text) return false;
+      if (slots.hosts.length > WRAP_MAX_HOSTS) return false;
+      var set = [];
+      var i;
+      var j;
+      for (i = 0; i < slots.hosts.length; i++) set.push(slots.hosts[i].el);
+      for (i = 0; i < slots.hosts.length; i++) {
+        var host = slots.hosts[i].el;
+        if (!host || host.nodeType !== 1 || !host.isConnected) return false;
+        for (var up = host.parentNode; up && up !== region.parentNode; up = up.parentNode) {
+          if (set.indexOf(up) >= 0) return false; // 宿主嵌套
+        }
+        var kids = host.childNodes;
+        for (j = 0; j < kids.length; j++) {
+          var kid = kids[j];
+          if (kid.nodeType === 3) continue;
+          if (kid.nodeType !== 1) return false;
+          if (kid.tagName === "BR") return false;
+          // 只允许「空的壳」（内核不支持 ruby 时降级留下的空 span 之类）
+          if ((kid.textContent || "").replace(/\s+/g, "")) return false;
+        }
+      }
+      return true;
+    }
+
+    /**
+     * 整行一次切词。
+     *
+     * 两条来源：西文/记号（本文件里的 matcher）、振假名与汉谚（上层给的 lineTokens）。
+     * 和老路径（annotateNode）相比只有一处不同 —— 老路径是「一个文本节点切一次」，
+     * 逐字歌词一行几十个格子就要把整行切几十遍，那是卡顿的主因。
+     */
+    function tokensForLine(text, region) {
+      var latinOn =
+        typeof options.annotateLatin === "function"
+          ? options.annotateLatin() !== false
+          : options.annotateLatin !== false;
+      var toks = latinOn ? matcher.scan(text) : [];
+      var extra = null;
+      if (lineTokensFn) {
+        try {
+          extra = lineTokensFn(text, region);
+        } catch (e) {
+          extra = null;
+        }
+      }
+      if (extra && extra.length) toks = mergeTokens(toks, extra);
+      return toks;
+    }
+
+    /**
+     * 把 token 变成「覆盖整行」的分段（jp-furigana 的 segments）：
+     * 没有读音的地方也要有纯文本段，否则 wrap 拼出来的字会比原文少。
+     *
+     * 读音在这里一次定完（lookup / 暂定 / 段标 / 左右邻字），和 annotateNode
+     * 里那段逐条定读音的逻辑是一回事，只是手头有整行、不用跨节点现取。
+     */
+    function segmentsForLine(text, tokens) {
+      var out = [];
+      var pos = 0;
+      var context = text;
+      for (var i = 0; i < tokens.length; i++) {
+        var tk = tokens[i];
+        if (!tk) continue;
+        var s = tk.start;
+        var e = tk.end;
+        if (!(e > s) || s < pos) continue; // 重叠 / 倒序：以先到的为准
+        if (e > text.length) e = text.length;
+        if (s > pos) out.push({ text: text.slice(pos, s) });
+        var seg = { text: text.slice(s, e) };
+        var gloss = null;
+        var src = null;
+        if (tk.hide) {
+          seg.hidden = true;
+        } else if (tk.blank) {
+          seg.blank = true;
+        } else if (tk.kana) {
+          // 振假名 / 汉字 / 谚文：读音是切的时候就定好的，不问读音层
+          gloss = tk.kana;
+          src = tk.source || "cjk";
+        } else {
+          /*
+           * 短词左右挨着什么：读音层要靠它判 `wa-` ウェ / `ラR ア` 的 R 读 ラ。
+           * 老路径是从文本节点跨节点现取的（rawAfterText / rawBeforeText）——
+           * 整行改写时手头就是整行，直接取。
+           */
+          if (tk.text.length <= 3) {
+            var afterRaw = text.slice(e, e + 8);
+            var beforeRaw = text.slice(Math.max(0, s - 8), s);
+            tk.after = firstVisible(afterRaw);
+            tk.afterSpaced = /^\s/.test(afterRaw);
+            tk.before = lastVisible(beforeRaw);
+            tk.beforeSpaced = /\s$/.test(beforeRaw);
+          }
+          // 段标（`(A:` / `B：`）后面紧跟冒号的单字是段标，不标读音
+          if (tk.text.length === 1 && tk.label !== true) {
+            var m = /\S/.exec(text.slice(e));
+            if (m && (m[0] === ":" || m[0] === "\uFF1A")) tk.label = true;
+          }
+          if (matcher.looksReadable(tk)) {
+            var got = null;
+            try {
+              got = lookup(tk.text, context, tk);
+            } catch (eL) {
+              got = null;
+            }
+            if (typeof got === "string") {
+              gloss = got;
+            } else if (got && got.kana) {
+              gloss = got.kana;
+              src = got.source || null;
+            }
+          }
+        }
+        if (gloss) {
+          seg.rt = gloss;
+          seg.source = src;
+          if (pending) {
+            try {
+              seg.pending = !!pending(tk.text, context, tk);
+            } catch (eP) {
+              seg.pending = false;
+            }
+          }
+        }
+        out.push(seg);
+        pos = e;
+      }
+      if (pos < text.length) out.push({ text: text.slice(pos) });
+      return out;
+    }
+
+    /**
+     * 把被注音跨过的几个格子并成一组（照 jp-furigana 的 groupHosts）。
+     *
+     * 逐字歌词把一个词拆成好几个 inline-block 的 span 时，ruby 只能落在第一个上；
+     * 那个盒子被注音撑宽、后面的字被挤开，看着就是「注音跑到字左边、字之间裂开」。
+     * 所以组里第一个承载整段带注音的内容，其余清空 —— 清空的格子还在，逐字动画
+     * 和 RNP 按下标取的动画目标都不受影响，只是并进来的那几个字跟着头一个字一起亮。
+     */
+    function groupHosts(hosts, segs) {
+      // 落在注音词内部的位置 = 不能从这里切开
+      var unsafe = [];
+      var p = 0;
+      var i;
+      for (i = 0; i < segs.length; i++) {
+        var start = p;
+        p += segs[i].text.length;
+        if (!segs[i].rt) continue;
+        for (var q = start + 1; q < p; q++) unsafe[q] = true;
+      }
+      var groups = [];
+      var cur = null;
+      var pos = 0;
+      for (i = 0; i < hosts.length; i++) {
+        if (!cur) cur = { hosts: [], from: pos, to: pos };
+        cur.hosts.push(hosts[i]);
+        pos += hosts[i].to - hosts[i].from;
+        cur.to = pos;
+        var straddles = unsafe[pos] === true && cur.to - cur.from < WRAP_MAX_MERGE;
+        if (straddles && i < hosts.length - 1) continue; // 切在词中间，把下一个也并进来
+        groups.push(cur);
+        cur = null;
+      }
+      if (cur) groups.push(cur);
+      return groups;
+    }
+
+    /** 取 segments 在 [from, to) 区间内的部分；被切断的注音只保留在起始那一段上 */
+    function sliceSegments(segs, from, to) {
+      var out = [];
+      var pos = 0;
+      for (var i = 0; i < segs.length; i++) {
+        var seg = segs[i];
+        var start = pos;
+        var end = pos + seg.text.length;
+        pos = end;
+        if (end <= from || start >= to) continue;
+        var a = Math.max(start, from);
+        var b = Math.min(end, to);
+        var text = seg.text.slice(a - start, b - start);
+        if (!text) continue;
+        // 注音只在「完整包含」或「至少包含词首」的那一段上保留
+        var keepRt = seg.rt && a === start;
+        if (keepRt) out.push({ text: text, rt: seg.rt, source: seg.source, pending: seg.pending });
+        else if (seg.hidden) out.push({ text: text, hidden: true });
+        else if (seg.blank) out.push({ text: text, blank: true });
+        else out.push({ text: text });
+      }
+      return out;
+    }
+
+    /**
+     * 建那个包住整行的 wrap（jp-furigana 的 buildWrap）。
+     *
+     * keep 是框架（React）攥着的原文本节点：不删、只把值清空，然后塞进 wrap 里。
+     * 为什么不删：React 更新纯文本时执行 setTextContent(node)，node 是它内部持有的
+     * 引用 —— 节点一旦脱链，那句话就说给空气听，页面卡在旧歌词上；而且我们就再也
+     * 发现不了「这行换了」。值清空之后它不占位置，下一轮只要发现它又被写了字，
+     * 就知道是换歌/换行，立刻整行还原重注。
+     */
+    function buildWrapEl(segs, cls, keep) {
+      var wrap = doc.createElement("span");
+      wrap.className = cls;
+      for (var i = 0; i < segs.length; i++) {
+        var seg = segs[i];
+        var child;
+        if (seg.hidden) child = makeHideSpan(doc, seg.text);
+        else if (seg.blank) child = makeBlankSpan(doc, seg.text);
+        else if (seg.rt) child = buildRuby(seg.text, seg.rt, seg.pending, seg.source);
+        else child = doc.createTextNode(seg.text);
+        child.__wkOwned = true;
+        wrap.appendChild(child);
+      }
+      for (var k = 0; k < keep.length; k++) wrap.appendChild(keep[k].node);
+      return wrap;
+    }
+
+    /** 从 wrap 里收出所有 ruby（relabel 拿它就地改读音） */
+    function collectRubies(el, out) {
+      var list;
+      try {
+        list = el.querySelectorAll ? el.querySelectorAll("ruby.wk-ruby") : [];
+      } catch (e) {
+        list = [];
+      }
+      for (var i = 0; i < list.length; i++) out.push(list[i]);
+    }
+
+    /**
+     * 把这一格的内容抄到同一个词格的替身上（RNP slide 动画的副本）。
+     *
+     * 副本是 RNP 自己渲染的、内容与本体一字不差，绝对定位叠在本体上做「唱到就亮」。
+     * 只注本体 → 亮起来的那份没有注音，两份还有半个注音的高度差，看着就是重影。
+     */
+    function mirrorToFillers(hostEl, segs, cls, rec) {
+      var word = hostEl.parentNode;
+      if (!word || word.nodeType !== 1 || typeof word.className !== "string") return;
+      if (!RE_KARAOKE_WORD.test(word.className)) return;
+      var kids = word.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var twin = kids[i];
+        if (!twin || twin === hostEl) continue;
+        if (!RE_FILLER_CLASS.test(typeof twin.className === "string" ? twin.className : "")) continue;
+        /*
+         * 已经是我们的 wrap 了就登记一下，不要再套一层。
+         * 换歌/重绘时 RNP 会重建替身，那时这里会走重新套的那条路。
+         */
+        if (
+          twin.childNodes.length === 1 &&
+          twin.firstChild &&
+          twin.firstChild.nodeType === 1 &&
+          RE_WRAP_OWN.test(String(twin.firstChild.className || ""))
+        ) {
+          rec.mirrors.push({ el: twin, wrap: twin.firstChild, orig: [] });
+          continue;
+        }
+        var keep = [];
+        for (var j = 0; j < twin.childNodes.length; j++) {
+          var tn = twin.childNodes[j];
+          if (tn.nodeType === 3) {
+            keep.push({ node: tn, raw: tn.nodeValue });
+            tn.nodeValue = "";
+          }
+        }
+        var clone = buildWrapEl(segs, cls, keep);
+        clearKids(twin);
+        twin.appendChild(clone);
+        rec.mirrors.push({ el: twin, wrap: clone, orig: keep });
+      }
+    }
+
+    /** 整行重写一条（建 DOM + 记账） */
+    function wrapLineNow(region, slots, segs) {
+      var rec = {
+        kind: "wrap",
+        region: region,
+        // relabel / contextOf 要按"宿主"取语境：整行的宿主就是区域自己
+        host: region,
+        text: slots.text,
+        hosts: [],
+        mirrors: [],
+        nodes: [],
+        at: clock(),
+      };
+      var groups = groupHosts(slots.hosts, segs);
+      for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        var mine = sliceSegments(segs, group.from, group.to);
+        for (var i = 0; i < group.hosts.length; i++) {
+          var host = group.hosts[i];
+          // 整段内容放在组里第一个格子上，其余清空（清空的格子还挂着框架的原节点）
+          var segsHere = i === 0 ? mine : [];
+          var isWord = host.el !== region;
+          if (isWord) rec.mirrorable = true;
+          var cls = isWord ? "wk-line wk-word" : "wk-line";
+          var keep = [];
+          for (var j = 0; j < host.parts.length; j++) {
+            var part = host.parts[j];
+            keep.push({ node: part.node, raw: part.node.nodeValue });
+            part.node.nodeValue = "";
+          }
+          var wrap = buildWrapEl(segsHere, cls, keep);
+          clearKids(host.el);
+          host.el.appendChild(wrap);
+          rec.hosts.push({ el: host.el, wrap: wrap, orig: keep, segs: segsHere, cls: cls });
+          if (i === 0) collectRubies(wrap, rec.nodes);
+          if (isWord) mirrorToFillers(host.el, segsHere, cls, rec);
+        }
+      }
+      return rec;
+    }
+
+    /** 替身被 RNP 重建过就补一遍（只动替身，不动本体） */
+    function ensureMirrors(rec) {
+      if (!rec || !rec.hosts.length || !rec.mirrorable) return;
+      var alive = true;
+      for (var i = 0; i < rec.mirrors.length; i++) {
+        var m = rec.mirrors[i];
+        // 0 个 orig 的那条是"本来就挂着我们的 wrap"的登记项，不能当失效
+        if (m.orig.length && (!m.el || !m.el.isConnected || m.wrap.parentNode !== m.el)) {
+          alive = false;
+          break;
+        }
+      }
+      if (alive && rec.mirrors.length) return;
+      rec.mirrors = [];
+      for (var h = 0; h < rec.hosts.length; h++) {
+        var host = rec.hosts[h];
+        if (!host.el || !host.el.isConnected) continue;
+        mirrorToFillers(host.el, host.segs || [], host.cls || "wk-line wk-word", rec);
+      }
+    }
+
+    /** 整行还原成框架的原样（wrap 摘掉，原文本节点按原值放回） */
+    function unwrapRec(rec) {
+      var i;
+      for (i = 0; i < rec.hosts.length; i++) {
+        var h = rec.hosts[i];
+        var el = h.el;
+        if (!el || !el.isConnected) continue;
+        var j;
+        if (h.wrap && h.wrap.parentNode === el) {
+          // 先按原顺序把原节点插回 wrap 前面，再摘 wrap（顺序不能反：
+          // 原节点这会儿还在 wrap 里面，先摘 wrap 会把它们一起带走）
+          for (j = 0; j < h.orig.length; j++) {
+            var o = h.orig[j];
+            if (!o.node) continue;
+            if (o.node.nodeValue === "") o.node.nodeValue = o.raw;
+            if (o.node.parentNode !== el) el.insertBefore(o.node, h.wrap);
+          }
+          el.removeChild(h.wrap);
+        } else {
+          /*
+           * wrap 已经不在宿主里了：宿主的内容被框架整个重建过。
+           *
+           * 这时**一个字都不许往宿主里塞**——原文本节点里的文字还在 DOM 里
+           * （框架渲染的），把我们的旧节点再挂回去，同一句话就会渲染两遍
+           * （真机现象：换歌后上面一行出现两遍歌词）。
+           * 原节点要是已经脱链（跟着被摘掉的 wrap 一起走的），什么都不用做。
+           */
+          for (j = 0; j < h.orig.length; j++) {
+            var o2 = h.orig[j];
+            if (!o2.node || !o2.node.isConnected) continue;
+            if (o2.node.nodeValue === "" && o2.node.parentNode === el) o2.node.nodeValue = o2.raw;
+          }
+        }
+      }
+      for (i = 0; i < rec.mirrors.length; i++) {
+        var m = rec.mirrors[i];
+        if (!m.el || !m.el.isConnected) continue;
+        if (m.wrap && m.wrap.parentNode === m.el) m.el.removeChild(m.wrap);
+        for (var q = 0; q < m.orig.length; q++) {
+          var o3 = m.orig[q];
+          if (!o3.node) continue;
+          if (o3.node.nodeValue === "") o3.node.nodeValue = o3.raw;
+          if (o3.node.parentNode !== m.el) m.el.appendChild(o3.node);
+        }
+      }
+    }
+
+    /** 这一行的改动还在不在（框架重建过就为假） */
+    function wrapClean(rec) {
+      var region = rec.region;
+      if (!region || !region.isConnected) return false;
+      var seen = "";
+      for (var i = 0; i < rec.hosts.length; i++) {
+        var h = rec.hosts[i];
+        if (!h.el || !h.el.isConnected) return false;
+        if (h.el.childNodes.length !== 1 || h.el.firstChild !== h.wrap) return false;
+        for (var j = 0; j < h.orig.length; j++) {
+          var o = h.orig[j];
+          // 框架把新歌词写进原文本节点了 → 这一行换了，必须整行重来
+          if (!o.node || o.node.nodeValue !== "") return false;
+        }
+        /*
+         * 再把 wrap 里现在露出来的字和"我们写进去的那些"对一遍。
+         *
+         * 只查结构不够：别的插件（或 RNP 自己）会把 [ruby] 单独摘掉、把 wrap 留着 ——
+         * 那时结构完好，底字却少了一截（真机：整行只剩标点）。
+         * 对不上就当脏了，整行还原重注。
+         */
+        seen += visibleText(h.wrap);
+      }
+      if (rec.text != null && seen !== rec.text) return false;
+      return true;
+    }
+
+    /** 老路径（逐节点）落在这一行里的记录，一次性全部还原 */
+    function restoreRecordsIn(region) {
+      var dead = [];
+      records.forEach(function (rec, key) {
+        if (rec.kind === "wrap") return;
+        var h = rec.host;
+        if (h && h !== region && region.contains(h)) dead.push(key);
+      });
+      for (var i = 0; i < dead.length; i++) {
+        var r = records.get(dead[i]);
+        if (r) restoreRecord(dead[i], r);
+      }
+    }
+
+    /**
+     * 整行接管一个区域。
+     *
+     * ctx.stat 是这个区域这一轮的结论（调用方累加计数用）：
+     *   took     接没接管
+     *   changed  重建了这一行
+     *   restored 之前的注音被判脏、还原了
+     *   skipped  接管了但这一轮故意不注（文本在动 / 认输期）
+     * @returns {number} 0=没接管（交给老路径）；1=接管且没变；2=接管并重建了；3=接管但跳过
+     */
+    function wrapOneLine(region, ctx) {
+      var stat = ctx.stat;
+      stat.took = false;
+      stat.changed = false;
+      stat.restored = false;
+      stat.skipped = false;
+      var rec = records.get(region);
+      if (rec && rec.kind === "wrap") {
+        if (wrapClean(rec)) {
+          ensureMirrors(rec);
+          stat.took = true;
+          return 1;
+        }
+        unwrapRec(rec);
+        records.delete(region);
+        stat.restored = true;
+      }
+
+      var slots = slotsOf(region);
+      if (!wrapSafe(region, slots)) return 0;
+      var text = slots.text;
+      /*
+       * 「这行一直在变」和「注什么就被抹什么」那两道闸门。
+       *
+       * 整行重写的开销比逐节点补丁大（一行重建一次 DOM），所以更要防着
+       * 一种场景：某个插件无条件重建这一行，我们注一次它抹一次。追就是抽搐，
+       * 而且白烧 CPU。判据沿用老路径那两套（按文本计数，跨重建累计）：
+       *   - 窗口内文本变太快 -> 这一轮放弃（窗口过了自动重试）；
+       *   - 底字一个字没变、注音却反复被抹 -> 认输一段（1s 起翻倍，1min 封顶）。
+       */
+      var nowMs = clock();
+      var motion = motionByHost.get(region);
+      if (!motion) {
+        motion = { text: text, changes: 0, since: nowMs };
+        motionByHost.set(region, motion);
+      } else {
+        if (motion.changes > 0 && nowMs - motion.since > MOTION_WINDOW_MS) {
+          motion.changes = 0;
+          motion.since = nowMs;
+        }
+        if (motion.text !== text) {
+          if (motion.changes === 0) motion.since = nowMs;
+          motion.text = text;
+          motion.changes++;
+        }
+      }
+      if (motion.changes >= MOTION_LIMIT) {
+        stat.took = true;
+        stat.skipped = true;
+        noteSkip("文本在动 " + motion.changes + " 次/" + Math.round(MOTION_WINDOW_MS / 1000) + "s", text, region);
+        noteCtxRetry(ctx, MOTION_WINDOW_MS - (nowMs - motion.since) + 50);
+        return 3;
+      }
+      if (churnSuppressed(text)) {
+        stat.took = true;
+        stat.skipped = true;
+        noteSkip("认输期", text, region);
+        var until = churnUntil.get(text);
+        if (until) noteCtxRetry(ctx, until - nowMs + 20);
+        return 3;
+      }
+      // 文本没变、注音却没了 = 有人无条件重建这一行（age 够大就不算，见 noteChurn）
+      if (stat.restored && text === (rec && rec.text)) {
+        noteChurn(text, idOf(region), rec && rec.at ? nowMs - rec.at : -1, null, region);
+      }
+      if (isCreditText(text)) {
+        noteSkip("制作信息行", text, region);
+        return 0;
+      }
+      if (isPlaceholderLine(text)) {
+        noteSkip("占位行（纯音乐 / 暂无歌词）", text, region);
+        return 0;
+      }
+      if (ctx && ctx.creditCache && insideCreditBlock(lineElementOf(region) || region, ctx.creditCache)) {
+        noteSkip("制作信息块（前后都是署名行）", text, region);
+        return 0;
+      }
+      var tokens = tokensForLine(text, region);
+      if (!tokens || !tokens.length) {
+        noteSkip("切不出词", text, region);
+        return 0;
+      }
+      var segs = segmentsForLine(text, tokens);
+      var any = false;
+      for (var i = 0; i < segs.length; i++) {
+        if (segs[i].rt || segs[i].hidden || segs[i].blank) {
+          any = true;
+          break;
+        }
+      }
+      if (!any) {
+        noteSkip("无译文", text, region);
+        return 0;
+      }
+      /*
+       * 引擎切换（升级后第一轮）时，这一行上可能还挂着老路径的注音 ——
+       * 只有确定要接管了才还原它们：提前还原的话，一旦这行退回老路径，
+       * 那一行每轮都会被"还原 + 重注"一遍（看起来就是一直在闪）。
+       */
+      restoreRecordsIn(region);
+      var made = wrapLineNow(region, slots, segs);
+      records.set(region, made);
+      /*
+       * 标上「这一行我们注过音」。就地改读音（main.js 的 lineElementOf /
+       * lineTextOf / rubyOffset）靠这个属性找"整行原文"，没有它就只能用
+       * 双击到的那一个 ruby 当整行 —— 存的修正在行文本里对不上任何一处。
+       * 用 data-* 而不是 class：区域元素常和别的歌词插件共用，改 className
+       * 会让对方判定"这行变了"并重建整行（见 untagData 的说明）。
+       */
+      try {
+        if (region.setAttribute && region.getAttribute("data-wk-region") !== "1") {
+          region.setAttribute("data-wk-region", "1");
+        }
+      } catch (eAttr) {
+        /* 没有 setAttribute 就算了 */
+      }
+      if (!hasRubyLayout(doc) && region.setAttribute && !region.hasAttribute("data-wk-fallback")) {
+        region.setAttribute("data-wk-fallback", "1");
+      }
+      stat.took = true;
+      stat.changed = true;
+      return 2;
+    }
+
+    /*
+     * 逐字词格给注音让出多少高度 —— 量出来的，不是写死的（照 jp-furigana 的 calibrate）。
+     *
+     * 注音的高度撑不到外面那层行盒（RNP 按 clientHeight 排行距），所以两个坏结果：
+     * 注音顶到上一行头上；或者只有带注音的那个字被撑高、比左右邻居低一截。
+     * 解法是在每个词格的 wrap 上加 padding-top，再用负 margin 把这截还给行距。
+     * 让多少按注音字号估一个数总有一边不对（换字号/字体/内核就变），所以量：
+     * 注音上边离 wrap 上边的距离 gap，目标贴着顶留 1px，差多少就往
+     * --wk-word-offset 上补多少（1:1，一两轮就收敛）。
+     */
+    var CAL_MAX = 8;
+    var calTries = 0;
+    var calOffset = null; // em；null = 还没量过，用样式表里那个估算值
+    var calSample = null;
+
+    function setWordVars(offsetEm) {
+      try {
+        var root = doc.documentElement && doc.documentElement.style;
+        if (!root) return;
+        var v = offsetEm.toFixed(3);
+        root.setProperty("--wk-word-offset", v + "em");
+        root.setProperty("--wk-word-tail", "-" + v + "em");
+      } catch (e) {
+        /* 没有 documentElement 就算了 */
+      }
+    }
+
+    function clampEm(v) {
+      return Math.max(-2, Math.min(2, Math.round(v * 1000) / 1000));
+    }
+
+    /**
+     * @returns {number} 还要不要再量一轮（>0 = 多少毫秒后再来）
+     */
+    function calibrateWordOffset() {
+      if (!wrapOn) return 0;
+      if (calTries >= CAL_MAX) return 0;
+      var words;
+      try {
+        words = doc.querySelectorAll(".rnp-lyrics-line .wk-line.wk-word");
+      } catch (e0) {
+        return 0;
+      }
+      var word = null;
+      for (var i = 0; i < words.length && i < 40; i++) {
+        if (words[i].querySelector("rt.wk-rt, .wk-rt")) {
+          word = words[i];
+          break;
+        }
+      }
+      if (!word) return 0;
+      if (word !== calSample) {
+        // 换了一行 / 换歌：重新量（上一行的结论未必适用于这一行）
+        calSample = word;
+        calTries = 0;
+      }
+      var rt = word.querySelector("rt.wk-rt, .wk-rt");
+      var lb;
+      var tb;
+      var fs = 0;
+      var h = 0;
+      try {
+        lb = word.getBoundingClientRect();
+        tb = rt.getBoundingClientRect();
+        fs = parseFloat(getComputedStyle(word).fontSize) || 0;
+        h = word.offsetHeight;
+      } catch (e1) {
+        return 0;
+      }
+      // jsdom / 还没排版：量不到就按样式表里的估算值来，别乱调
+      if (!lb || !tb || !lb.height || !tb.height || !fs || !h) return 0;
+      var scale = lb.height / h;
+      if (!(scale > 0.01)) scale = 1;
+      var gap = (tb.top - lb.top) / scale;
+      var dTop = gap - 1;
+      if (Math.abs(dTop) <= 1.5) {
+        calTries = CAL_MAX; // 对上了
+        return 0;
+      }
+      var cur = calOffset;
+      if (cur == null) {
+        try {
+          cur = (parseFloat(getComputedStyle(word).paddingTop) || 0) / fs;
+        } catch (e2) {
+          cur = 0.57;
+        }
+        if (!(cur > 0)) cur = 0.57;
+      }
+      calTries++;
+      calOffset = clampEm(cur - dTop / fs);
+      setWordVars(calOffset);
+      if (options.log) {
+        options.log(
+          "校准逐字让位 gap=" + Math.round(gap) + "px → --wk-word-offset: " + calOffset + "em"
+        );
+      }
+      return 60;
+    }
+
+    /** 记一条"过一会儿再试"（取最短的那个） */
+    function noteCtxRetry(ctx, ms) {
+      if (!(ms > 0)) return -1;
+      if (!(ctx.retry > 0) || ms < ctx.retry) ctx.retry = Math.round(ms);
+      return ctx.retry;
+    }
+
     /**
      * 跑一遍。
      *   regions 传了 -> 只扫这些区域
@@ -2349,31 +3142,6 @@ function buildRuby(base, gloss, provisional, source) {
       // 会把空数组当成"没传"，于是"不标任何区域"反而变成了"扫默认区域"——
       // 设置里关掉播放栏标注后它还在注音，就是这个 bug。
       var list = regions ? regions : findRegions("safe");
-      try {
-        markNodeOffsets(list);
-      } catch (eOff) {
-        if (options.log) options.log("标偏移失败：" + (eOff && eOff.message));
-      }
-      if (!list.length) {
-        // 一个区域都没有（例如范围设成了"不标"）：
-        // 要把已有的注音撤掉，而不是什么都不做 —— 否则关掉开关后
-        // 页面上还留着之前注的音，看起来像"关不掉"。
-        if (records.size) {
-          var removed = records.size;
-          restoreAll();
-          return { scanned: 0, changed: 0, restored: removed, skipped: 0, unstable: 0 };
-        }
-        return { scanned: 0, changed: 0, restored: restored };
-      }
-
-      // 先收集一遍待检查的文本节点。还原（restoreRecord）会改变 host 的子节点结构，
-      // 但那些文本节点本身还是原来那些对象（原节点、我们插入的文本分段都还是同一批），
-      // 所以先收集、循环里再读 node.nodeValue 是安全的；反过来在循环内收集会漏掉
-      // 「刚被还原成原文」的节点（快照拍在还原之前，拿到的是"今日は"这种被切短的半截文本，
-      // 于是那一行永远标不回来）。
-      var candidates = collectTextNodes(list);
-      // 每个区域的原文每轮算一次（下面当语境用，见 annotateNode 里的说明）
-      regionTextMemo = new Map();
 
       var changed = 0;
       var skipped = 0;
@@ -2414,6 +3182,96 @@ function buildRuby(base, gloss, provisional, source) {
         if (!(ms > 0)) return;
         if (retryInMs === 0 || ms < retryInMs) retryInMs = ms;
       }
+
+      /*
+       * 第一步：整行改写。
+       *
+       * 歌词行交给整行引擎（一行一次切词、整行重建），其余区域（播放栏标题、
+       * 面板预览）还是走逐节点那套。没被接管的区域原封不动地进 rest，老路径
+       * 照旧处理 —— 两条路不重叠，也不会对同一行各注一遍。
+       */
+      var rest = [];
+      // retry 用 -1 当"还没定"：0 在 Math.min 里会把"要重试"吃掉
+      var wrapCtx = { creditCache: creditBlockCache, stat: {}, retry: -1 };
+      var wrapChanged = 0;
+      var wrapLines = 0;
+      var wi;
+      if (wrapOn) {
+        for (wi = 0; wi < list.length; wi++) {
+          var wreg = list[wi];
+          if (
+            !wreg ||
+            wreg.nodeType !== 1 ||
+            !wreg.isConnected ||
+            isSkippedRegion(wreg) ||
+            !isLyricRegion(wreg) ||
+            !regionVisible(wreg)
+          ) {
+            rest.push(wreg);
+            continue;
+          }
+          /*
+           * 整层跳过的祖先也要看：RNP 的复制模式把 `overview-mode-hide` 挂在
+           * `.rnp-lyrics` 上、把 -romaji / -translated 挂在行里 —— 只判区域自己
+           * 会漏掉整块不该注音的情况（真机：复制模式里歌词照样被注了音）。
+           */
+          var skipUp = false;
+          for (var upEl = wreg.parentNode; upEl && upEl.nodeType === 1; upEl = upEl.parentNode) {
+            if (isSkippedRegion(upEl)) {
+              skipUp = true;
+              break;
+            }
+          }
+          if (skipUp) {
+            rest.push(wreg);
+            continue;
+          }
+          var took = 0;
+          try {
+            took = wrapOneLine(wreg, wrapCtx);
+          } catch (eWrap) {
+            took = 0;
+            if (options.log) options.log("整行改写失败：" + ((eWrap && eWrap.message) || eWrap));
+          }
+          if (wrapCtx.stat.restored) restored++;
+          if (wrapCtx.stat.skipped) unstable++;
+          if (took) {
+            wrapLines++;
+            if (wrapCtx.stat.changed) wrapChanged++;
+          } else {
+            rest.push(wreg);
+          }
+        }
+        if (wrapCtx.retry > 0) noteRetry(wrapCtx.retry);
+      } else {
+        rest = list;
+      }
+      if (!list.length) {
+        // 一个区域都没有（例如范围设成了"不标"）：
+        // 要把已有的注音撤掉，而不是什么都不做 —— 否则关掉开关后
+        // 页面上还留着之前注的音，看起来像"关不掉"。
+        if (records.size) {
+          var removed = records.size;
+          restoreAll();
+          return { scanned: 0, changed: 0, restored: removed, skipped: 0, unstable: 0 };
+        }
+        return { scanned: 0, changed: 0, restored: restored };
+      }
+
+      try {
+        markNodeOffsets(rest);
+      } catch (eOff) {
+        if (options.log) options.log("标偏移失败：" + (eOff && eOff.message));
+      }
+      // 先收集一遍待检查的文本节点。还原（restoreRecord）会改变 host 的子节点结构，
+      // 但那些文本节点本身还是原来那些对象（原节点、我们插入的文本分段都还是同一批），
+      // 所以先收集、循环里再读 node.nodeValue 是安全的；反过来在循环内收集会漏掉
+      // 「刚被还原成原文」的节点（快照拍在还原之前，拿到的是"今日は"这种被切短的半截文本，
+      // 于是那一行永远标不回来）。
+      var candidates = rest.length ? collectTextNodes(rest) : [];
+      // 每个区域的原文每轮算一次（下面当语境用，见 annotateNode 里的说明）
+      regionTextMemo = new Map();
+
       for (var i = 0; i < candidates.length; i++) {
         var node = candidates[i];
 
@@ -2666,6 +3524,18 @@ function buildRuby(base, gloss, provisional, source) {
       var notes = skipNotes;
       skipNotes = [];
       /*
+       * 整行改写这条路的收尾：让位高度量一轮（jp-furigana 的 calibrate）。
+       * 量不到（jsdom / 还没排版）就什么都不做，样式表里的估算值照旧生效。
+       *
+       * 刻意**不**在"这一轮改过行"时重置计数：逐字歌词页上 RNP 一直在重建行，
+       * 每轮都重置就等于每个 60ms 都重排一次去量它 —— 白烧 CPU。
+       * 真正需要重新量的时机（换了一行 / 换歌）由 calibrateWordOffset 自己判：
+       * 量到的样本元素变了就把计数清零。
+       */
+      if (wrapLines) {
+        noteRetry(calibrateWordOffset());
+      }
+      /*
        * 把这一轮真正处理过的区域也交回去：上层（统一行距）要按"原文行"逐个写内联样式，
        * 自己再调一次 findRegions("lyrics") 就等于每轮多查一遍 DOM
        * （11 个选择器 + 逐元素可见性判断），真机上那点开销够让歌词滚起来发涩。
@@ -2676,7 +3546,7 @@ function buildRuby(base, gloss, provisional, source) {
       }
       return {
         scanned: list.length,
-        changed: changed,
+        changed: changed + wrapChanged,
         restored: restored,
         skipped: skipped,
         unstable: unstable,
@@ -2845,8 +3715,8 @@ function buildRuby(base, gloss, provisional, source) {
       "  border-bottom: 1px dashed rgba(255,255,255,.35);",
       "}",
       '[data-wk-fallback] { position: relative; }',
-      '[data-wk-fallback] > ruby.wk-ruby { position: relative; display: inline-block; }',
-      '[data-wk-fallback] > ruby.wk-ruby > .wk-rt {',
+      '[data-wk-fallback] ruby.wk-ruby { position: relative; display: inline-block; }',
+      '[data-wk-fallback] ruby.wk-ruby > .wk-rt {',
       "  position: absolute;",
       "  left: 50%;",
       "  bottom: 100%;",
@@ -2865,9 +3735,18 @@ function buildRuby(base, gloss, provisional, source) {
        *      看着就是「整行居中、唱到哪就歪到哪」。
        * 解法：给**每个**词格都让出同样的高度（padding-top），再用负的 margin-bottom
        * 把这截还给行距。不分有没有注音 —— 只给带注音的那个加，它反而更矮。
-       * 让多少按注音字号算（rtSize% 就是那层注音的高度），换字号/换字体也跟得上。
+       *
+       * 让多少：样式表里先按注音字号估一个（var 的默认值），运行时再由
+       * annotate.js 的 calibrateWordOffset() 量出实际差距改这两个变量。
+       * 估的那个数总有一边不对（换字号 / 字体 / 内核都会变），量出来才收敛。
        */
-      ".rnp-lyrics-line .rnp-karaoke-word > span {",
+      // 整行改写的词格：wrap 是 `span.wk-line.wk-word`
+      ".rnp-lyrics-line .wk-line.wk-word {",
+      "  padding-top: var(--wk-word-offset, " + padEm + "em);",
+      "  margin-bottom: var(--wk-word-tail, -" + padEm + "em);",
+      "}",
+      // 老路径（逐节点打补丁）的词格：wrap 只可能是词格自己的 span
+      ".rnp-lyrics-line .rnp-karaoke-word > span:not(.wk-line) {",
       "  padding-top: " + padEm + "em;",
       "  margin-bottom: -" + padEm + "em;",
       "}",
