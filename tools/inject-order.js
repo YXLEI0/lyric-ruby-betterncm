@@ -23,6 +23,7 @@ const WANT_ORDER = [
   "core/cjk.js",
   "core/cn-line.js",
   "core/external.js",
+  "core/rnp.js",
   "core/numbers.js",
   "core/furigana.js",
   "core/reading.js",

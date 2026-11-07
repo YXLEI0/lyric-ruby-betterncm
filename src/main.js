@@ -189,9 +189,13 @@
     furiganaKana: "hiragana",
     // 自定义读音：一行一条 `底字=假名`（面板里「高级设置 → 自定义读音」）
     furiganaOverrides: "",
-    // 外部网站读音来源（UtaTen）：默认关，第一次开要确认第三方内容的使用条款
+    // 外部网站读音来源（UtaTen / Uta-net）：默认关，第一次开要确认第三方内容的使用条款
     externalUtaten: false,
     externalConsent: false,
+    // 用哪些网站：auto = 先 UtaTen，失败再 Uta-net
+    externalProvider: "auto",
+    // 每首歌的 JSON 缓存目录，留空 = <BetterNCM 数据目录>/lyrics/lyric-ruby
+    externalCacheDir: "",
     // 手动指定的 UtaTen 歌词页：{ 歌曲键: url }（留空/删除 = 回到自动搜索）
     externalManualUrls: {},
     // 歌词界面里就地改的读音（老版本，按词；启动时迁到下面那套）
@@ -3271,7 +3275,7 @@
    */
   var EXTERNAL_CACHE_KEY = "lyric-ruby.external.v1";
   var EXTERNAL_CACHE_MAX = 8;
-  var externalState = { key: null, index: null, status: "", loading: false, url: "" };
+  var externalState = { key: null, index: null, status: "", loading: false, url: "", skipFile: false };
 
   function externalEnabled() {
     return config.externalUtaten === true && config.externalConsent === true;
@@ -3436,12 +3440,18 @@
   function refreshExternalUI() {
     try {
       var el = document.querySelector('[data-v="extStatus"]');
-      if (!el) return;
-      if (!config.externalUtaten) el.textContent = "未启用";
-      else if (externalState.loading) el.textContent = externalState.status || "正在获取…";
-      else el.textContent = externalState.status || (externalState.index ? "已获取" : "等待获取");
+      if (el) {
+        if (!config.externalUtaten) el.textContent = "未启用";
+        else if (externalState.loading) el.textContent = externalState.status || "正在获取…";
+        else el.textContent = externalState.status || (externalState.index ? "已获取" : "等待获取");
+      }
     } catch (e) {
       /* 面板没开 */
+    }
+    try {
+      if (state.rnpPanel && state.rnpPanel.refresh) state.rnpPanel.refresh();
+    } catch (e2) {
+      /* RNP 面板没挂 */
     }
   }
 
@@ -3487,13 +3497,19 @@
     return true;
   }
 
-  /** 从 utaten.com 的隐形 iframe 里取 HTML（站点要求 Referer；跨域 fetch 会被 CORS 拦） */
+  /**
+   * 从网站的隐形 iframe 里取 HTML（站点要求 Referer；跨域 fetch 会被 CORS 拦）。
+   *
+   * 两家的来源页必须是**各自的域名**：拿 utaten.com 的 iframe 去 fetch uta-net.com
+   * 是跨域，必被拦；所以按目标地址选 origin。
+   */
   function fetchExternalHtml(url) {
     if (typeof WKExternal === "undefined" || !WKExternal.allowedURL(url)) {
-      return Promise.reject(new Error("只允许访问 UtaTen"));
+      return Promise.reject(new Error("只允许访问 UtaTen / Uta-net"));
     }
     var override = typeof window !== "undefined" ? window.__WK_EXTERNAL_FETCH__ : null;
     if (typeof override === "function") return Promise.resolve(override(url));
+    var origin = /uta-net\.com/i.test(String(url)) ? "https://www.uta-net.com" : "https://utaten.com";
     return new Promise(function (resolve, reject) {
       var frame = null;
       var timer = null;
@@ -3521,12 +3537,12 @@
         frame.onload = function () {
           try {
             var win = frame.contentWindow;
-            if (!win || !win.location || win.location.origin !== "https://utaten.com") {
+            if (!win || !win.location || win.location.origin !== origin) {
               finish(new Error("网站来源页没有加载"));
               return;
             }
             win
-              .fetch(url, { credentials: "omit", referrer: "https://utaten.com/", referrerPolicy: "origin", cache: "no-store" })
+              .fetch(url, { credentials: "omit", referrer: origin + "/", referrerPolicy: "origin", cache: "no-store" })
               .then(function (r) {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.text();
@@ -3543,7 +3559,7 @@
         frame.onerror = function () {
           finish(new Error("网站来源页没有加载"));
         };
-        frame.src = "https://utaten.com/robots.txt";
+        frame.src = origin + "/robots.txt";
         (document.body || document.documentElement).appendChild(frame);
       } catch (e2) {
         finish(e2);
@@ -3574,10 +3590,10 @@
     });
   }
 
-  function externalSearchOnce(url, title, artists) {
+  function externalSearchOnce(url, title, artists, provider) {
     return fetchExternalHtml(url)
       .then(function (html) {
-        return WKExternal.parseSearch(html);
+        return WKExternal.parseSearch(html, provider);
       })
       .then(function (candidates) {
         for (var i = 0; i < artists.length; i++) {
@@ -3593,14 +3609,219 @@
       });
   }
 
-  function tryExternalSearch(urls, at, title, artists) {
-    if (at >= urls.length) return Promise.reject(new Error("UtaTen 没找到匹配的歌曲"));
-    return externalSearchOnce(urls[at], title, artists).then(function (hit) {
-      if (!hit) return tryExternalSearch(urls, at + 1, title, artists);
+  /** 一个来源的完整流程：搜索页 -> 候选 -> 歌词页 -> 解析 */
+  function tryProvider(provider, urls, at, title, artists) {
+    var name = provider === "utanet" ? "Uta-net" : "UtaTen";
+    if (at >= urls.length) return Promise.reject(new Error(name + " 没找到匹配的歌曲"));
+    return externalSearchOnce(urls[at], title, artists, provider).then(function (hit) {
+      if (!hit) return tryProvider(provider, urls, at + 1, title, artists);
       return fetchExternalHtml(hit.url).then(function (html) {
-        return WKExternal.parseLyric(html, hit.url);
+        return provider === "utanet"
+          ? WKExternal.parseUtanet(html, hit.url, hit)
+          : WKExternal.parseLyric(html, hit.url);
       });
     });
+  }
+
+  /** 按配置的来源顺序依次试：自动 = 先 UtaTen，失败再 Uta-net */
+  function externalProviders() {
+    var want = config.externalProvider;
+    if (want === "utaten") return ["utaten"];
+    if (want === "utanet") return ["utanet"];
+    return ["utaten", "utanet"];
+  }
+
+  function tryExternalSearch(clean, artists) {
+    var providers = externalProviders();
+    var at = 0;
+    function next() {
+      if (at >= providers.length) return Promise.reject(new Error("两个网站都没找到匹配的歌曲"));
+      var provider = providers[at++];
+      var urls = [];
+      if (provider === "utanet") {
+        // Uta-net 的搜索页只认歌名，歌手在候选里核对
+        var one = WKExternal.searchURL(clean, "", "utanet");
+        if (one) urls.push(one);
+      } else {
+        for (var i = 0; i < artists.length; i++) {
+          var u = WKExternal.searchURL(clean, artists[i]);
+          if (u && urls.indexOf(u) < 0) urls.push(u);
+        }
+        var titleOnly = WKExternal.searchURL(clean, "");
+        if (titleOnly && urls.indexOf(titleOnly) < 0) urls.push(titleOnly);
+      }
+      if (!urls.length) return next();
+      externalState.status = "正在查询 " + (provider === "utanet" ? "Uta-net" : "UtaTen") + "…";
+      refreshExternalUI();
+      return tryProvider(provider, urls, 0, clean, artists).then(null, function (err) {
+        externalState.status = (provider === "utanet" ? "Uta-net" : "UtaTen") + "：" + String((err && err.message) || err);
+        refreshExternalUI();
+        return next();
+      });
+    }
+    return next();
+  }
+
+  // ------------------------------------------------------------ 每首歌的 JSON 缓存
+  /*
+   * 放在插件解压目录**之外**（默认 `<BetterNCM 数据目录>/lyrics/lyric-ruby/<歌曲ID>.json`），
+   * 更新插件时不会被删掉。一首歌一个文件，存网站原文 / 读音 / 来源地址 / 歌曲信息。
+   *
+   * 为什么还要 localStorage：文件读写是异步的（betterncm.fs），有些环境干脆没有 fs；
+   * localStorage 那份是"当场就能用"的短缓存，文件那份是长期缓存。
+   */
+  function dataRoot() {
+    var base = "";
+    try {
+      if (typeof plugin !== "undefined" && plugin && plugin.pluginPath) base = String(plugin.pluginPath);
+    } catch (e) {
+      base = "";
+    }
+    base = base.replace(/[\\/]+$/, "");
+    // 插件目录形如 <数据目录>/plugins_runtime/<slug>；退一级就是数据目录
+    var m = base.match(/^(.*)[\\/](?:plugins_runtime|plugins)[\\/][^\\/]+$/i);
+    return m ? m[1] : base;
+  }
+
+  function externalCacheDir() {
+    var custom = String(config.externalCacheDir == null ? "" : config.externalCacheDir).replace(/^\s+|\s+$/g, "");
+    if (custom) return custom.replace(/[\\/]+$/, "");
+    var root = dataRoot();
+    return root + "/lyrics/lyric-ruby";
+  }
+
+  function songFilePath(id) {
+    return externalCacheDir() + "/" + String(id) + ".json";
+  }
+
+  function fsApi() {
+    try {
+      if (typeof betterncm !== "undefined" && betterncm && betterncm.fs) return betterncm.fs;
+    } catch (e) {
+      /* 没有 fs 就算了 */
+    }
+    return null;
+  }
+
+  function fsReadText(path) {
+    var fs0 = fsApi();
+    if (!fs0) return Promise.reject(new Error("没有文件接口"));
+    if (typeof fs0.readFileText === "function") return Promise.resolve(fs0.readFileText(path));
+    if (typeof fs0.readFile === "function") {
+      return Promise.resolve(fs0.readFile(path)).then(function (data) {
+        if (typeof data === "string") return data;
+        if (data && typeof data.text === "function") return data.text();
+        if (data && typeof data.arrayBuffer === "function") {
+          return data.arrayBuffer().then(function (ab) {
+            return new TextDecoder("utf-8").decode(ab);
+          });
+        }
+        return String(data || "");
+      });
+    }
+    return Promise.reject(new Error("没有读文件的接口"));
+  }
+
+  function fsWriteText(path, text) {
+    var fs0 = fsApi();
+    if (!fs0) return Promise.reject(new Error("没有文件接口"));
+    if (typeof fs0.writeFileText === "function") return Promise.resolve(fs0.writeFileText(path, text));
+    if (typeof fs0.writeFile === "function") return Promise.resolve(fs0.writeFile(path, text));
+    return Promise.reject(new Error("没有写文件的接口"));
+  }
+
+  function fsRemove(path) {
+    var fs0 = fsApi();
+    try {
+      if (fs0 && typeof fs0.remove === "function") return Promise.resolve(fs0.remove(path));
+    } catch (e) {
+      /* 换一个入口再试 */
+    }
+    try {
+      if (typeof betterncm_native !== "undefined" && betterncm_native.fs && typeof betterncm_native.fs.remove === "function") {
+        return Promise.resolve(betterncm_native.fs.remove(path));
+      }
+    } catch (e2) {
+      /* 两个都没有 */
+    }
+    return Promise.reject(new Error("没有删除文件的接口"));
+  }
+
+  function validSongFile(record, id) {
+    if (!record || typeof record !== "object") return false;
+    if (record.schema !== 1) return false;
+    if (String(record.songId) !== String(id)) return false;
+    if (record.provider !== "utaten" && record.provider !== "utanet") return false;
+    if (!WKExternal.allowedURL(record.url)) return false;
+    if (!record.lines || !record.lines.length) return false;
+    return true;
+  }
+
+  /** 读这首歌的 JSON（有就返回记录，没有 / 坏了返回 null） */
+  function readSongFile(id) {
+    if (!id) return Promise.resolve(null);
+    var path = songFilePath(id);
+    return fsReadText(path).then(
+      function (text) {
+        var rec = null;
+        try {
+          rec = JSON.parse(String(text || ""));
+        } catch (e) {
+          rec = null;
+        }
+        if (!validSongFile(rec, id)) return null;
+        return rec;
+      },
+      function () {
+        return null;
+      }
+    );
+  }
+
+  /** 写这首歌的 JSON（失败只记提示，不影响本次显示） */
+  function writeSongFile(id, rec) {
+    if (!id) return Promise.resolve(false);
+    var data = {
+      schema: 1,
+      songId: String(id),
+      provider: rec.provider === "utanet" ? "utanet" : "utaten",
+      url: rec.url || "",
+      title: rec.title || "",
+      artists: rec.artists || [],
+      savedAt: Date.now(),
+      lines: rec.lines || [],
+    };
+    return fsWriteText(songFilePath(id), JSON.stringify(data)).then(
+      function () {
+        return true;
+      },
+      function () {
+        return false;
+      }
+    );
+  }
+
+  /** 缓存里有哪些歌（给「本地歌词」管理用） */
+  function listSongFiles() {
+    var dir = externalCacheDir();
+    var fs0 = fsApi();
+    if (fs0 && typeof fs0.readDir === "function") {
+      return Promise.resolve(fs0.readDir(dir)).then(
+        function (names) {
+          var out = [];
+          for (var i = 0; i < (names || []).length; i++) {
+            var n = String(names[i]).replace(/^.*[\\/]/, "");
+            if (!/^\d+\.json$/.test(n)) continue;
+            out.push(n.replace(/\.json$/, ""));
+          }
+          return out;
+        },
+        function () {
+          return [];
+        }
+      );
+    }
+    return Promise.resolve([]);
   }
 
   function loadExternalSong(key, id, title, artists) {
@@ -3628,23 +3849,14 @@
     var manual = String(manualMap[key] || "");
     if (manual && !WKExternal.allowedURL(manual)) manual = "";
     var clean = cleanExternalTitle(title);
-    var urls = [];
-    if (!manual) {
-      if (!clean) {
-        externalState.status = "没有可搜索的歌名";
-        refreshExternalUI();
-        return;
-      }
-      for (var i = 0; i < artists.length; i++) {
-        var u = WKExternal.searchURL(clean, artists[i]);
-        if (u && urls.indexOf(u) < 0) urls.push(u);
-      }
-      var titleOnly = WKExternal.searchURL(clean, "");
-      if (titleOnly && urls.indexOf(titleOnly) < 0) urls.push(titleOnly);
+    if (!manual && !clean) {
+      externalState.status = "没有可搜索的歌名";
+      refreshExternalUI();
+      return;
     }
     externalState.loading = true;
     externalState.key = key;
-    externalState.status = manual ? "正在获取手动指定的歌词页…" : "正在查询 UtaTen…";
+    externalState.status = manual ? "正在获取手动指定的歌词页…" : "正在查询外部网站…";
     refreshExternalUI();
     var job;
     if (manual) {
@@ -3652,7 +3864,7 @@
         return WKExternal.parseLyric(html, manual);
       });
     } else {
-      job = tryExternalSearch(urls, 0, clean, artists);
+      job = tryExternalSearch(clean, artists);
     }
     job.then(
       function (rec) {
@@ -3666,11 +3878,19 @@
           lines: rec.lines || [],
         };
         externalCacheSave(all);
-        applyExternalRecord(rec, key, manual ? "已用指定的歌词页" : "UtaTen 已获取");
+        if (id) {
+          writeSongFile(id, rec).then(function (ok) {
+            if (!ok) {
+              externalState.status = "已获取（JSON 缓存写入失败，下次会重新查）";
+              refreshExternalUI();
+            }
+          });
+        }
+        applyExternalRecord(rec, key, manual ? "已用指定的歌词页" : "已获取网站读音");
       },
       function (err) {
         externalState.loading = false;
-        externalState.status = "UtaTen 获取失败：" + String((err && err.message) || err);
+        externalState.status = "获取失败：" + String((err && err.message) || err);
         refreshExternalUI();
       }
     );
@@ -3707,6 +3927,27 @@
     if (rec) {
       if (applyExternalRecord(rec, key, "本地缓存")) return;
     }
+    /*
+     * 先看磁盘上那首歌的 JSON（换一次播放器 / 清过 localStorage 也还在）。
+     * 读文件是异步的：先把 key 占住，读不到再走搜索，避免同一轮里重复发起。
+     */
+    if (id.id) {
+      if (externalState.skipFile) {
+        externalState.skipFile = false;
+        loadExternalSong(key, id.id, id.title, id.artists || []);
+        return;
+      }
+      externalState.key = key;
+      externalState.loading = true;
+      externalState.status = "正在读取本地歌词…";
+      refreshExternalUI();
+      readSongFile(id.id).then(function (fileRec) {
+        externalState.loading = false;
+        if (fileRec && applyExternalRecord(fileRec, key, "本地歌词")) return;
+        loadExternalSong(key, id.id, id.title, id.artists || []);
+      });
+      return;
+    }
     loadExternalSong(key, id.id, id.title, id.artists || []);
   }
 
@@ -3715,10 +3956,27 @@
     if (!externalEnabled() || !externalState.index) return null;
     if (typeof WKExternal === "undefined") return null;
     try {
-      return WKExternal.tokensFor(line, externalState.index);
+      /*
+       * 两家给的读音形式不一样：
+       *   UtaTen 直接给每段的振假名（tokensFor）
+       *   Uta-net 只给整行罗马音（romajiFor）—— 用和"音译兜底"同一套对齐算法反推，
+       *   但这里**整行都交给罗马音**（那是它唯一的读音来源），不是只补读不出的字
+       */
+      var ext = WKExternal.tokensFor(line, externalState.index);
+      if (ext && ext.length) return ext;
+      var romaji = WKExternal.romajiFor(line, externalState.index);
+      if (romaji && typeof WKFurigana !== "undefined" && WKFurigana.romajiTokens) {
+        var toks = WKFurigana.romajiTokens(
+          line,
+          romaji,
+          config.furiganaKana === "katakana" ? "katakana" : "hiragana"
+        );
+        if (toks && toks.length) return toks;
+      }
     } catch (e) {
       return null;
     }
+    return null;
   }
 
   /**
@@ -4790,6 +5048,9 @@
       "#lyric-ruby-config .wk-row { margin: 3px 0; }" +
       "#lyric-ruby-config .wk-source { margin: 6px 0 10px; padding: 8px 10px; border: 1px solid rgba(128,128,128,.3); border-radius: 8px; background: rgba(128,128,128,.06); }" +
       "#lyric-ruby-config .wk-hint { opacity: .65; font-size: 12px; line-height: 1.5; }" +
+      "#lyric-ruby-config .wk-cache-list { max-height: 220px; overflow: auto; font-size: 13px; line-height: 1.8; }" +
+      "#lyric-ruby-config .wk-cache-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(128,128,128,.15); padding: 2px 0; }" +
+      "#lyric-ruby-config .wk-cache-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }" +
       "#lyric-ruby-config input[type=text], #lyric-ruby-config input[type=password] { width: 300px; padding: 2px 6px; }" +
       "#lyric-ruby-config textarea { width: 320px; padding: 4px 6px; font-family: inherit; font-size: 13px; line-height: 1.5; vertical-align: top; }" +
       "#lyric-ruby-config .wk-preview { padding: 8px 10px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; font-size: 18px; }" +
@@ -4827,10 +5088,16 @@
       '<div class="wk-row wk-hint"><span data-v="health"></span> <button data-a="dictRetry">重试词典</button></div>' +
       '<div class="wk-source">' +
       '<div class="wk-row"><b>读音来源</b> <select data-src>' +
-      '<option value="dict">离线词典</option><option value="external">外部网站 · UtaTen</option>' +
+      '<option value="dict">离线词典</option><option value="external">外部网站 · UtaTen / Uta-net</option>' +
       '</select> <span data-v="extStatus"></span></div>' +
-      '<div class="wk-hint">词典完全离线。外部网站按播放栏的歌名 / 歌手查 UtaTen，命中的行用网站振假名，' +
-      "对不上的行回退词典 / 音译 / 大模型；只对日语歌生效，仅限个人学习。</div>" +
+      '<div class="wk-row"><label>查询哪家 <select data-k="externalProvider">' +
+      '<option value="auto">自动（先 UtaTen，没有再试 Uta-net）</option>' +
+      '<option value="utaten">只用 UtaTen</option>' +
+      '<option value="utanet">只用 Uta-net</option>' +
+      "</select></label></div>" +
+      '<div class="wk-hint">词典完全离线。外部网站按歌名 / 歌手查 UtaTen（有振假名），没有收录时再查 Uta-net' +
+      "（只有罗马音，按行对齐成读音）；命中的行用网站读音，对不上的行回退词典 / 音译 / 大模型。" +
+      "只对日语歌生效，仅限个人学习。</div>" +
       '<div class="wk-row"><button data-a="extRetry">重新获取本首</button> ' +
       '<button data-a="extOpen">查看来源网页</button> <button data-a="extRevoke">撤销网站同意</button></div>' +
       '<div class="wk-row"><label>手动指定歌词页 <input type="text" data-manual placeholder="https://utaten.com/lyric/…/"></label></div>' +
@@ -4872,6 +5139,12 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="online"> 规则没把握时联网校正 (免费接口)</label></div>' +
       '<div class="wk-hint">关掉「非日语歌也注音」= 只标日语歌: 整首歌词一个假名都没有的整首跳过; ' +
       "判据看整首, 所以日语歌里的纯英文行照旧注音</div>" +
+      "<h3>本地歌词</h3>" +
+      '<div class="wk-row"><label>缓存目录 <input type="text" data-k="externalCacheDir" placeholder="留空 = BetterNCM 数据目录/lyrics/lyric-ruby"></label></div>' +
+      '<div class="wk-hint">每首歌一个 <code>&lt;歌曲ID&gt;.json</code>（网站原文 / 读音 / 来源地址 / 获取时间），' +
+      "放在插件目录之外，更新插件不会丢；缓存命中不联网。</div>" +
+      '<div class="wk-row"><button data-a="cacheRefresh">刷新列表</button> <span data-v="cacheInfo"></span></div>' +
+      '<div class="wk-cache-list" data-v="cacheList"></div>' +
       "<h3>接口</h3>" +
       '<div class="wk-row"><label>接口地址 <input type="text" data-k="llmEndpoint"></label></div>' +
       '<div class="wk-row"><label>模型 <input type="text" data-k="llmModel"></label></div>' +
@@ -5395,7 +5668,7 @@
       manualInput.value = String(mMap[mKey] || "");
       manualInput.addEventListener("change", function () {
         var v = String(manualInput.value || "").replace(/^\s+|\s+$/g, "");
-        if (v && !(typeof WKExternal !== "undefined" && WKExternal.allowedURL(v))) {
+        if (v && !(typeof WKExternal !== "undefined" && WKExternal.providerOfURL && WKExternal.providerOfURL(v) === "utaten")) {
           manualInput.value = "";
           externalState.status = "只接受 UtaTen 的 https 歌词页";
           refreshExternalUI();
@@ -5412,6 +5685,74 @@
         refreshExternalUI();
         rescan();
       });
+    }
+
+    // ---------------------------------------------------------- 本地歌词（JSON 缓存）
+    var cacheListEl = root.querySelector('[data-v="cacheList"]');
+    var cacheInfoEl = root.querySelector('[data-v="cacheInfo"]');
+    function cacheRow(rec) {
+      var row = document.createElement("div");
+      row.className = "wk-cache-row";
+      var label = document.createElement("span");
+      var arts = (rec && rec.artists && rec.artists.length ? " · " + rec.artists.join(" / ") : "");
+      label.textContent =
+        (rec && rec.title ? rec.title : "（无法读取）") +
+        arts +
+        (rec && rec.lines ? " · " + rec.lines.length + " 行" : "") +
+        (rec && rec.provider ? " · " + (rec.provider === "utanet" ? "Uta-net" : "UtaTen") : "");
+      row.appendChild(label);
+      if (rec && rec.songId) {
+        var del = document.createElement("button");
+        del.textContent = "删除";
+        del.dataset.del = String(rec.songId);
+        row.appendChild(del);
+      }
+      return row;
+    }
+    function refreshCacheList() {
+      if (!cacheListEl) return;
+      cacheListEl.textContent = "读取中…";
+      listSongFiles().then(function (ids) {
+        if (!cacheListEl) return;
+        cacheListEl.textContent = "";
+        if (!ids.length) {
+          cacheListEl.textContent = "还没有本地歌词（目录：" + externalCacheDir() + "）";
+          if (cacheInfoEl) cacheInfoEl.textContent = "";
+          return;
+        }
+        var jobs = [];
+        for (var i = 0; i < ids.length && i < 60; i++) jobs.push(readSongFile(ids[i]));
+        Promise.all(jobs).then(function (recs) {
+          if (!cacheListEl) return;
+          cacheListEl.textContent = "";
+          for (var j = 0; j < recs.length; j++) cacheListEl.appendChild(cacheRow(recs[j]));
+          if (cacheInfoEl) cacheInfoEl.textContent = "共 " + ids.length + " 首" + (ids.length > 60 ? "（只列前 60）" : "");
+        });
+      });
+    }
+    if (cacheListEl) {
+      cacheListEl.addEventListener("click", function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest("[data-del]") : null;
+        if (!btn) return;
+        var sid = btn.dataset.del;
+        var ok = false;
+        try {
+          ok = window.confirm("删除这首歌的本地歌词（" + songFilePath(sid) + "）？");
+        } catch (eConfirm) {
+          ok = false;
+        }
+        if (!ok) return;
+        fsRemove(songFilePath(sid)).then(
+          function () {
+            if (cacheInfoEl) cacheInfoEl.textContent = "已删除";
+            refreshCacheList();
+          },
+          function (err) {
+            if (cacheInfoEl) cacheInfoEl.textContent = "删除失败：" + String((err && err.message) || err);
+          }
+        );
+      });
+      refreshCacheList();
     }
 
     // 外链交给系统浏览器，直接跳会把网易云本身导航走
@@ -5456,6 +5797,8 @@
             externalState.key = null;
             externalState.index = null;
             externalState.loading = false;
+            // 用户明确要重查：跳过磁盘上那份 JSON（否则又直接读回来了）
+            externalState.skipFile = true;
             externalState.status = "重新获取…";
             refreshExternalUI();
             rescan();
@@ -5492,6 +5835,8 @@
             setTimeout(function () {
               b.textContent = "重置";
             }, 1500);
+          } else if (what === "cacheRefresh") {
+            refreshCacheList();
           } else if (what === "dictRetry") {
             if (typeof WKFurigana !== "undefined" && WKFurigana.retry) {
               WKFurigana.retry();
@@ -5971,6 +6316,110 @@
 
     if (config.enabled) enable();
     else state.annotator.restoreAll();
+
+    /*
+     * RNP 播放页设置里的「注音」一栏（可选适配）：装了 RefinedNowPlayingNext 才有，
+     * 结构对不上就什么都不做 —— 设置仍然在 BetterNCM 的插件设置页里。
+     */
+    if (typeof WKRnpPanel !== "undefined" && WKRnpPanel.install) {
+      try {
+        state.rnpPanel = WKRnpPanel.install({
+          config: function () {
+            return {
+              enabled: config.enabled !== false,
+              furigana: config.furigana !== false,
+              external: externalEnabled(),
+              provider: config.externalProvider || "auto",
+            };
+          },
+          set: function (key, value) {
+            if (key === "enabled") {
+              config.enabled = !!value;
+              saveConfig();
+              if (value) enable();
+              else disable();
+              rescan();
+              return;
+            }
+            if (key === "furigana") {
+              config.furigana = !!value;
+              saveConfig();
+              rescan();
+              return;
+            }
+            if (key === "externalProvider") {
+              config.externalProvider = value === "utaten" || value === "utanet" ? value : "auto";
+              saveConfig();
+              externalState.key = null;
+              externalState.index = null;
+              externalState.loading = false;
+              externalState.status = "等待获取";
+              externalState.skipFile = true;
+              rescan();
+              return;
+            }
+            if (key === "external") {
+              var want = !!value;
+              if (want && !config.externalConsent) {
+                var agreed = false;
+                try {
+                  agreed = window.confirm(
+                    "外部网站读音来自 UtaTen / Uta-net。\n\n" +
+                      "歌词和读音的著作权属于权利人及相应网站；以程序方式获取可能违反网站的使用条款，请自行判断并仅用于个人学习。\n\n" +
+                      "确认后会按歌名 / 歌手联网获取当前歌曲的读音，并缓存在本机。"
+                  );
+                } catch (eConfirm) {
+                  agreed = false;
+                }
+                if (!agreed) return;
+                config.externalConsent = true;
+              }
+              config.externalUtaten = want;
+              externalState.key = null;
+              externalState.index = null;
+              externalState.loading = false;
+              externalState.status = want ? "等待获取" : "";
+              saveConfig();
+              rescan();
+            }
+          },
+          status: function () {
+            var text = externalState.status || (externalEnabled() ? "外部网站已开" : "离线词典");
+            if (externalEnabled() && externalState.index) {
+              text += " · " + externalState.index.count + " 行";
+              if (externalState.index.provider === "utanet") text += "（罗马音对齐）";
+            }
+            return { text: text, canRetry: externalEnabled(), canOpen: !!externalState.url };
+          },
+          retry: function () {
+            var extId = externalIdentity();
+            var extKey = externalKeyOf(extId);
+            var cacheAll = externalCacheAll();
+            if (extKey && Object.prototype.hasOwnProperty.call(cacheAll, extKey)) {
+              delete cacheAll[extKey];
+              externalCacheSave(cacheAll);
+            }
+            externalState.key = null;
+            externalState.index = null;
+            externalState.loading = false;
+            externalState.skipFile = true;
+            externalState.status = "重新获取…";
+            refreshExternalUI();
+            rescan();
+          },
+          openSource: function () {
+            if (!externalState.url) return;
+            try {
+              betterncm.ncm.openUrl(externalState.url);
+            } catch (eOpen) {
+              /* 打不开就算了 */
+            }
+          },
+        });
+      } catch (eRnp) {
+        state.rnpPanel = null;
+      }
+    }
 
     trace("boot", "初始化完成，annotator=" + !!state.annotator + " reader=" + !!state.reader);
 

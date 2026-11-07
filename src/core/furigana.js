@@ -1352,6 +1352,52 @@
     return out;
   }
 
+  /**
+   * 只靠一行罗马音反推读音（Uta-net 用）。
+   *
+   * 和"音译兜底"的区别：那条只补词典读不出的字，这条是**整行的读音都交给罗马音**
+   * （Uta-net 没有振假名，罗马音是它唯一给的读音）。对不上整行就返回 null，
+   * 调用方回退词典 —— 宁可不套，也不套错。
+   *
+   * @param {string} text 这一行的原文
+   * @param {string} romaji 同一行的罗马音
+   * @param {string} [kanaMode] "hiragana"（默认）| "katakana"
+   * @returns {Array<{text:string,start:number,end:number,kana:string}>|null}
+   */
+  function romajiTokens(text, romaji, kanaMode) {
+    var s = String(text == null ? "" : text);
+    if (!s || !romaji) return null;
+    var d = deps();
+    if (!d.core || !d.core.romajiToKana) return null;
+    var mode = kanaMode === "katakana" ? "katakana" : "hiragana";
+    var rk = null;
+    try {
+      rk = d.core.romajiToKana(String(romaji));
+    } catch (e) {
+      return null;
+    }
+    if (!rk) return null;
+    var derived = [];
+    try {
+      derived = alignRomaji(s, toHira(rk), []);
+    } catch (e2) {
+      return null;
+    }
+    if (!derived || !derived.length) return null;
+    var out = [];
+    for (var i = 0; i < derived.length; i++) {
+      var t = derived[i];
+      if (!t || !t.kana || !(t.end > t.start)) continue;
+      out.push({
+        text: s.slice(t.start, t.end),
+        start: t.start,
+        end: t.end,
+        kana: toKanaMode(t.kana, mode),
+      });
+    }
+    return out.length ? out : null;
+  }
+
   return {
     configure: configure,
     load: load,
@@ -1360,6 +1406,7 @@
     ready: ready,
     status: status,
     tokens: tokens,
+    romajiTokens: romajiTokens,
     clearCache: clearCache,
     candidates: candidates,
     variants: variants,

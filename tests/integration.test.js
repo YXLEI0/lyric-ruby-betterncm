@@ -5107,7 +5107,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["外观", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "范围", "本地歌词", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });
@@ -6532,4 +6532,216 @@ test("日语歌里夹的西文单独一个开关：关掉只影响日语歌", as
   const enP = en.document.querySelector("ul.lyric li p");
   const enBases = Array.from(enP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.ok(enBases.length > 0, "非日语歌的西文照旧注：" + enP.innerHTML);
+});
+
+
+test("Uta-net：搜索结果 / 歌词页解析，罗马音按行反推读音", () => {
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  loadScripts(ctx.dom, VENDOR_FILES);
+  const X = ctx.window.WKExternal;
+  const SEARCH = `<!doctype html><html><body><table><tr>
+    <td><a href="/song/123/">泡沫の夢</a></td>
+    <td><a href="/artist/9/">Net Artist</a></td>
+  </tr></table></body></html>`;
+  const SONG = `<!doctype html><html><body>
+    <h1><span>泡沫の夢</span><span class="artist-name">Net Artist</span></h1>
+    <div id="kashi-area">泡沫の夢<br>知らない街</div>
+    <div id="kashi-area-roma">u ta ka ta no yu me<br>shi ra na i ma chi</div>
+  </body></html>`;
+
+  assert.ok(X.searchURL("泡沫の夢", "", "utanet").indexOf("uta-net.com/search") >= 0, "Uta-net 搜索地址");
+  assert.ok(X.providerOfURL("https://www.uta-net.com/song/123/") === "utanet", "认得 uta-net 域名");
+  assert.ok(!X.allowedURL("https://evil.example.com/song/1/"), "别的域名一律拒绝");
+
+  const cands = X.parseSearch(SEARCH, "utanet");
+  assert.strictEqual(JSON.stringify(cands), JSON.stringify([{ title: "泡沫の夢", artists: ["Net Artist"], url: "https://www.uta-net.com/song/123/" }]));
+
+  const rec = X.parseUtanet(SONG, "https://www.uta-net.com/song/123/", cands[0]);
+  assert.strictEqual(rec.provider, "utanet");
+  assert.strictEqual(JSON.stringify(rec.lines), JSON.stringify([
+    { text: "泡沫の夢", romaji: "u ta ka ta no yu me" },
+    { text: "知らない街", romaji: "shi ra na i ma chi" },
+  ]));
+
+  const idx = X.buildIndex(rec);
+  assert.strictEqual(X.romajiFor("泡沫の夢", idx), "u ta ka ta no yu me");
+  const toks = ctx.window.WKFurigana.romajiTokens("泡沫の夢", X.romajiFor("泡沫の夢", idx), "hiragana");
+  assert.strictEqual(JSON.stringify(toks), JSON.stringify([
+    { text: "泡沫", start: 0, end: 2, kana: "うたかた" },
+    { text: "夢", start: 3, end: 4, kana: "ゆめ" },
+  ]));
+});
+
+test("外部网站读音：客户端一行 = 网站连续两行时也要对上（相 = あい，不是 そう）", () => {
+  /*
+   * 真机现象：网易云一行是 `光、未来 相のうた 追う`，网站拆成两行。
+   * 只按单行索引永远对不上，整行退回词典 —— 未来相 被读成 みらいそう。
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const X = ctx.window.WKExternal;
+  const rec = {
+    provider: "utaten",
+    lines: [
+      { text: "光、未来", segments: [{ text: "光", rt: "ひかり" }, { text: "、" }, { text: "未来", rt: "みらい" }] },
+      { text: "相のうた 追う", segments: [{ text: "相", rt: "あい" }, { text: "のうた " }, { text: "追", rt: "お" }, { text: "う" }] },
+      { text: "別の行", segments: [{ text: "別", rt: "べつ" }, { text: "の行" }] },
+    ],
+  };
+  const idx = X.buildIndex(rec);
+  const got = X.tokensFor("光、未来 相のうた 追う", idx);
+  assert.strictEqual(JSON.stringify(got), JSON.stringify([
+    { text: "光", start: 0, end: 1, kana: "ひかり" },
+    { text: "未来", start: 2, end: 4, kana: "みらい" },
+    { text: "相", start: 5, end: 6, kana: "あい" },
+    { text: "追", start: 10, end: 11, kana: "お" },
+  ]));
+  // 单行仍然照旧
+  assert.strictEqual(JSON.stringify(X.tokensFor("相のうた 追う", idx)), JSON.stringify([
+    { text: "相", start: 0, end: 1, kana: "あい" },
+    { text: "追", start: 5, end: 6, kana: "お" },
+  ]));
+});
+
+test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
+  const SEARCH = `<!doctype html><html><body><table><tr>
+    <td><a href="/song/123/">泡沫の夢</a></td>
+    <td><a href="/artist/9/">Net Artist</a></td>
+  </tr></table></body></html>`;
+  const SONG = `<!doctype html><html><body>
+    <h1><span>泡沫の夢</span><span class="artist-name">Net Artist</span></h1>
+    <div id="kashi-area">泡沫の夢<br>知らない街</div>
+    <div id="kashi-area-roma">u ta ka ta no yu me<br>shi ra na i ma chi</div>
+  </body></html>`;
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">泡沫の夢</a></span>
+  <span class="by"><a href="#">Net Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>泡沫の夢</p></li>
+  <li class="line"><p>知らない街</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalProvider: "utanet" },
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泡沫: "ホウマツ", 夢: "ユメ", 知: "チ", 街: "ガイ" }));
+  env.window.__WK_EXTERNAL_FETCH__ = function (url) {
+    return Promise.resolve(url.indexOf("/search/") >= 0 ? SEARCH : SONG);
+  };
+  await env.runLoad();
+  await sleep(900);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = (p) =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs(ps[0]), [["泡沫", "うたかた"], ["夢", "ゆめ"]], "Uta-net 罗马音要覆盖词典：" + ps[0].innerHTML);
+  assert.deepStrictEqual(pairs(ps[1]), [["知", "し"], ["街", "まち"]], "第二行同理：" + ps[1].innerHTML);
+});
+
+test("本地歌词：抓到的 JSON 写进缓存目录，下次播放直接读文件、不联网", async () => {
+  const SEARCH = `<!doctype html><html><body><table><tr>
+    <td class="searchResult__title"><a href="/lyric/abc/"><span class="songlist-title">Cached Song</span></a></td>
+    <td class="searchResult__artist"><p><a href="/artist/1/">Artist</a></p></td>
+  </tr></table></body></html>`;
+  const LYRIC = `<!doctype html><html><body>
+    <div class="lyricBody"><div class="hiragana">
+      <span class="ruby"><span class="rb">泥水</span><span class="rt">でいすい</span></span>の夜<br>
+    </div></div></body></html>`;
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">Cached Song</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>泥水の夜</p></li></ul></div>
+</body></html>`;
+  const files = {};
+  const fsFake = {
+    writeFileText(p, t) {
+      files[p] = t;
+      return Promise.resolve(true);
+    },
+    readFileText(p) {
+      return files[p] ? Promise.resolve(files[p]) : Promise.reject(new Error("no file"));
+    },
+    readDir(dir) {
+      return Promise.resolve(
+        Object.keys(files)
+          .filter((p) => p.indexOf(dir) === 0)
+          .map((p) => p.replace(/^.*[\\/]/, ""))
+      );
+    },
+    remove(p) {
+      delete files[p];
+      return Promise.resolve(true);
+    },
+  };
+
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  env.betterncm.fs = fsFake;
+  env.window.__WK_TRACK__ = { id: "777", title: "Cached Song", artists: ["Artist"] };
+  let fetched = 0;
+  env.window.__WK_EXTERNAL_FETCH__ = function (url) {
+    fetched++;
+    return Promise.resolve(url.indexOf("/search") >= 0 ? SEARCH : LYRIC);
+  };
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル" }));
+  await env.runLoad();
+  await sleep(1200);
+
+  const filePath = "C:/betterncm/lyrics/lyric-ruby/777.json";
+  assert.ok(files[filePath], "要写进缓存目录：" + JSON.stringify(Object.keys(files)));
+  const saved = JSON.parse(files[filePath]);
+  assert.strictEqual(saved.schema, 1);
+  assert.strictEqual(saved.songId, "777");
+  assert.strictEqual(saved.provider, "utaten");
+  assert.ok(saved.lines.length >= 1);
+  assert.ok(fetched > 0, "第一次要联网");
+
+  // 第二次：清掉 localStorage 那份，只留文件；不许联网
+  const env2 = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  env2.betterncm.fs = fsFake;
+  env2.window.__WK_TRACK__ = { id: "777", title: "Cached Song", artists: ["Artist"] };
+  let fetched2 = 0;
+  env2.window.__WK_EXTERNAL_FETCH__ = function () {
+    fetched2++;
+    return Promise.reject(new Error("不该联网"));
+  };
+  env2.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル" }));
+  await env2.runLoad();
+  await sleep(1200);
+  const p2 = env2.document.querySelector("ul.lyric li p");
+  const pairs2 = Array.from(p2.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs2, [["泥水", "でいすい"], ["夜", "よる"]], "从文件读出来的读音：" + p2.innerHTML);
+  assert.strictEqual(fetched2, 0, "缓存命中不许联网");
+});
+
+test("RNP 播放页设置：在「歌词」后面加一栏「注音」，开关能改配置", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="rnp-settings-menu">
+  <div class="rnp-settings-menu-tabs">
+    <div class="rnp-settings-menu-tab" data-tab="appearance">外观</div>
+    <div class="rnp-settings-menu-tab" data-tab="lyric">歌词</div>
+  </div>
+  <div class="rnp-settings-menu-inner">
+    <div class="rnp-group" data-tab="appearance"><div class="rnp-group-title">外观</div></div>
+    <div class="rnp-group" data-tab="lyric"><div class="rnp-group-title">歌词</div></div>
+  </div>
+</div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>きらめく light</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  const tab = doc.querySelector('.rnp-settings-menu-tab[data-tab="lyric-ruby"]');
+  assert.ok(tab, "要加 tab");
+  assert.strictEqual(tab.textContent, "注音");
+  const group = doc.querySelector('.rnp-group[data-tab="lyric-ruby"]');
+  assert.ok(group, "要加设置栏");
+  assert.ok(group.textContent.indexOf("读音来源") >= 0, "要有读音来源选择：" + group.textContent);
+  const cb = group.querySelector('input[data-key="furigana"]');
+  assert.ok(cb && cb.checked, "默认开");
+  cb.checked = false;
+  cb.dispatchEvent(new env.window.Event("change"));
+  await sleep(50);
+  assert.strictEqual(env.api.config.furigana, false, "关掉要写进配置");
 });
