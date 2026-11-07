@@ -7179,6 +7179,36 @@ test("永遠 有 とわ 候选（歌词里常按 とわ 唱）", async () => {
   assert.deepStrictEqual(after[0], ["永遠", "とわ"], "点 とわ 要生效：" + p.innerHTML);
 });
 
+test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>美しい時代よ 彷徨う</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 美: "ウツク", しい: "シイ", 時代: "ジダイ", よ: "ヨ", 彷徨: "ホウコウ", う: "ウ" }));
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  const rubyOf = (w) => Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === w)[0];
+
+  assert.ok(rubyOf("時代"), "時代 要注上音：" + p.innerHTML);
+  dbl(rubyOf("時代"));
+  await sleep(50);
+  assert.ok(chips().indexOf("とき") >= 0, "時代 候选要有 とき：" + JSON.stringify(chips()));
+  (Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "とき")[0] || { dispatchEvent() {} }).dispatchEvent(
+    new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true })
+  );
+  await sleep(400);
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs.filter((x) => x[0] === "時代")[0], ["時代", "とき"], "時代 = とき：" + p.innerHTML);
+
+  dbl(rubyOf("彷徨"));
+  await sleep(50);
+  assert.ok(chips().indexOf("さまよ") >= 0, "彷徨 候选要有 さまよ：" + JSON.stringify(chips()));
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>
