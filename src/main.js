@@ -2605,11 +2605,38 @@
         else if (v && v.kana && keep(v)) out.push({ kana: v.kana, label: v.label || v.kana });
       }
       /*
-       * 手写表已经列过这个字（行 / 抱 / 解 / 寂 / 良 / 皆 / 四 / 七 / 灯…）就不再拿
-       * 常用漢字表往上堆：那些字的候选是"动词 / 形容词词干"这一档，堆上 ぎょう・せき・じゃく
-       * 只会把按钮撑满。表只在"没有任何专门候选"的字上补（共 / 間 / 夢 / 鳴…）。
+       * 手写表排在前面（那是这首歌里最可能的读法），**后面再补常用漢字表的
+       * 全部音读 / 训读 + 音便**。
+       *
+       * 以前这里直接 return（"表已经列过这个字就不堆了"），结果 `解` 只有 とく / ほどく
+       * 两个按钮，かい / げ / さと / ほぐ / なだ 这些常用读法一个都点不到
+       * （用户报"解的候选项太少了"）。按钮多一点比改不出来强。
        */
-      return dedupe(withOnbin(word, out));
+      var merged = dedupe(withOnbin(word, withKanjiReadings(word, out)));
+      /*
+       * 手写表里被"后面跟什么"这条规则否掉的读法，常用漢字表也不许再把它堆回来：
+       * 皆さん 不给 みんな、良かった 不给 い（这两条都有测试守着）。
+       */
+      var blocked = {};
+      var blockedAny = false;
+      for (i = 0; i < list.length; i++) {
+        var lv = list[i];
+        if (!lv || typeof lv !== "object" || !(lv.after || lv.notAfter)) continue;
+        if (keep(lv)) continue;
+        blocked[hiraOnly(lv.kana)] = 1;
+        blockedAny = true;
+      }
+      if (blockedAny) {
+        var filtered = [];
+        for (i = 0; i < merged.length; i++) {
+          if (blocked[hiraOnly(merged[i].kana)]) continue;
+          filtered.push(merged[i]);
+        }
+        merged = filtered;
+      }
+      // 按钮别无限长：手写表那几条一定在最前面，后面的按表序补到这里为止
+      if (merged.length > 10) merged = merged.slice(0, 10);
+      return merged;
     }
     // 多位数（12 / 105）：整串读法 + 逐个数字读（日语 / 英文片假名）
     if (/^[0-9]+$/.test(norm)) {

@@ -297,7 +297,8 @@
 
     function switchOn() {
       var cfg = api && typeof api.config === "function" ? api.config() : null;
-      return !(cfg && cfg.furigana === false);
+      // 这是**整个插件**的注音开关（config.enabled），不是只关振假名
+      return !(cfg && cfg.enabled === false);
     }
 
     function syncSwitch() {
@@ -309,7 +310,7 @@
         switchBtn.className = switchBtn.className.replace(/(^|\s)active(\s|$)/g, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
       }
       switchBtn.setAttribute("aria-pressed", on ? "true" : "false");
-      switchBtn.title = on ? "振假名歌词：开（点击关闭）" : "振假名歌词：关（点击开启）";
+      switchBtn.title = on ? "注音：开（点击关掉整个插件的注音）" : "注音：关（点击开启）";
     }
 
     function mountSwitch() {
@@ -341,7 +342,8 @@
           /* 没关系 */
         }
         if (!api || typeof api.set !== "function") return;
-        api.set("furigana", !switchOn());
+        // 关的是整个插件的注音（config.enabled），不是只关振假名
+        api.set("enabled", !switchOn());
         syncSwitch();
       });
       syncSwitch();

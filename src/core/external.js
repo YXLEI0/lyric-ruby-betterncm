@@ -13,7 +13,11 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  var KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]+$/;
+  /*
+   * 「读音」不一定全是假名：UtaTen 里 `口吻` 这种词标的就是拉丁字母（`kiss`），
+   * 网站原样显示在注音位置上。只认假名会把这类读音整条丢掉，页面上就只剩光秃秃的底字。
+   */
+  var KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]+$|^[A-Za-z][A-Za-z'’.\-\s]*$/;
 
   function str(v) {
     return String(v == null ? "" : v);
