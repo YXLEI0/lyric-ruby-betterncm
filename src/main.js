@@ -4386,8 +4386,29 @@
   }
 
   /**
+   * 两批 token 的读音是不是一模一样（平/片假名不算区别）
+   *
+   * 用来判"只是切得粗细不同"：网站 `芸術 = げいじゅつ` 一个词，词典
+   * `芸 = げい` + `術 = じゅつ` 两个字 —— 念出来一样，取**切得更细**的那一方
+   * （细的那种一格一个读音，逐字歌词里才对得上；用户要求）。
+   */
+  function sameKana(a, b) {
+    function norm(s) {
+      var t = String(s == null ? "" : s).replace(/[\s\u3000・]/g, "");
+      return t.replace(/[\u30A1-\u30FA\u30FC]/g, function (c) {
+        var code = c.charCodeAt(0);
+        if (code === 0x30FC) return "\u30FC";
+        return String.fromCharCode(code - 0x60);
+      });
+    }
+    return norm(a) === norm(b);
+  }
+
+  /**
    * 外部网站读音压过词典 / 探测 / 罗马音，但**不压用户自己改的**（kind:"user"）、
    * 也不碰留空和藏起来的括号。
+   *
+   * 例外：两边的读音其实一样、只是切得粗细不同时，取**切得更细**的那一方。
    */
   function mergeExternalTokens(line, list) {
     var ext = externalTokensFor(line);
@@ -4396,6 +4417,31 @@
     var out = [];
     var i;
     var j;
+    /*
+     * 先标出"读音相同、底字切得更细"的那些网站 token：它们不该压掉细的那几段。
+     * 判据：网站那一格正好被 2 段以上的本地 token 拼满，且拼起来的读音一样。
+     */
+    var coarser = [];
+    for (j = 0; j < ext.length; j++) {
+      var inside = [];
+      for (i = 0; i < base.length; i++) {
+        var bt = base[i];
+        if (!bt || bt.hide || bt.blank || !bt.kana) continue;
+        if (bt.start >= ext[j].start && bt.end <= ext[j].end) inside.push(bt);
+      }
+      if (inside.length < 2) continue;
+      inside.sort(function (a, b) {
+        return a.start - b.start;
+      });
+      if (inside[0].start !== ext[j].start || inside[inside.length - 1].end !== ext[j].end) continue;
+      var joined = "";
+      var contiguous = true;
+      for (i = 0; i < inside.length; i++) {
+        if (i > 0 && inside[i].start !== inside[i - 1].end) contiguous = false;
+        joined += inside[i].kana;
+      }
+      if (contiguous && sameKana(joined, ext[j].kana)) coarser[j] = true;
+    }
     for (i = 0; i < base.length; i++) {
       var tk = base[i];
       if (!tk) continue;
@@ -4405,6 +4451,7 @@
       }
       var hit = false;
       for (j = 0; j < ext.length; j++) {
+        if (coarser[j]) continue; // 这一格比本地切得粗：本地那几段留着
         if (ext[j].start < tk.end && tk.start < ext[j].end) {
           hit = true;
           break;
@@ -4413,6 +4460,7 @@
       if (!hit) out.push(tk);
     }
     for (j = 0; j < ext.length; j++) {
+      if (coarser[j]) continue;
       var blocked = false;
       for (i = 0; i < base.length; i++) {
         var keepTk = base[i];
@@ -4472,13 +4520,16 @@
       romajiLine = "";
     }
     /*
-     * 逐字歌词：一行被拆成"一个字一个节点"，这个节点的起点是 offset。
-     * 按整行分词，再把词对回这个节点。
+     * 逐字歌词：一行被拆成"一个字一格"，这个节点的起点是 offset。
+     * 按**整行**分词，然后照 jp-furigana 的分组做法把词对回格子：
      *
-     * 一个词跨好几个节点（`物語`、`狂狂`、括号读音 `怒れる人(ラングラー)`）时，
-     * 读音要**按字数摊到各个节点上**，不能整段挂在第一个字上：以前只认"起点落在
-     * 这个节点里"的词，第二个字就落不到任何词、往下走单字兜底，于是 `狂狂(くるくる)`
-     * 显示成 くるくる + きょう（真机现象：读音挤在左边、后半截按单字读）。
+     *   - 一个词跨好几格（`物語`、`狂狂`、括号读音 `怒れる人`）时，整段读音只
+     *     **挂在这一组的第一格**上，组里其余的格子清空 —— 那几格的字跟着头一个字
+     *     的时间一起亮。jp-furigana 的 groupHosts 就是这么做的，注释里写了原因：
+     *     每格都是独立的 inline-block，ruby 只能落在其中一格上，那个盒子被读音
+     *     撑宽、后面的字被挤开，看着就是"注音跑到字左边、字之间裂开"。
+     *   - 按字数把读音摊到每一格（上一版的做法）虽然每格都有读音，但一格里
+     *     挤着半个词，唱到那一格时更明显。
      */
     if (typeof offset === "number" && line && line.length > s.length) {
       var whole = WKFurigana.tokens(line, {
@@ -4500,53 +4551,54 @@
       while (tail > lead && /[\s\u3000]/.test(s.charAt(tail - 1))) tail--;
       var nodeStart = offset + lead; // 这个节点的正文在整行里的区间
       var nodeEnd = offset + tail;
+      /*
+       * 分组边界：这一格的结尾如果落在某个词的中间，就把这一组延伸到那个词的结尾
+       * （组的边界必须落在词的边界上，否则词的读音会被切成两截）。
+       */
+      var groupStart = nodeStart;
+      var groupEnd = nodeEnd;
+      for (var g = 0; g < whole.length; g++) {
+        var gt = whole[g];
+        /*
+         * 括号读音那一段（hide）不参与分组：它本来就一格一格藏
+         * （`（シメ）` 横跨好几个格子），按格子处理才是对的。
+         */
+        if (gt.hide) continue;
+        if (gt.start < groupStart && groupStart < gt.end) groupStart = gt.start; // 这一格是组里的后半截
+        if (gt.start < groupEnd && groupEnd < gt.end) groupEnd = gt.end; // 结尾落在词中间 → 并进来
+      }
+      // 被前面的格子吃掉了：这一格的文字显示在组里第一格上，这里清空（annotate 的 absorb）
+      if (groupStart < nodeStart) return [{ text: "", start: 0, end: 0, kana: "", absorb: true }];
       var mine = [];
-      var unitCovered = false; // 这个字被一个跨字的读音单元吃掉了（但它分不到读音）
       for (var i = 0; i < whole.length; i++) {
         var tk = whole[i];
         var a = Math.max(tk.start, nodeStart);
-        var b = Math.min(tk.end, nodeEnd);
-        if (b <= a) continue; // 和这个节点不相交
+        var b = Math.min(tk.end, groupEnd);
+        if (b <= a) continue; // 不在这一组里
         /*
          * 对齐校验：这一段文字必须和词里对应位置的文字一模一样。
          * 节点偏移量在"注音完一遍之后"可能因为空文本节点/我们插的节点算歪一格，
          * 歪了就会把 帳 注成 帷 的读音（とばり）。对不上就宁可不注。
          */
         if (s.charAt(a - offset) !== tk.text.charAt(a - tk.start)) continue;
-        var piece = s.slice(a - offset, b - offset);
-        if (!piece) continue;
         /*
-         * 分给这个节点的读音：按字数的比例切。拍数够分（假名不短于底字）时
-         * 逐字摊开（狂狂 くるくる → くる + くる），不够分就整段挂在第一个字上，
-         * 其余的字算"已被这个单元吃掉"、不再去走单字兜底（否则又冒出第二个读音）。
+         * 词的底字取整段（可能比这一格长）：这一格是第一格时，把整个词都写在这里，
+         * 组里后面几格会被 absorb 清空。
          */
-        var baseLen = tk.end - tk.start;
-        var share = "";
-        if (!tk.hide && tk.kana) {
-          if (baseLen <= tk.kana.length) {
-            var kFrom = Math.floor(((a - tk.start) * tk.kana.length) / baseLen);
-            var kTo = Math.floor(((b - tk.start) * tk.kana.length) / baseLen);
-            if (kTo <= kFrom) kTo = Math.min(tk.kana.length, kFrom + 1);
-            share = tk.kana.slice(kFrom, kTo);
-          } else if (a === tk.start) {
-            share = tk.kana;
-          } else {
-            unitCovered = true;
-            continue;
-          }
-        }
-        if (!tk.hide && !share) continue;
+        var pieceStart = a - offset;
+        var piece = tk.hide ? s.slice(pieceStart, Math.min(b - offset, s.length)) : tk.text;
+        var pieceEnd = tk.hide ? Math.min(b - offset, s.length) : tk.end - offset;
+        if (!piece) continue;
         mine.push({
           text: piece,
-          start: a - offset,
-          end: b - offset,
-          kana: share,
+          start: pieceStart,
+          end: pieceEnd,
+          kana: tk.kana || "",
           kind: tk.kind,
           hide: tk.hide,
         });
       }
       if (mine.length) return mine;
-      if (unitCovered) return null;
       /* 整行一条都没落下来 -> 往下走"只按这个节点自己的文字"那条兜底 */
     }
     /*
@@ -4933,7 +4985,6 @@
        * 之后注音层查到的 `state.songWords` 就是这首歌的。
        */
       updateSongScope();
-      updateJapaneseFont();
       maybeExternal();
       var regions = null;
       if (config.scope === "lyrics") regions = state.annotator.findRegions("lyrics");
@@ -4947,6 +4998,11 @@
       state.lastResult = state.annotator.pass(regions);
       // 行距用 pass 交回来的"原文行"，不再自己查一遍 DOM（见 updateLineHeight 的说明）
       updateLineHeight(state.lastResult && state.lastResult.lyricRegions);
+      /*
+       * 字体放在 pass 之后、并且用 pass 交回来的行：新行刚注上音才需要补字体，
+       * 没注到新行时这一句会直接跳过（见 updateJapaneseFont 的缓存判据）。
+       */
+      updateJapaneseFont(false, state.lastResult && state.lastResult.lyricRegions, state.lastResult ? state.lastResult.changed : 0);
       /*
        * "扫到了歌词区域，却一个注音都没加上"是最常见的那种故障（"这首歌整页都没
        * 注音"）。原因（图案行 / 署名行 / 无译文 / 认输期）只写在控制台的 skips 里，
@@ -5032,19 +5088,38 @@
     }
   }
 
+  /*
+   * 变更是否和歌词有关。
+   *
+   * **整页都在变**：网易云自己的界面（歌单、评论、侧栏、播放页控制条）每一帧都在改 DOM，
+   * 而 observer 挂在整个 body 上 —— 以前任何一处改动都会排一轮注音扫描
+   * （findRegions 是 11 个选择器横扫文档），于是"整个网易云都卡"。
+   * 这里先花几次 parentNode 走一圈判断改动是不是落在歌词 / 播放栏里，不是就直接忽略。
+   */
+  var RE_LYRIC_HOST = /(^|[\s_-])(m-lyric|lyric|lyrics|rnp-lyrics|rnp-lyrics-line|rnp-karaoke|lyricbar|m-playbar|playbar|songName|artistName|nowPlaying)([\s_-]|$)/i;
+  function touchesLyrics(node) {
+    var el = node && node.nodeType === 1 ? node : node && node.parentNode;
+    for (var d = 0; el && d < 14; el = el.parentNode, d++) {
+      if (!el || el.nodeType !== 1) continue;
+      if (el.hasAttribute && el.hasAttribute("data-wk-region")) return true;
+      if (el.hasAttribute && el.hasAttribute("data-wk-font")) return true;
+      var cn = typeof el.className === "string" ? el.className : "";
+      if (cn && RE_LYRIC_HOST.test(cn)) return true;
+    }
+    return false;
+  }
+
   function startObserver() {
     if (state.observer) return;
     var observer = new MutationObserver(function (records) {
       try {
-        var relevant = false;
         for (var i = 0; i < records.length; i++) {
           var r = records[i];
-          if (r.type === "characterData" || r.type === "childList") {
-            relevant = true;
-            break;
-          }
+          if (r.type !== "characterData" && r.type !== "childList") continue;
+          if (!touchesLyrics(r.target)) continue;
+          schedule(0);
+          return;
         }
-        if (relevant) schedule(0);
       } catch (e) {
         warn("MutationObserver 回调异常", e);
       }
@@ -5053,8 +5128,14 @@
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     // 兜底：observer 可能漏掉（React 换了元素、或我们自己在 pass 里清了记录）。
+    // 但先花一次选择器确认页面上真有一块歌词 —— 没有就别排扫描了。
     state.tickTimer = setInterval(function () {
       if (!config.enabled || !state.annotator) return;
+      try {
+        if (!document.querySelector(".m-lyric, ul.lyric, .rnp-lyrics, .rnp-lyrics-line, .m-playbar")) return;
+      } catch (e) {
+        return;
+      }
       schedule(0);
     }, 1500);
     if (state.tickTimer && typeof state.tickTimer.unref === "function") state.tickTimer.unref();
@@ -5257,7 +5338,7 @@
    *
    * 真机上只有内联样式压得过播放页自己的规则（面板预览也是内联，所以预览一直有效）。
    */
-  function applyJapaneseFontInline(family) {
+  function applyJapaneseFontInline(family, regions) {
     var targets = [];
     var seen = [];
     function add(el) {
@@ -5270,19 +5351,27 @@
       var list = fontTargets(root);
       for (var i = 0; i < list.length; i++) add(list[i]);
     }
-    try {
-      var tagged = document.querySelectorAll("[data-wk-region]");
-      for (var i = 0; i < tagged.length; i++) scan(tagged[i]);
-    } catch (e) {
-      /* 查不到就算了 */
-    }
-    try {
-      if (state.annotator && state.annotator.findRegions) {
-        var regions = state.annotator.findRegions("lyrics");
-        for (var j = 0; j < regions.length; j++) scan(regions[j]);
+    /*
+     * 行元素：优先用 pass 已经算好的那一批（省掉一次 findRegions —— 那是 11 个
+     * 选择器横扫整个文档，每 2 秒一次就够卡了）。
+     */
+    if (regions && regions.length) {
+      for (var r = 0; r < regions.length; r++) scan(regions[r]);
+    } else {
+      try {
+        var tagged = document.querySelectorAll("[data-wk-region]");
+        for (var i = 0; i < tagged.length; i++) scan(tagged[i]);
+      } catch (e) {
+        /* 查不到就算了 */
       }
-    } catch (e2) {
-      /* 同上 */
+      try {
+        if (state.annotator && state.annotator.findRegions) {
+          var found = state.annotator.findRegions("lyrics");
+          for (var j = 0; j < found.length; j++) scan(found[j]);
+        }
+      } catch (e2) {
+        /* 同上 */
+      }
     }
     /*
      * 以前写过、现在不该写的元素也要能撤掉（换行 / 语言变了 / 关掉开关）。
@@ -5325,18 +5414,29 @@
   }
 
   var jpFontAt = 0;
-  function updateJapaneseFont(force) {
+  var jpFontApplied = null; // 上一轮实际写下去的开关状态（true / false / null=没写过）
+  /**
+   * @param {boolean} [force] 改设置 / 换歌时强制重算
+   * @param {Array<Element>} [regions] pass 已经算好的原文行（别自己再查一遍 DOM）
+   * @param {number} [changed] 这一轮注音改了几个节点（改了才需要给新行补字体）
+   */
+  function updateJapaneseFont(force, regions, changed) {
     /*
-     * 字体这件事每轮 pass 都做太贵：要找 area、要数 [data-wk-region]、还要给每个
-     * 元素读一次内联样式。歌词滚动时一秒几十轮，白烧 CPU。
-     * 2 秒内只做一次；改设置 / 换歌时 force 一次立刻生效。
+     * 字体这件事以前每 2 秒扫一遍：`querySelectorAll("[data-wk-region]")` +
+     * `findRegions("lyrics")`（11 个选择器横扫整个文档）+ 逐元素走子树 ——
+     * 整首歌词几十行、几百个节点，每秒半次就足够让整个客户端发涩
+     * （用户报的「整个网易云都卡」）。
+     *
+     * 现在只在真的有用时才动：开关变了、换歌了、或者这一轮刚注了新行。
      */
     var now = Date.now();
-    if (!force && jpFontAt && now - jpFontAt < 2000) return;
-    jpFontAt = now;
     var want = config.jpnFont === true && songLooksJapanese();
-    if (want) applyJapaneseFontInline(fontStack(config.jpnFontFamily));
-    else applyJapaneseFontInline("");
+    if (!force && changed === 0 && want === jpFontApplied && now - jpFontAt < 8000) return;
+    if (!force && jpFontApplied === want && !changed && now - jpFontAt < 1000) return;
+    jpFontAt = now;
+    jpFontApplied = want;
+    if (want) applyJapaneseFontInline(fontStack(config.jpnFontFamily), regions);
+    else applyJapaneseFontInline("", regions);
     /*
      * 样式表整个不用了：它只能按选择器命中，而真机上"原文 / 罗马音 / 翻译"常常在同一个
      * 容器里（或者都匹配同一批选择器），写成 `SEL, SEL *` 会连子节点一起换。
@@ -6309,7 +6409,7 @@
             var input = root.querySelector('[data-k="jpnFontFamily"]');
             if (input) input.value = JP_FONT_DEFAULT;
             jpFontCss = null;
-            updateJapaneseFont();
+            updateJapaneseFont(true);
             saveConfig();
             b.textContent = "已恢复默认";
             setTimeout(function () {

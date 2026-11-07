@@ -6459,7 +6459,7 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
   const got = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(
     got,
-    [["燃", "も"], ["上", "あ"], ["体", "たい"], ["温", "おん"]],
+    [["燃", "も"], ["上", "あ"], ["体温", "たいおん"]],
     "读音要按整行分词，不许按单字：" + JSON.stringify(got) + " / " + root.innerHTML
   );
   // ruby 的底字里也不许带着那个空格（否则 rt 会往右偏、那一格还会被撑宽）
@@ -6514,12 +6514,12 @@ test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟
   assert.deepStrictEqual(pairs, [["星", "ほし"], ["々", "ぼし"]], "叠字符要跟着前一个字读：" + lines[1].innerHTML);
 });
 
-test("逐字歌词（RNP karaoke）：一个词跨好几个字时，读音按字数摊到每个字上（狂狂 くるくる）", async () => {
+test("逐字歌词（RNP karaoke）：一个词跨好几个字时，整段读音挂在第一格、其余格清空（照 jp-furigana 的 groupHosts）", async () => {
   /*
-   * 括号读音的底字跨好几个节点（狂狂）。以前只认"起点落在这个节点里"的词：
-   * 第一个 狂 拿到整段 くるくる，第二个 狂 一条都落不下来、往下走单字兜底，
-   * 于是显示成 くるくる + きょう（真机现象：读音挤在第一个字上、后半截按单字读）。
-   * 现在按字数把读音摊开：狂=くる、狂=くる。
+   * 括号读音的底字跨好几个格子（狂狂）。照 jp-furigana 的分组做法：整段读音只挂在
+   * 这一组的**第一格**上（底字写整词 狂狂），后面几格的文字由第一格显示、自己清空 ——
+   * 每格都是独立的 inline-block，ruby 落在哪一格就把那一格撑宽，按字摊开会让字之间裂开。
+   * 并进来的那几个字跟着头一个字的时间一起亮。
    */
   const karaoke = (line) =>
     Array.from(line)
@@ -6546,7 +6546,11 @@ test("逐字歌词（RNP karaoke）：一个词跨好几个字时，读音按字
     (r.childNodes[0].nodeValue || "").trim(),
     r.querySelector(".wk-rt").textContent,
   ]);
-  assert.deepStrictEqual(pairs, [["狂", "くる"], ["狂", "くる"]], "读音要摊到两个字上：" + root.innerHTML);
+  assert.deepStrictEqual(pairs, [["狂狂", "くるくる"]], "整段读音挂在第一格：" + root.innerHTML);
+  const absorbed = Array.from(root.querySelectorAll(".rnp-karaoke-word"))
+    .map((w) => (w.textContent || "").trim())
+    .filter((t) => t === "");
+  assert.strictEqual(absorbed.length, 1, "被并进来的那一格要清空：" + root.innerHTML);
   const hidden = Array.from(root.querySelectorAll(".rnp-karaoke-word"))
     .filter((w) => w.querySelector(".wk-hide"))
     .map((w) => w.textContent.trim());
@@ -6629,11 +6633,11 @@ test("逐字歌词（RNP karaoke）：slide 动画的替身节点跟着一起注
       (r.childNodes[0].nodeValue || "").trim(),
       r.querySelector(".wk-rt").textContent,
     ]);
-  // 本体：读音按整行分词、摊到各字
+  // 本体：整段读音挂在第一格（体温），温 那一格清空
   const main = Array.from(root.querySelectorAll("span:not(.rnp-karaoke-word-filler)"))
     .map((s) => rubies(s))
     .flat();
-  assert.deepStrictEqual(main, [["体", "たい"], ["温", "おん"]], "读音按整行分词、摊到各字：" + root.innerHTML);
+  assert.deepStrictEqual(main, [["体温", "たいおん"]], "整段读音挂在第一格：" + root.innerHTML);
   // 替身：和本体一模一样
   for (const w of words) {
     const host = w.querySelector("span:not(.rnp-karaoke-word-filler)");
@@ -6854,6 +6858,45 @@ test("外部网站：括号读音和客户端切行都不该让对齐失败（MY
     "客户端把网站的一行切成两行时，本行是网站行的开头也要套上"
   );
   assert.strictEqual(X.tokensFor("ギコギコ ぜんぜん違う(ちが)", idx), null, "对不上就返回 null");
+});
+
+test("外部网站：读音一样、只是切得更细的一方胜（网站 `太陽 = たいよう` vs 词典 太 + 陽）", async () => {
+  /*
+   * 用户要求：两边读音念出来一样、只是一边切得更细时，用细的那一方 ——
+   * 细的那份一格一个读音，逐字歌词才对得上；整词那格会把两个字挤成一团。
+   * 反过来的情形（网站更细）本来就走"网站压过词典"那条。
+   */
+  const cacheDir = tempCacheDir();
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">細かい歌</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>太陽に</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_DBG_MERGE__ = true;
+  env.window.__WK_TRACK__ = { id: "1000000001", title: "細かい歌", artists: ["Artist"] };
+  writeCacheFile(cacheDir, "1000000001", {
+    schema: 1,
+    songId: "1000000001",
+    fetchedAt: new Date().toISOString(),
+    provider: "utaten",
+    url: "https://utaten.com/lyric/fine/",
+    title: "細かい歌",
+    artists: ["Artist"],
+    lines: [{ text: "太陽に", segments: [{ text: "太陽", rt: "たいよう" }, { text: "に" }] }],
+  });
+  // 词典给的是"一个字一个读音"（比网站细），拼起来读音一样
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 太: "タイ", 陽: "ヨウ", に: "ニ" }));
+  await env.runLoad();
+  await sleep(700);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(pairs, [["太", "たい"], ["陽", "よう"]], "细的那一方胜：" + p.innerHTML);
 });
 
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {

@@ -1285,6 +1285,13 @@
           any = true;
           continue;
         }
+        // 被前一组吃掉的格子：只清空，不算"没词可注"（见 main.js 的逐字分组）
+        if (tokens[i].absorb) {
+          glosses.push(null);
+          sources.push(null);
+          any = true;
+          continue;
+        }
         /*
          * 段标（`(A:` / `B：`）在真机上可能被拆成不同节点：`A` 在它自己的节点里，
          * 冒号落在**下一个**文本节点 —— token 自己看不到冒号，段标判定就失效了
@@ -1383,6 +1390,16 @@
       var anyPiece = false;
       for (var j = 0; j < tokens.length; j++) {
         var tk = tokens[j];
+        /*
+         * 被前一组吃掉的格子：整格清空（文字显示在组里第一格上），
+         * 后面的原文也一并算消费掉 —— 不然剩下的 "温 " 又会作为普通文本插回来。
+         */
+        if (tk.absorb) {
+          pieces.push({ text: "", absorb: true });
+          anyPiece = true;
+          pos = text.length;
+          continue;
+        }
         if (tk.start > pos) pieces.push({ text: text.slice(pos, tk.start) });
         if (tk.blank) {
           /*
