@@ -2550,7 +2550,7 @@
       }
       function add(kana, suffix) {
         if (!kana || have(kana)) return;
-        items.push({ kana: kana, label: kana + suffix });
+        items.push({ kana: kana, label: kana });
       }
       var on = WKKanjiReadings.onOf(single);
       var kun = WKKanjiReadings.kunOf(single);
@@ -2583,7 +2583,7 @@
       }
       function add(kana, suffix) {
         if (!kana || have(kana)) return;
-        items.push({ kana: kana, label: kana + suffix });
+        items.push({ kana: kana, label: kana });
       }
       var base = items.slice();
       var i;

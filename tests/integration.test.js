@@ -5611,7 +5611,7 @@ test("单字多读法：歌 うた/か、詩 し/うた、花 はな/か 也能�
   await sleep(50);
   assert.deepStrictEqual(
     chips().map((b) => b.textContent),
-    ["はな", "か", "ばな（浊）", "ぱな（半浊）"],
+    ["はな", "か", "ばな", "ぱな"],
     "花 的候选（后面是音便）"
   );
 });
@@ -6834,12 +6834,12 @@ test("单字候选：补上常用漢字表里的所有音读 / 训读（标「�
   dbl(byWord('間'));
   await sleep(50);
   const got = chips();
-  assert.ok(got.indexOf('かん（音）') >= 0, '要有音读 かん（音）：' + got.join('/'));
-  assert.ok(got.indexOf('けん（音）') >= 0, '要有音读 けん（音）：' + got.join('/'));
-  assert.ok(got.indexOf('あいだ（训）') >= 0, '要有训读 あいだ（训）：' + got.join('/'));
-  assert.ok(got.indexOf('ま（训）') >= 0, '训读 ま 也在：' + got.join('/'));
+  assert.ok(got.indexOf('かん') >= 0, '要有音读 かん（音）：' + got.join('/'));
+  assert.ok(got.indexOf('けん') >= 0, '要有音读 けん（音）：' + got.join('/'));
+  assert.ok(got.indexOf('あいだ') >= 0, '要有训读 あいだ（训）：' + got.join('/'));
+  assert.ok(got.indexOf('ま') >= 0, '训读 ま 也在：' + got.join('/'));
   // 点「あいだ（训）」要立刻换过去
-  const kun = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'あいだ（训）')[0];
+  const kun = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'あいだ')[0];
   kun.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(byWord('間').querySelector('.wk-rt').textContent, 'あいだ', p.innerHTML);
@@ -6866,14 +6866,14 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('手'));
   await sleep(50);
-  assert.ok(chips().indexOf('で（浊）') >= 0, '手 的连浊 で：' + chips().join('/'));
+  assert.ok(chips().indexOf('で') >= 0, '手 的连浊 で：' + chips().join('/'));
   dbl(byWord('一'));
   await sleep(50);
-  assert.ok(chips().indexOf('いっ（促）') >= 0, '一 的促音便 いっ：' + chips().join('/'));
+  assert.ok(chips().indexOf('いっ') >= 0, '一 的促音便 いっ：' + chips().join('/'));
   dbl(byWord('花'));
   await sleep(50);
-  assert.ok(chips().indexOf('ばな（浊）') >= 0, '花 的连浊 ばな：' + chips().join('/'));
-  assert.ok(chips().indexOf('ぱな（半浊）') >= 0, '花 的半浊 ぱな：' + chips().join('/'));
+  assert.ok(chips().indexOf('ばな') >= 0, '花 的连浊 ばな：' + chips().join('/'));
+  assert.ok(chips().indexOf('ぱな') >= 0, '花 的半浊 ぱな：' + chips().join('/'));
 });
 
 test("日期词：一日 给 いちにち / ついたち，二日~十日 也给另一种读法", async () => {
@@ -6912,13 +6912,13 @@ test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async (
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('共'));
   await sleep(50);
-  assert.ok(chips().indexOf('とも（训）') >= 0, '共 的训读 とも：' + chips().join('/'));
-  const t = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'とも（训）')[0];
+  assert.ok(chips().indexOf('とも') >= 0, '共 的训读 とも：' + chips().join('/'));
+  const t = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'とも')[0];
   t.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(byWord('共').querySelector('.wk-rt').textContent, 'とも', p.innerHTML);
   dbl(byWord('鳴'));
   await sleep(50);
-  assert.ok(chips().indexOf('な（训）') >= 0, '鳴 的训读 な：' + chips().join('/'));
+  assert.ok(chips().indexOf('な') >= 0, '鳴 的训读 な：' + chips().join('/'));
 });
 
