@@ -4490,12 +4490,23 @@
      * 先标出"读音相同、底字切得更细"的那些网站 token：它们不该压掉细的那几段。
      * 判据：网站那一格正好被 2 段以上的本地 token 拼满，且拼起来的读音一样。
      */
+    /*
+     * 快路径：两批 token 都按 start 排好了，先按位置把"可能重叠"的那几对挑出来，
+     * 别每行都做 base×ext 的全量两层循环 —— 一行几十个词 × 整首一百多段，
+     * 每轮 pass 乘起来就是卡顿（用户报"有括号读音的歌词有点卡"）。
+     */
+    function overlaps(a, b) {
+      return a.start < b.end && b.start < a.end;
+    }
     var coarser = [];
     for (j = 0; j < ext.length; j++) {
       var inside = [];
       for (i = 0; i < base.length; i++) {
         var bt = base[i];
-        if (!bt || bt.hide || bt.blank || !bt.kana) continue;
+        if (!bt) continue;
+        if (bt.start >= ext[j].end) break; // 后面的都比完了
+        if (!overlaps(bt, ext[j])) continue;
+        if (bt.hide || bt.blank || !bt.kana) continue;
         if (bt.start >= ext[j].start && bt.end <= ext[j].end) inside.push(bt);
       }
       if (inside.length < 2) continue;
@@ -4517,14 +4528,26 @@
      * 会把 翔 的读音也盖掉。判据：读音一样、结尾对齐、网站那段更短。
      */
     var narrowInline = [];
-    for (j = 0; j < ext.length; j++) {
+    var anyInline = false;
+    for (i = 0; i < base.length; i++) if (base[i] && base[i].kind === "inline") anyInline = true;
+    if (anyInline) {
+      var extByEnd = {};
+      for (j = 0; j < ext.length; j++) {
+        var key = String(ext[j].end);
+        if (!extByEnd[key]) extByEnd[key] = [];
+        extByEnd[key].push(ext[j]);
+      }
       for (i = 0; i < base.length; i++) {
         var itk = base[i];
         if (!itk || itk.kind !== "inline" || !itk.kana) continue;
-        if (itk.end !== ext[j].end || itk.start >= ext[j].start) continue;
-        if (!sameKana(itk.kana, ext[j].kana)) continue;
-        narrowInline.push(itk);
-        break;
+        var cands = extByEnd[String(itk.end)];
+        if (!cands) continue;
+        for (j = 0; j < cands.length; j++) {
+          if (itk.start >= cands[j].start) continue;
+          if (!sameKana(itk.kana, cands[j].kana)) continue;
+          narrowInline.push(itk);
+          break;
+        }
       }
     }
     for (i = 0; i < base.length; i++) {

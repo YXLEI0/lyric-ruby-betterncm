@@ -327,7 +327,13 @@
       var left = String(t).replace(/[\u3041-\u3096\u30A1-\u30FA]/g, "");
       return Math.floor(left.length * 2.5) + (t.length - left.length);
     }
-    if (kana.length > capacity(base)) {
+    /*
+     * 全片假名的括号读音是"标注"（`幕（エンドロール）`、`拍手（ポップコーン）`、
+     * `天（スターダム）`）—— 借词本来就比汉字长，不按拍数卡。
+     * 平假名的长短语则多半是跟着唱的词（`もう一回（もういいかい）`），才用拍数判。
+     */
+    var katakanaOnly = /^[\u30A1-\u30FA\u30FC\u30FB]+$/.test(kana);
+    if (!katakanaOnly && kana.length > capacity(base)) {
       /*
        * 拍数比底字能有的读音还长 → 括号里那句**不是这个字的读音**
        * （`もう一回（もういいかい）` 是跟着唱的问句，`一回` 顶多 5 拍）。
@@ -338,6 +344,28 @@
       return null;
     }
     return { base: base, start: start };
+  }
+
+  /**
+   * 括号里是不是"同一小段反复唱"（`オーオーオー…`、`らららら`）。
+   * 命中就不当读音：那种括号是歌词里的喊话，藏掉就少一句。
+   */
+  function isRepeatedSyllables(kana) {
+    var s = String(kana == null ? "" : kana);
+    if (s.length < 6) return false; // 太短的（`オーオー`）不判，宁可不误杀
+    for (var len = 1; len <= 3; len++) {
+      if (s.length < len * 3) continue;
+      var unit = s.slice(0, len);
+      var same = true;
+      for (var i = 0; i < s.length; i++) {
+        if (s.charAt(i) !== unit.charAt(i % len)) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return true;
+    }
+    return false;
   }
 
   /**
@@ -366,6 +394,12 @@
       if (!unit || !unit.base) continue;
       var base = unit.base;
       var unitStart = unit.start;
+      /*
+       * 括号里是"喊出来的重复音节"（`振れた気持ちを(オーオーオーオーオーオー)`）
+       * 就不是读音，是跟着唱的词 —— 重复 ≥3 遍的短音节一律不当读音（用户要求
+       * "对括号读音的判断保守一点"）。
+       */
+      if (isRepeatedSyllables(kana)) continue;
       /*
        * **底字里没有汉字就不是括号读音**（照 jp-furigana 的 `RE_INLINE_RUBY`：
        * 它要求括号前是 `[汉字]+`）。
