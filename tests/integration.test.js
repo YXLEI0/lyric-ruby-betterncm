@@ -38,6 +38,60 @@ const NCM_HTML = `<!doctype html><html><head></head><body>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/*
+ * 文件缓存用的测试工具：BetterNCM 的 betterncm.fs 在测试里默认是空的，
+ * 需要真读写的用例显式传 diskFs()（写到 os.tmpdir 下，绝不碰真机的缓存目录）。
+ */
+const fsNode = require("node:fs");
+const osNode = require("node:os");
+const pathNode = require("node:path");
+
+function diskFs() {
+  return {
+    readFileText: function (p) {
+      try {
+        return Promise.resolve(fsNode.readFileSync(p, "utf8"));
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    },
+    writeFileText: function (p, t) {
+      try {
+        fsNode.mkdirSync(pathNode.dirname(p), { recursive: true });
+        fsNode.writeFileSync(p, t, "utf8");
+        return Promise.resolve(true);
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    },
+    readDir: function (d) {
+      try {
+        return Promise.resolve(fsNode.readdirSync(d));
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    },
+    remove: function (p) {
+      try {
+        fsNode.unlinkSync(p);
+        return Promise.resolve(true);
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    },
+  };
+}
+
+/** 一个临时缓存目录（用完不管，os.tmpdir 里） */
+function tempCacheDir() {
+  return fsNode.mkdtempSync(pathNode.join(osNode.tmpdir(), "wk-cache-"));
+}
+
+function writeCacheFile(dir, id, rec) {
+  fsNode.mkdirSync(dir, { recursive: true });
+  fsNode.writeFileSync(pathNode.join(dir, String(id) + ".json"), JSON.stringify(rec, null, 1), "utf8");
+}
+
 /** 造一个假的 BetterNCM 环境并注入插件 */
 function bootPlugin(html, options) {
   options = options || {};
@@ -78,7 +132,7 @@ function bootPlugin(html, options) {
         opened.push(u);
       },
     },
-    fs: {},
+    fs: options.fs || {},
   };
   const plugin = {
     devMode: !!options.dev,
@@ -5764,7 +5818,7 @@ test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不�
   /*
    * 外部网站默认关；打开并同意条款后按歌名 / 歌手查 UtaTen，命中行的振假名压过
    * 词典（泥水 どろみず → でいすい），对不上的行照旧用词典。
-   * 这里不联网：直接塞一条缓存记录，验解析 / 对齐 / 应用这三步。
+   * 这里不联网：直接放一份 jp-furigana 格式的 JSON 缓存，验「读文件 -> 解析 -> 对齐 -> 应用」。
    */
   const SEARCH_HTML = `<!doctype html><html><body><table><tr>
     <td class="searchResult__title"><a href="/lyric/abc/"><span class="songlist-title">External Song</span></a></td>
@@ -5788,24 +5842,27 @@ test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不�
   <li class="line"><p>泥水の夜</p></li>
   <li class="line"><p>知らない街</p></li>
 </ul></div></body></html>`;
-  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  // 磁盘上有这首歌的 JSON（jp-furigana 格式），播放器报的曲目 id 要对上才读它
+  const cacheDir = tempCacheDir();
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_TRACK__ = { id: "1913268601", title: "External Song", artists: ["Artist"] };
+  writeCacheFile(cacheDir, "1913268601", {
+    schema: 1,
+    songId: "1913268601",
+    fetchedAt: new Date().toISOString(),
+    provider: "utaten",
+    url: "https://utaten.com/lyric/abc/",
+    title: "External Song",
+    artists: ["Artist"],
+    lines: [
+      { text: "泥水の夜", segments: [{ text: "泥水", rt: "でいすい" }, { text: "の夜" }] },
+      { text: "風の歌", segments: [{ text: "風", rt: "かぜ" }, { text: "の歌" }] },
+    ],
+  });
   env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル", 知: "シ", 街: "マチ" }));
-  // 缓存键 = 歌名 + "\0" + 歌手
-  env.window.localStorage.setItem(
-    "lyric-ruby.external.v1",
-    JSON.stringify({
-      "External Song\u0000Artist": {
-        at: Date.now(),
-        title: "External Song",
-        artists: ["Artist"],
-        url: "https://utaten.com/lyric/abc/",
-        lines: [
-          { text: "泥水の夜", segments: [{ text: "泥水", rt: "でいすい" }, { text: "の夜" }] },
-          { text: "風の歌", segments: [{ text: "風", rt: "かぜ" }, { text: "の歌" }] },
-        ],
-      },
-    })
-  );
   await env.runLoad();
   await sleep(600);
 
@@ -5863,7 +5920,13 @@ test("外部网站读音：没有缓存时按歌名 / 歌手联网取（请求�
 <div class="m-lyric"><ul class="lyric">
   <li class="line"><p>泡沫の夢</p></li>
 </ul></div></body></html>`;
-  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true } });
+  const cacheDir = tempCacheDir();
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  // 有曲目 id 才会把整首写成 <歌曲ID>.json
+  env.window.__WK_TRACK__ = { id: "2669794387", title: "Net Song", artists: ["Net Artist"] };
   const requested = [];
   env.window.__WK_EXTERNAL_FETCH__ = function (url) {
     requested.push(url);
@@ -5878,8 +5941,34 @@ test("外部网站读音：没有缓存时按歌名 / 歌手联网取（请求�
   assert.deepStrictEqual(pairs, [["泡沫", "うたかた"], ["夢", "ゆめ"]], "网站读音要覆盖词典：" + p.innerHTML);
   assert.ok(requested.some((u) => u.indexOf("title=Net%20Song") >= 0), "要按歌名搜：" + JSON.stringify(requested));
   assert.ok(requested.some((u) => u.indexOf("/lyric/net/") >= 0), "要取命中的歌词页：" + JSON.stringify(requested));
-  const cache = JSON.parse(env.window.localStorage.getItem("lyric-ruby.external.v1") || "{}");
-  assert.ok(cache["Net Song\u0000Net Artist"], "成功之后要写缓存：" + JSON.stringify(cache));
+  const saved = JSON.parse(fsNode.readFileSync(pathNode.join(cacheDir, "2669794387.json"), "utf8"));
+  assert.strictEqual(saved.provider, "utaten", "成功之后要把整首写成 JSON：" + JSON.stringify(saved).slice(0, 200));
+  assert.ok(saved.lines.length >= 1, "写进去的要有歌词行");
+  assert.strictEqual(env.window.localStorage.getItem("lyric-ruby.external.v1"), null, "不许再往那份老的短缓存里写");
+});
+
+test("旧版外部读音短缓存：启动时自动清掉（localStorage lyric-ruby.external.v1）", async () => {
+  /*
+   * 1.29 之前整首网站歌词塞在 localStorage 里（最多 8 首）。现在一律按
+   * `<歌曲ID>.json` 缓存，那份短缓存留着只占配额、还容易和文件里的读音打架 ——
+   * 启动时清一次（用户要求"把以前那些没用上的 UtaTen 缓存清干净"）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>泥水の夜</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.localStorage.setItem(
+    "lyric-ruby.external.v1",
+    JSON.stringify({ "Old Song\u0000Old Artist": { at: 1, title: "Old Song", artists: ["Old Artist"], url: "https://utaten.com/lyric/old/", lines: [{ text: "泥水の夜", segments: [{ text: "泥水", rt: "でいすい" }] }] } })
+  );
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ" }));
+  await env.runLoad();
+  await sleep(400);
+  assert.strictEqual(
+    env.window.localStorage.getItem("lyric-ruby.external.v1"),
+    null,
+    "启动后那份短缓存应该已经没了"
+  );
 });
 
 test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら", async () => {
@@ -6370,7 +6459,7 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
   const got = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(
     got,
-    [["燃", "も"], ["上", "あ"], ["体", "たいおん"]],
+    [["燃", "も"], ["上", "あ"], ["体", "たい"], ["温", "おん"]],
     "读音要按整行分词，不许按单字：" + JSON.stringify(got) + " / " + root.innerHTML
   );
   // ruby 的底字里也不许带着那个空格（否则 rt 会往右偏、那一格还会被撑宽）
@@ -6423,6 +6512,83 @@ test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟
     r.querySelector(".wk-rt").textContent,
   ]);
   assert.deepStrictEqual(pairs, [["星", "ほし"], ["々", "ぼし"]], "叠字符要跟着前一个字读：" + lines[1].innerHTML);
+});
+
+test("逐字歌词（RNP karaoke）：一个词跨好几个字时，读音按字数摊到每个字上（狂狂 くるくる）", async () => {
+  /*
+   * 括号读音的底字跨好几个节点（狂狂）。以前只认"起点落在这个节点里"的词：
+   * 第一个 狂 拿到整段 くるくる，第二个 狂 一条都落不下来、往下走单字兜底，
+   * 于是显示成 くるくる + きょう（真机现象：读音挤在第一个字上、后半截按单字读）。
+   * 现在按字数把读音摊开：狂=くる、狂=くる。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map(
+        (c, i, all) =>
+          '<div class="rnp-karaoke-word is-cjk' +
+          (i < all.length - 1 ? " end-with-space" : "") +
+          '"><span>' +
+          c +
+          (i < all.length - 1 ? " " : "") +
+          "</span></div>"
+      )
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${karaoke("狂狂(くるくる)")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 狂: "キョウ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const pairs = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["狂", "くる"], ["狂", "くる"]], "读音要摊到两个字上：" + root.innerHTML);
+  const hidden = Array.from(root.querySelectorAll(".rnp-karaoke-word"))
+    .filter((w) => w.querySelector(".wk-hide"))
+    .map((w) => w.textContent.trim());
+  assert.deepStrictEqual(hidden, ["(", "く", "る", "く", "る", ")"], "括号那一段也要整个藏掉：" + root.innerHTML);
+});
+
+test("外部网站的读音压过括号读音（MY HEART(マイココロ) → こころ）", async () => {
+  /*
+   * 作者在括号里写的是整句的读法（マイココロ），网站标的是 HEART = こころ —— 以网站为准
+   * （用户明确要求）。这也顺带证明"客户端那行带括号读音"不会再让对齐失败。
+   */
+  const SEARCH = `<!doctype html><html><body><table><tr>
+    <td class="searchResult__title"><a href="/lyric/abc/"><span class="songlist-title">ギコギコ</span></a></td>
+    <td class="searchResult__artist"><p><a href="/artist/1/">Artist</a></p></td>
+  </tr></table></body></html>`;
+  const LYRIC = `<!doctype html><html><body>
+    <div class="lyricBody"><div class="hiragana">
+      <span class="ruby"><span class="rb">ギコ　ギコ　MY </span></span><span class="ruby"><span class="rb">HEART</span><span class="rt">こころ</span></span><br>
+    </div></div></body></html>`;
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">ギコギコ</a></span>
+  <span class="by"><a href="#">Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>ギコギコ MY HEART(マイココロ)</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalProvider: "utaten" },
+  });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({}));
+  env.window.__WK_EXTERNAL_FETCH__ = function (url) {
+    return Promise.resolve(url.indexOf("/search") >= 0 ? SEARCH : LYRIC);
+  };
+  await env.runLoad();
+  await sleep(1800);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const heart = pairs.filter((x) => x[0] === "HEART")[0];
+  assert.deepStrictEqual(heart, ["HEART", "こころ"], "网站标的读音要压过括号读音：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段还是要藏起来：" + p.innerHTML);
 });
 
 test("西文词也能就地改读音（MY → エムワイ），留空 / 改回来都行", async () => {
@@ -6604,6 +6770,38 @@ test("外部网站读音：客户端一行 = 网站连续两行时也要对上�
     { text: "相", start: 0, end: 1, kana: "あい" },
     { text: "追", start: 5, end: 6, kana: "お" },
   ]));
+});
+
+test("外部网站：括号读音和客户端切行都不该让对齐失败（MY HEART(マイココロ) 用网站的 こころ）", () => {
+  /*
+   * 真机现象：网易云那行是 `ギコギコ MY HEART(マイココロ)`（括号读音是作者写的），
+   * 网站那行是 `ギコ　ギコ　MY HEART 　剪定` —— 去掉空白后一个带括号、一个带尾巴，
+   * 怎么都对不上，于是 HEART 按词典读 ハート（用户：网站明明标了 ココロ）。
+   *
+   * 两条放宽：① 对齐时把括号读音连括号一起去掉；② 当前行是网站行的**开头**
+   * 时取落在本行里的那几段（客户端常把一整行切成两行）。候选读音打架就不套。
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const X = ctx.window.WKExternal;
+  const rec = {
+    provider: "utaten",
+    lines: [
+      { text: "ギコ　ギコ　MY HEART 　剪定", segments: [{ text: "ギコ　ギコ　MY " }, { text: "HEART", rt: "こころ" }, { text: " 　" }, { text: "剪定", rt: "せんてい" }] },
+      { text: "まだ　歌う", segments: [{ text: "まだ　" }, { text: "歌", rt: "うた" }, { text: "う" }] },
+    ],
+  };
+  const idx = X.buildIndex(rec);
+  assert.strictEqual(
+    JSON.stringify(X.tokensFor("ギコギコ MY HEART(マイココロ)", idx)),
+    JSON.stringify([{ text: "HEART", start: 8, end: 13, kana: "こころ" }]),
+    "带括号读音也要对上：" + JSON.stringify(X.tokensFor("ギコギコ MY HEART(マイココロ)", idx))
+  );
+  assert.strictEqual(
+    JSON.stringify(X.tokensFor("ギコギコ MY HEART", idx)),
+    JSON.stringify([{ text: "HEART", start: 8, end: 13, kana: "こころ" }]),
+    "客户端把网站的一行切成两行时，本行是网站行的开头也要套上"
+  );
+  assert.strictEqual(X.tokensFor("ギコギコ ぜんぜん違う(ちが)", idx), null, "对不上就返回 null");
 });
 
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {

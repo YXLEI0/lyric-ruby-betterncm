@@ -340,28 +340,90 @@
    * `言` 的读音落到 `り` 上 —— 真机现象就是行里多出一个"ひと"、り 顶着 ごと。
    */
   function tokensFor(lineText, index) {
-    if (!index || !index.entries) return null;
-    var c = compact(lineText);
-    if (!c.text || !Object.prototype.hasOwnProperty.call(index.entries, c.text)) return null;
-    var e = index.entries[c.text];
-    if (!e || !e.segs) return null;
+    var hit = matchEntry(lineText, index);
+    if (!hit) return null;
+    var text = str(lineText);
     var out = [];
-    for (var i = 0; i < e.segs.length; i++) {
-      var seg = e.segs[i];
+    for (var i = 0; i < hit.segs.length; i++) {
+      var seg = hit.segs[i];
       if (!(seg.to > seg.from)) continue;
-      var start = c.map[seg.from];
-      var end = c.map[seg.to - 1] + 1;
+      var from = Math.max(0, seg.from);
+      var to = Math.min(hit.map.length, seg.to);
+      if (!(to > from)) continue;
+      var start = hit.map[from];
+      var end = hit.map[to - 1] + 1;
       if (!(start >= 0) || !(end > start)) continue;
-      out.push({ text: str(lineText).slice(start, end), start: start, end: end, kana: seg.rt });
+      out.push({ text: text.slice(start, end), start: start, end: end, kana: seg.rt });
     }
-    return out;
+    return out.length ? out : null;
   }
 
-  /** Uta-net：这一行的罗马音（对不上返回 ""） */
+  /**
+   * 把当前歌词行对到网站上那一行，返回 { segs, map }。
+   *
+   * 两种写法差异要认：
+   *   ① 括号读音（`MY HEART(マイココロ)`）是客户端才有的 —— 对齐时连括号一起去掉，
+   *      否则整行永远对不上（网站明明标了 HEART = こころ，插件却按词典读 ハート）；
+   *   ② 客户端常把网站的一行切成两行（网站 `ギコギコ MY HEART 剪定`、客户端
+   *      只有 `ギコギコ MY HEART`）—— 当前行是网站行的**开头**时，取它落在本行里的那几段。
+   *      几个候选给出的读音必须完全一致，不一致就宁可不套（副歌重复、写法差异）。
+   */
+  function matchEntry(lineText, index) {
+    if (!index || !index.entries) return null;
+    var c = stripInlineBrackets(lineText);
+    if (!c.text) return null;
+    var exact = index.entries[c.text];
+    if (exact && exact.segs && exact.segs.length) return { segs: exact.segs, map: c.map };
+    var hit = null;
+    for (var t in index.entries) {
+      if (!Object.prototype.hasOwnProperty.call(index.entries, t)) continue;
+      if (t.length <= c.text.length || t.indexOf(c.text) !== 0) continue;
+      var e = index.entries[t];
+      if (!e || !e.segs) continue;
+      var segs = [];
+      for (var i = 0; i < e.segs.length; i++) {
+        if (e.segs[i].from >= c.text.length) break;
+        segs.push({ from: e.segs[i].from, to: Math.min(e.segs[i].to, c.text.length), rt: e.segs[i].rt });
+      }
+      if (!segs.length) continue;
+      var stamp = JSON.stringify(segs);
+      if (!hit) hit = { segs: segs, stamp: stamp, map: c.map };
+      else if (hit.stamp !== stamp) return null; // 几个候选读音不一样，别猜
+    }
+    return hit ? { segs: hit.segs, map: hit.map } : null;
+  }
+
+  /** 去掉括号读音（`(かな)`）和空白后的匹配文本 + 每个字在原文里的下标 */
+  var RE_INLINE_BRACKET = /[（(][ \t\u3000]*[\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,24}[ \t\u3000]*[）)]/g;
+  function stripInlineBrackets(text) {
+    var s = str(text);
+    var hidden = [];
+    RE_INLINE_BRACKET.lastIndex = 0;
+    var m;
+    while ((m = RE_INLINE_BRACKET.exec(s))) hidden.push([m.index, m.index + m[0].length]);
+    var out = "";
+    var map = [];
+    for (var i = 0; i < s.length; i++) {
+      var hid = false;
+      for (var h = 0; h < hidden.length; h++) {
+        if (i >= hidden[h][0] && i < hidden[h][1]) {
+          hid = true;
+          break;
+        }
+      }
+      if (hid) continue;
+      if (/[\s\u3000]/.test(s.charAt(i))) continue;
+      out += s.charAt(i);
+      map.push(i);
+    }
+    return { text: out, map: map };
+  }
+
+  /** Uta-net：这一行的罗马音（对不上返回 ""；括号读音同样不算） */
   function romajiFor(lineText, index) {
     if (!index || !index.entries) return "";
-    var c = compact(lineText);
-    if (!c.text || !Object.prototype.hasOwnProperty.call(index.entries, c.text)) return "";
+    var c = stripInlineBrackets(lineText);
+    if (!c.text) return "";
     var e = index.entries[c.text];
     return e && typeof e.romaji === "string" ? e.romaji : "";
   }

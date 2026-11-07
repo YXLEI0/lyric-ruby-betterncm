@@ -551,12 +551,12 @@ test("作词者的括号读音：中间夹空格也要采（舞台 (セカイ)�
   W.WKFurigana.setTokenizer(fakeTokenizer({ 舞台: "ブタイ", 響: "ヒビ", に: "ニ", く: "ク" }));
 
   const tight = Array.from(W.WKFurigana.tokens("舞台(セカイ)") || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
-  assert.deepStrictEqual(tight, [["舞台", "せかい"], ["(セカイ)", "HIDE"]], "紧贴写法：" + JSON.stringify(tight));
+  assert.deepStrictEqual(tight, [["舞台", "セカイ"], ["(セカイ)", "HIDE"]], "紧贴写法：" + JSON.stringify(tight));
 
   const spaced = Array.from(W.WKFurigana.tokens("舞台 (セカイ) に響く") || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
   assert.deepStrictEqual(
     spaced,
-    [["舞台", "せかい"], [" (セカイ)", "HIDE"], ["響", "ひび"]],
+    [["舞台", "セカイ"], [" (セカイ)", "HIDE"], ["響", "ひび"]],
     "中间有空格也要采括号里的读音：" + JSON.stringify(spaced)
   );
 
@@ -568,7 +568,7 @@ test("作词者的括号读音：中间夹空格也要采（舞台 (セカイ)�
     t.text,
     t.kana || (t.hide ? "HIDE" : ""),
   ]);
-  assert.deepStrictEqual(byFix, [["舞台", "せかい"], [" (セカイ)", "HIDE"]], "括号读音要压过模型 / 规则：" + JSON.stringify(byFix));
+  assert.deepStrictEqual(byFix, [["舞台", "セカイ"], [" (セカイ)", "HIDE"]], "括号读音要压过模型 / 规则：" + JSON.stringify(byFix));
 
   const bySpan = Array.from(W.WKFurigana.tokens("舞台 (セカイ)", { spans: [[0, "舞台", "ぶたい"]] }) || [], (t) => [
     t.text,
@@ -604,8 +604,50 @@ test("括号读音：底字是符号 / 叠字符时也要合并（〆（シメ�
   const W = ctx.window;
   W.WKFurigana.setTokenizer(fakeTokenizer({ に: "ニ", まっ: "マッ", た: "タ" }));
   const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
-  assert.deepStrictEqual(pairs("〆（シメ）にまった"), [["〆", "しめ"], ["（シメ）", "HIDE"]], "全角括号：" + JSON.stringify(pairs("〆（シメ）にまった")));
-  assert.deepStrictEqual(pairs("〆(シメ)にまった"), [["〆", "しめ"], ["(シメ)", "HIDE"]], "半角括号：" + JSON.stringify(pairs("〆(シメ)にまった")));
+  assert.deepStrictEqual(pairs("〆（シメ）にまった"), [["〆", "シメ"], ["（シメ）", "HIDE"]], "全角括号：" + JSON.stringify(pairs("〆（シメ）にまった")));
+  assert.deepStrictEqual(pairs("〆(シメ)にまった"), [["〆", "シメ"], ["(シメ)", "HIDE"]], "半角括号：" + JSON.stringify(pairs("〆(シメ)にまった")));
+});
+
+test("括号读音的底字按网站的范围取（假名 / 西文 / 符号都算），读音照原样显示", () => {
+  /*
+   * 底字的范围照 UtaTen 标的来：括号前面那一整段（汉字 + 送假名 / 西文 / 符号）都是底字。
+   * 以前只认 `[汉字]+`：`怒れる人(ラングラー)` 只注到 人、`HEART(ココロ)` 一个 token 都不出
+   * （整行没有汉字就被早退丢掉），括号里的官方读音全白写。
+   *
+   * 读音**照原样**显示：括号里写的是片假名就出片假名，不跟着面板的平假名设置走 ——
+   * 那是作词者标的读法（用户明确要求）。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 怒: "イカ", 人: "ヒト", 一度: "イチド", 嘲笑: "チョウショウ", 回: "カイ" }));
+  const pairs = (s, opts) => Array.from(W.WKFurigana.tokens(s, opts) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+
+  assert.deepStrictEqual(
+    pairs("怒れる人(ラングラー)"),
+    [["怒れる人", "ラングラー"], ["(ラングラー)", "HIDE"]],
+    "含送假名的底字整段算：" + JSON.stringify(pairs("怒れる人(ラングラー)"))
+  );
+  assert.deepStrictEqual(
+    pairs("HEART(ココロ)"),
+    [["HEART", "ココロ"], ["(ココロ)", "HIDE"]],
+    "西文底字也要认（这一行一个汉字都没有）：" + JSON.stringify(pairs("HEART(ココロ)"))
+  );
+  assert.deepStrictEqual(
+    pairs("イナイイナイ×点(ばってん)"),
+    [["×点", "ばってん"], ["(ばってん)", "HIDE"]],
+    "左边的假名是前一个词，不许圈进来：" + JSON.stringify(pairs("イナイイナイ×点(ばってん)"))
+  );
+  assert.deepStrictEqual(
+    pairs("一度嘲笑(わら)"),
+    [["嘲笑", "わら"], ["(わら)", "HIDE"]],
+    "纯汉字底字仍按拍数收窄：" + JSON.stringify(pairs("一度嘲笑(わら)"))
+  );
+  // 平假名写法在「全片假名」模式下也照原样（不跟着设置改）
+  assert.deepStrictEqual(
+    pairs("舞台(せかい)", { kana: "katakana" }),
+    [["舞台", "せかい"], ["(せかい)", "HIDE"]],
+    "括号里的平假名也不会被改成片假名：" + JSON.stringify(pairs("舞台(せかい)", { kana: "katakana" }))
+  );
 });
 
 test("留空压过模型 / 面板规则给的读音", () => {

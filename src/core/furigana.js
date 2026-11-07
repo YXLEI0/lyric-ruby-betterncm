@@ -243,6 +243,65 @@
     return segs;
   }
 
+  /*
+   * 括号读音（作词者写的 `漢字(かな)`）在行里的位置。
+   *
+   * 底字的字集照 UtaTen 标的范围来：汉字、假名、西文、数字、会唱的符号都算，
+   * 中间可以夹空格（`舞台 (セカイ)`）。
+   */
+  var RE_PAREN_BASE_CHAR =
+    /[\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF\u3041-\u3096\u30A1-\u30FA\u30FC\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5AA-Za-z\u00C0-\u024F\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/;
+  var RE_ONLY_KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC]$/;
+  var RE_PAREN_READING = /[（(][ \t\u3000]*([\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,24})[ \t\u3000]*[）)]/g;
+
+  /**
+   * 这一行里的括号读音：[{ start, end, base, kana, hideStart, hideEnd }]
+   *
+   * 只看括号自己 —— 括号里写的读法对左边的哪一段起作用，按上面的收窄规则定。
+   */
+  function parenReadings(s) {
+    var list = [];
+    if (!s || (s.indexOf("(") < 0 && s.indexOf("（") < 0)) return list;
+    RE_PAREN_READING.lastIndex = 0;
+    var m;
+    while ((m = RE_PAREN_READING.exec(s))) {
+      var pStart = m.index;
+      var pEnd = m.index + m[0].length;
+      // 括号前面可能有个空格（`舞台 (セカイ)`）：先跳过去，再往左收底字
+      var q = pStart;
+      while (q > 0 && /[ \t\u3000]/.test(s.charAt(q - 1))) q--;
+      var baseStop = q;
+      while (q > 0 && RE_PAREN_BASE_CHAR.test(s.charAt(q - 1))) q--;
+      if (q >= baseStop) continue;
+      var run = s.slice(q, baseStop);
+      /*
+       * 左边那些假名多半是前一个词（`イナイイナイ×点(ばってん)` 的 イナイイナイ）：
+       * 只有夹在汉字中间时才是这个词的送假名（`怒れる人(ラングラー)` 的 れる）。
+       * 削光了（纯假名底字，`ありがとう(センキュー)`）才退回整段。
+       */
+      var lead = 0;
+      while (lead < run.length && RE_ONLY_KANA.test(run.charAt(lead))) lead++;
+      var base = lead < run.length ? run.slice(lead) : run;
+      var unitStart = q + (run.length - base.length);
+      var kana = m[1].replace(/[・\s]/g, "");
+      if (!kana) continue;
+      /*
+       * 纯汉字 / 符号的底字按拍数收窄：`一度嘲笑(わら)` 只该注 嘲笑（vendor 会把
+       * 一度嘲笑 整串都注成 わら）。带假名 / 西文的底字不动 —— 那本来就是一段词
+       * （怒れる人、HEART 要是按拍数收窄就只剩 ART 了）。
+       */
+      if (!/[\u3041-\u3096\u30A1-\u30FA]/.test(base) && !/[A-Za-z\u00C0-\u024F\uFF21-\uFF3A\uFF41-\uFF5A]/.test(base)) {
+        var narrow = Math.min(base.length, kana.length);
+        if (narrow > 0 && narrow < base.length) {
+          unitStart += base.length - narrow;
+          base = base.slice(base.length - narrow);
+        }
+      }
+      list.push({ start: unitStart, end: baseStop, base: base, kana: kana, hideStart: baseStop, hideEnd: pEnd });
+    }
+    return list;
+  }
+
   /**
    * 一行歌词的注音片段。
    *
@@ -262,7 +321,10 @@
     // 只有数字的行也要注（kuromoji 不给阿拉伯数字读音，由 core/numbers.js 补）
     // 全角数字（１２３）同样算 —— 歌词里经常是全角的
     // 只有会唱的符号 / 叠字符的行也要进来：`〆` しめ、`∞` むげん、`×` 音译兜底
+    // 括号读音也算：`HEART(ココロ)` 里一个汉字都没有，可括号里写着读音（以前整行丢掉）
+    var inlineUnits = parenReadings(s);
     if (
+      !inlineUnits.length &&
       !d.core.hasKanji(s) &&
       !/[0-9\uFF10-\uFF19]/.test(s) &&
       !/[\u00D7\u00F7\u221E\u2605\u2606\u266A\u2661\u2665\u3006\u203B\u2211\u221A]/.test(s)
@@ -502,20 +564,25 @@
       bt.kana = toKanaMode(bareRule.kana, kana);
     }
     /*
-     * 作词者自己写的括号读音，**中间夹了空格 / 换行**的写法：`舞台 (セカイ)`。
+     * 作词者自己写的括号读音（`狂狂(くるくる)` / `怒れる人(ラングラー)` / `舞台 (セカイ)`）。
      *
-     * vendor 那条正则要求括号紧贴汉字，所以 `舞台 (セカイ)` 匹配不到 ——
-     * 结果 舞台 还是按词典读 ぶたい，括号里的官方读音被丢掉，
-     * 屏幕上还多出一截 "(セカイ)"（真机现象）。
-     * 这里补一遍宽松匹配，命中的读法当这一段的读音，括号那截照旧藏起来。
+     * 底字的范围照 UtaTen 那样取"括号前面那一整段"：汉字、假名、西文、数字、会唱的符号
+     * 都算。vendor 那条正则只认 `[汉字]+`，于是 `怒れる人(ラングラー)` 只注到 人、
+     * `HEART(ココロ)` 整行一条都不出（真机现象：括号读音被丢掉、括号还留在屏幕上）。
+     *
+     * 两条收窄规则（不改的都有反例）：
+     *   - 左边那些假名多半是**前一个词**（`イナイイナイ×点(ばってん)` 的 イナイイナイ）：
+     *     假名只有夹在汉字中间时才算进来（怒れる人 的 れる 是送假名）—— 从左边把假名削掉，
+     *     削光了才退回整段（`ありがとう(センキュー)` 这种纯假名底字）。
+     *   - 纯汉字 / 符号的底字按拍数收窄（`一度嘲笑(わら)` 只该注 嘲笑、`∞回(なんかい)`
+     *     两拍对两个字符正好整段）。
+     *
+     * 读音**照原样显示**（用户要求）：括号里写的是片假名就出片假名，不跟着面板的
+     * 平假名 / 片假名设置走 —— 那是作词者标的读法，改写法等于改人家的东西。
      */
-    var reParen = /([\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF]+)[ \t\u3000\n]*[（(][ \t\u3000]*([\u3041-\u3096\u30A1-\u30FA\u30FC]{1,12})[ \t\u3000]*[）)]/g;
-    var pm;
-    while ((pm = reParen.exec(s))) {
-      var pWord = pm[1];
-      var wAt = pm.index;
-      var wEnd = wAt + pWord.length;
-      var pEnd = pm.index + pm[0].length;
+    var inlineUnits = parenReadings(s);
+    for (var iu = 0; iu < inlineUnits.length; iu++) {
+      var unit = inlineUnits[iu];
       /*
        * 只有"用户就地改过的"（spans）能让括号读音让位。
        * 大模型 / 面板规则给的读音（fixed）要让位给括号 —— 真机现象：
@@ -524,75 +591,28 @@
        */
       var userFixed = false;
       for (var uq2 = 0; uq2 < spans.length; uq2++) {
-        if (spans[uq2].start < wEnd && wAt < spans[uq2].end) userFixed = true;
+        if (spans[uq2].start < unit.end && unit.start < spans[uq2].end) userFixed = true;
       }
       if (userFixed) continue;
       /*
-       * 左边的符号也算这个词的底字：∞回(なんかい) 里 ∞ 是符号、回 才是汉字，
-       * 但唱的是 なんかい —— 只给 回 注音会剩一个光秃秃的 ∞（用户报的就是这个）。
-       */
-      /*
-       * 括号读音只贴在**最后那个词**上，不是前面一整串汉字：
-       * `一度嘲笑(わら)` 该读 いちど + わら（vendor 会把 一度嘲笑 整串都注成 わら）。
-       * 判据：底字取最后 min(汉字数, 假名拍数) 个字 —— わら 两拍 → 嘲笑 两个字；
-       * セカイ 三拍 → 舞台 两个字（不足时取全部）。
-       */
-      var kanaLen = pm[2].length;
-      var narrow = Math.min(pWord.length, kanaLen);
-      if (narrow > 0 && narrow < pWord.length) {
-        var shift = pWord.length - narrow;
-        wAt += shift;
-        wEnd = wAt + narrow;
-        pWord = pWord.slice(shift);
-      }
-
-      var symStart = wAt;
-      while (symStart > 0 && /[\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/.test(s.charAt(symStart - 1))) symStart--;
-      // 紧贴着写的那种 vendor 已经处理过（它会给一个 hide 片段），别再插一遍
-      var vendorDone = false;
-      for (var vq = 0; vq < out.length; vq++) {
-        if (out[vq].hide && out[vq].start < pEnd && wEnd <= out[vq].end) {
-          vendorDone = true;
-          break;
-        }
-      }
-      if (vendorDone) {
-        /*
-         * 括号那段 vendor 已经藏好了。这里只把底字收窄 / 并符号：
-         * vendor 会把括号前面的**一整串**汉字都注成这个读音
-         * （`一度嘲笑(わら)` → 一度嘲笑 わら），收窄到最后那个词（嘲笑 わら）；
-         * 左边紧挨着符号时并进来（`∞回(なんかい)` → ∞回 なんかい）。
-         */
-        for (var ve = 0; ve < out.length; ve++) {
-          var tv = out[ve];
-          if (!tv || tv.hide) continue;
-          if (tv.end !== wEnd || tv.start > wAt) continue;
-          var startNew = wAt;
-          if (symStart < wAt) startNew = symStart;
-          tv.start = startNew;
-          tv.text = s.slice(startNew, wEnd);
-          break;
-        }
-        continue;
-      }
-      /*
-       * 覆盖掉词典给的那个读音（舞台 ぶたい）：作词者在括号里写的才是官方读法
-       * （这个案子是 セカイ）。
+       * 覆盖掉词典 / 模型 / vendor 给的那几条（舞台 ぶたい、狂 きょう）：
+       * 作词者在括号里写的才是官方读法。vendor 藏好的括号也一起摘掉 ——
+       * 这里会重新藏一遍（底字变宽了，藏着的那段也要跟着变）。
        */
       var kept = [];
       for (var kq = 0; kq < out.length; kq++) {
-        if (out[kq].start < wEnd && symStart < out[kq].end) continue;
+        if (out[kq].start < unit.hideEnd && unit.start < out[kq].end) continue;
         kept.push(out[kq]);
       }
       out = kept;
+      out.push({ text: unit.base, start: unit.start, end: unit.end, kana: unit.kana, kind: "inline" });
       out.push({
-        text: s.slice(symStart, wEnd),
-        start: symStart,
-        end: wEnd,
-        kana: toKanaMode(pm[2], kana),
-        kind: "inline",
+        text: s.slice(unit.hideStart, unit.hideEnd),
+        start: unit.hideStart,
+        end: unit.hideEnd,
+        hide: true,
+        kind: "hide",
       });
-      out.push({ text: s.substr(wEnd, pEnd - wEnd), start: wEnd, end: pEnd, hide: true, kind: "hide" });
     }
     /*
      * 符号读音：歌词里会直接唱出来的那几个（∞ むげん、〆 しめ）。

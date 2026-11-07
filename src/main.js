@@ -3401,8 +3401,32 @@
    * 它自己最好的语境，多给的只有噪音 —— 所以整首行列表 / 前后句那套都删了。
    */
 
+  /*
+   * 「这一行该用哪些修正」的缓存。
+   *
+   * furiganaFixes 会被**每个文本节点**问一次（逐字歌词一行十几个节点、每轮扫描都问），
+   * 而它里面要解析一遍规则文本、还要把这一段拿去问模型的候选读音 —— 同一个节点
+   * 每 40ms 重算一遍纯属浪费。键是"整行 + 这一段"，只在同一轮 pass 内有效
+   * （fixesPassGen 每轮 +1），所以模型答案回来、规则改了，下一轮就是新的。
+   */
+  var fixesPassGen = 0;
+  var fixesCache = { gen: -1, map: new Map() };
+
   /** 这一行该用哪些修正：手填规则（按作用范围匹配） + 模型给过的（按 词+这句 缓存） */
   function furiganaFixes(line, text, host) {
+    var cacheKey = line + "\u0001" + text;
+    if (fixesCache.gen !== fixesPassGen) {
+      fixesCache.gen = fixesPassGen;
+      fixesCache.map.clear();
+    }
+    if (fixesCache.map.has(cacheKey)) return fixesCache.map.get(cacheKey);
+    var computed = furiganaFixesUncached(line, text, host);
+    if (fixesCache.map.size > 4000) fixesCache.map.clear();
+    fixesCache.map.set(cacheKey, computed);
+    return computed;
+  }
+
+  function furiganaFixesUncached(line, text, host) {
     var fixes = {};
     /*
      * 最高优先级：用户在歌词界面里就地改的（双击注音改的那份）。
@@ -3465,8 +3489,26 @@
     return fixes;
   }
 
+  /*
+   * 音译行也按"宿主"缓存一轮 pass 的结果：逐字歌词里同一行的十几个节点
+   * 都要往上爬三层找一次 `-romaji` 兄弟节点，纯属重复劳动。
+   */
+  var romajiCache = { gen: -1, map: new WeakMap() };
+
   /** 同一条歌词的音译层（RNP / NCM 都可能把罗马音放在兄弟节点里） */
   function romajiOf(host) {
+    if (!host || typeof host !== "object") return "";
+    if (romajiCache.gen !== fixesPassGen) {
+      romajiCache.gen = fixesPassGen;
+      romajiCache.map = new WeakMap();
+    }
+    if (romajiCache.map.has(host)) return romajiCache.map.get(host);
+    var got = romajiOfUncached(host);
+    romajiCache.map.set(host, got);
+    return got;
+  }
+
+  function romajiOfUncached(host) {
     var box = host && host.parentNode;
     /*
      * 三级：逐字层是 `line > karaoke > word > span`，音译是 `line > -romaji`，
@@ -3495,7 +3537,6 @@
    * 跨域 fetch 也会被 CORS 拦住）。
    */
   var EXTERNAL_CACHE_KEY = "lyric-ruby.external.v1";
-  var EXTERNAL_CACHE_MAX = 8;
   var externalState = { key: null, index: null, status: "", loading: false, url: "", skipFile: false };
 
   function externalEnabled() {
@@ -3647,32 +3688,96 @@
     return String(id.title || "") + "\u0000" + (id.artists || []).join("/");
   }
 
-  function externalCacheAll() {
+  /*
+   * 早期版本把整首网站歌词存在 localStorage 的 `lyric-ruby.external.v1` 里（最多 8 首）。
+   * 现在读音一律按"每首歌一个 JSON 文件"缓存在 lyrics/jp-furigana 下，那份短缓存没用了 ——
+   * 只在启动时清一次（用户要求把这些没用上的旧缓存清干净）。
+   */
+  var LEGACY_CACHE_PURGE_FLAG = "lyric-ruby.cache.purge1";
+
+  /**
+   * 清掉早期版本留下的外部读音缓存（用户要求）。
+   *
+   *   ① localStorage 的 `lyric-ruby.external.v1`：文件缓存之前用的短缓存，整首歌词
+   *      塞在 localStorage 里，现在只读 ② 的那些文件；
+   *   ② `<数据目录>/lyrics/lyric-ruby/`：老目录。里面有的歌新目录里还没有，
+   *      所以先搬到 `lyrics/jp-furigana/` 再删，搬不动就留着（下次再试）。
+   *
+   * 只碰 `*.json`，别的文件一概不动。
+   */
+  function purgeLegacyCache() {
+    var result = { ls: false, moved: 0, removed: 0 };
     try {
-      var raw = localStorage.getItem(EXTERNAL_CACHE_KEY);
-      var obj = raw ? JSON.parse(raw) : {};
-      return obj && typeof obj === "object" ? obj : {};
+      if (typeof localStorage !== "undefined" && localStorage.getItem(EXTERNAL_CACHE_KEY)) {
+        localStorage.removeItem(EXTERNAL_CACHE_KEY);
+        result.ls = true;
+      }
     } catch (e) {
-      return {};
+      /* localStorage 不可用就算了 */
     }
+    var fs0 = fsApi();
+    var legacy = legacyCacheDir();
+    if (!fs0 || !legacy || typeof fs0.readDir !== "function") return Promise.resolve(result);
+    return Promise.resolve(fs0.readDir(legacy)).then(
+      function (names) {
+        var jobs = [];
+        for (var i = 0; i < (names || []).length; i++) {
+          var n = String(names[i]).replace(/^.*[\\/]/, "");
+          if (!/^\d+\.json$/.test(n)) continue;
+          jobs.push(migrateLegacyFile(n.replace(/\.json$/, ""), legacy, result));
+        }
+        return Promise.all(jobs).then(function () {
+          return result;
+        });
+      },
+      function () {
+        return result; // 老目录不存在（多数机器都是这样）
+      }
+    );
   }
 
-  function externalCacheSave(all) {
-    try {
-      var keys = Object.keys(all);
-      keys.sort(function (a, b) {
-        return (all[b].at || 0) - (all[a].at || 0);
-      });
-      for (var i = EXTERNAL_CACHE_MAX; i < keys.length; i++) delete all[keys[i]];
-      localStorage.setItem(EXTERNAL_CACHE_KEY, JSON.stringify(all));
-    } catch (e) {
-      /* 存不下就只本次会话用 */
-    }
+  /** 老目录里的单个文件：能读就写进新目录，然后删掉老文件 */
+  function migrateLegacyFile(id, legacyDir, result) {
+    var from = legacyDir + "/" + String(id) + ".json";
+    return readSongFile(id)
+      .then(function (rec) {
+        if (!rec) return false;
+        return writeSongFile(id, rec).then(function () {
+          result.moved++;
+          return true;
+        });
+      })
+      .then(function () {
+        return fsRemove(from).then(
+          function () {
+            result.removed++;
+          },
+          function () {}
+        );
+      })
+      .then(
+        function () {},
+        function () {}
+      );
   }
 
-  function externalCacheGet(key) {
-    var rec = externalCacheAll()[key];
-    return rec && rec.lines && rec.lines.length ? rec : null;
+  /** 启动时清一次（带标记，避免每次启动都扫目录） */
+  function purgeLegacyCacheOnce() {
+    try {
+      if (typeof localStorage === "undefined") return;
+      if (localStorage.getItem(LEGACY_CACHE_PURGE_FLAG)) return;
+      localStorage.setItem(LEGACY_CACHE_PURGE_FLAG, "1");
+    } catch (e) {
+      return;
+    }
+    purgeLegacyCache().then(function (r) {
+      if (r.moved || r.removed || r.ls) {
+        log(
+          "清掉旧版外部读音缓存：本地存储 " + (r.ls ? "1 份" : "无") +
+            "、老目录搬过来 " + r.moved + " 首、删除 " + r.removed + " 个文件"
+        );
+      }
+    });
   }
 
   function refreshExternalUI() {
@@ -3964,21 +4069,31 @@
     return null;
   }
 
+  /*
+   * 文件接口：**一律包成 Promise.reject**。
+   * 有些环境的 fs 是同步抛异常的（同步实现 / 权限错误），直接 return Promise.resolve(fn())
+   * 会把异常抛到调用栈上 —— 注音那一趟里"读缓存失败"就变成整轮扫描崩掉
+   * （真机轨迹：扫描异常 ENOENT，后面整首歌不注音）。
+   */
   function fsReadText(path) {
     var fs0 = fsApi();
     if (!fs0) return Promise.reject(new Error("没有文件接口"));
-    if (typeof fs0.readFileText === "function") return Promise.resolve(fs0.readFileText(path));
-    if (typeof fs0.readFile === "function") {
-      return Promise.resolve(fs0.readFile(path)).then(function (data) {
-        if (typeof data === "string") return data;
-        if (data && typeof data.text === "function") return data.text();
-        if (data && typeof data.arrayBuffer === "function") {
-          return data.arrayBuffer().then(function (ab) {
-            return new TextDecoder("utf-8").decode(ab);
-          });
-        }
-        return String(data || "");
-      });
+    try {
+      if (typeof fs0.readFileText === "function") return Promise.resolve(fs0.readFileText(path));
+      if (typeof fs0.readFile === "function") {
+        return Promise.resolve(fs0.readFile(path)).then(function (data) {
+          if (typeof data === "string") return data;
+          if (data && typeof data.text === "function") return data.text();
+          if (data && typeof data.arrayBuffer === "function") {
+            return data.arrayBuffer().then(function (ab) {
+              return new TextDecoder("utf-8").decode(ab);
+            });
+          }
+          return String(data || "");
+        });
+      }
+    } catch (e) {
+      return Promise.reject(e);
     }
     return Promise.reject(new Error("没有读文件的接口"));
   }
@@ -3986,8 +4101,12 @@
   function fsWriteText(path, text) {
     var fs0 = fsApi();
     if (!fs0) return Promise.reject(new Error("没有文件接口"));
-    if (typeof fs0.writeFileText === "function") return Promise.resolve(fs0.writeFileText(path, text));
-    if (typeof fs0.writeFile === "function") return Promise.resolve(fs0.writeFile(path, text));
+    try {
+      if (typeof fs0.writeFileText === "function") return Promise.resolve(fs0.writeFileText(path, text));
+      if (typeof fs0.writeFile === "function") return Promise.resolve(fs0.writeFile(path, text));
+    } catch (e) {
+      return Promise.reject(e);
+    }
     return Promise.reject(new Error("没有写文件的接口"));
   }
 
@@ -4144,15 +4263,6 @@
     job.then(
       function (rec) {
         externalState.loading = false;
-        var all = externalCacheAll();
-        all[key] = {
-          at: Date.now(),
-          title: rec.title || title,
-          artists: rec.artists || artists,
-          url: rec.url || manual || "",
-          lines: rec.lines || [],
-        };
-        externalCacheSave(all);
         if (manual) rec.manualSource = { provider: "utaten", url: manual };
         if (id) {
           writeSongFile(id, rec).then(function (ok) {
@@ -4202,13 +4312,9 @@
     }
     // 这首已经试过了（成功 / 失败 / 正在请求）就不再自动重来；失败要用户点「重新获取本首」
     if (externalState.key === key) return;
-    var rec = externalCacheGet(key);
-    if (rec) {
-      if (applyExternalRecord(rec, key, "本地缓存")) return;
-    }
     /*
-     * 先看磁盘上那首歌的 JSON（换一次播放器 / 清过 localStorage 也还在）。
-     * 读文件是异步的：先把 key 占住，读不到再走搜索，避免同一轮里重复发起。
+     * 先从磁盘读那首歌的 JSON（换一次播放器 / 清过浏览器缓存也还在）。
+     * localStorage 那份早期短缓存已经废弃（见 purgeLegacyCache）。
      */
     if (id.id) {
       if (externalState.skipFile) {
@@ -4230,10 +4336,31 @@
     loadExternalSong(key, id.id, id.title, id.artists || []);
   }
 
+  /*
+   * 前缀 / 去括号的对齐结果按"索引对象"缓存：逐字歌词里一行有十几个节点，
+   * 每个节点都会问一遍 —— 对齐要折空白、去括号、必要时还得扫一遍整首索引。
+   * 用 WeakMap 挂在索引对象上，换歌 / 重新获取时索引一换，缓存自然作废。
+   */
+  var externalLineCache = new WeakMap();
+
   /** 外部网站这一行匹配到的读音 token（对不上返回 null） */
   function externalTokensFor(line) {
     if (!externalEnabled() || !externalState.index) return null;
     if (typeof WKExternal === "undefined") return null;
+    var cache = externalLineCache.get(externalState.index);
+    if (!cache) {
+      cache = new Map();
+      externalLineCache.set(externalState.index, cache);
+    }
+    var key = String(line == null ? "" : line);
+    if (cache.has(key)) return cache.get(key);
+    var got = externalTokensForUncached(key);
+    if (cache.size > 2000) cache.clear();
+    cache.set(key, got);
+    return got;
+  }
+
+  function externalTokensForUncached(line) {
     try {
       /*
        * 两家给的读音形式不一样：
@@ -4346,8 +4473,12 @@
     }
     /*
      * 逐字歌词：一行被拆成"一个字一个节点"，这个节点的起点是 offset。
-     * 按整行分词，再把**词的第一个字**对回这个节点 —— 只注一次，读音是整词的
-     * （物語 ものがたり，而不是 物 モノ + 語 ゴ）。
+     * 按整行分词，再把词对回这个节点。
+     *
+     * 一个词跨好几个节点（`物語`、`狂狂`、括号读音 `怒れる人(ラングラー)`）时，
+     * 读音要**按字数摊到各个节点上**，不能整段挂在第一个字上：以前只认"起点落在
+     * 这个节点里"的词，第二个字就落不到任何词、往下走单字兜底，于是 `狂狂(くるくる)`
+     * 显示成 くるくる + きょう（真机现象：读音挤在左边、后半截按单字读）。
      */
     if (typeof offset === "number" && line && line.length > s.length) {
       var whole = WKFurigana.tokens(line, {
@@ -4358,43 +4489,64 @@
       });
       whole = mergeExternalTokens(line, whole || []);
       if (!whole.length) return null;
+      /*
+       * 逐字层（RNP）每个字后面跟的那个空格是排版用的，行文本里已经去掉了 ——
+       * 节点自己的文字里还留着，所以切片时要跳过它，底字别把空格圈进 ruby
+       * （否则 rt 会往右偏、那一格还会被撑宽）。
+       */
+      var lead = 0;
+      while (lead < s.length && /[\s\u3000]/.test(s.charAt(lead))) lead++;
+      var tail = s.length;
+      while (tail > lead && /[\s\u3000]/.test(s.charAt(tail - 1))) tail--;
+      var nodeStart = offset + lead; // 这个节点的正文在整行里的区间
+      var nodeEnd = offset + tail;
       var mine = [];
+      var unitCovered = false; // 这个字被一个跨字的读音单元吃掉了（但它分不到读音）
       for (var i = 0; i < whole.length; i++) {
         var tk = whole[i];
+        var a = Math.max(tk.start, nodeStart);
+        var b = Math.min(tk.end, nodeEnd);
+        if (b <= a) continue; // 和这个节点不相交
         /*
-         * 逐字层一个字一个文本节点，而"藏起来的括号读音"是一整段（`（シメ）`）——
-         * 只认"起点落在这个节点里"的话，只有第一个括号会被藏，剩下几个字照旧露在屏幕上
-         * （真机现象：`〆（シメ）` 的括号一直没合并）。跨进来的隐藏段也要落到每个字上。
-         */
-        var cross = !!tk.hide && tk.start < offset && offset < tk.end;
-        if (!cross && (tk.start < offset || tk.start >= offset + s.length)) continue; // 只认"起点落在这个节点里"的词
-        var localStart = cross ? 0 : tk.start - offset;
-        /*
-         * 逐字层（RNP）每个字后面跟的那个空格是排版用的，行文本里已经去掉了 ——
-         * 节点自己的文字里还留着，所以切片时要跳过它，底字别把空格圈进 ruby
-         * （否则 rt 会往右偏、那一格还会被撑宽）。
-         */
-        var lead = 0;
-        while (lead < s.length && /[\s\u3000]/.test(s.charAt(lead))) lead++;
-        localStart += lead;
-        // 跨进来的隐藏段按它在 token 里的下标核对；正常起点落在这个节点的还是比第 0 个字
-        var tkAt = cross ? offset + localStart - tk.start : 0;
-        var localEnd = cross ? s.length : Math.min(localStart + (tk.end - tk.start), s.length);
-        var piece = s.slice(localStart, localEnd);
-        if (piece && /[\s\u3000]$/.test(piece) && !/[\s\u3000]$/.test(tk.text)) {
-          piece = piece.replace(/[\s\u3000]+$/, "");
-          localEnd = localStart + piece.length;
-        }
-        if (!piece) continue;
-        /*
-         * 对齐校验：这个词的第一个字必须正好是这个节点里的这个字。
+         * 对齐校验：这一段文字必须和词里对应位置的文字一模一样。
          * 节点偏移量在"注音完一遍之后"可能因为空文本节点/我们插的节点算歪一格，
          * 歪了就会把 帳 注成 帷 的读音（とばり）。对不上就宁可不注。
          */
-        if (piece.charAt(0) !== tk.text.charAt(tkAt)) continue;
-        mine.push({ text: piece, start: localStart, end: localEnd, kana: tk.kana, kind: tk.kind, hide: tk.hide });
+        if (s.charAt(a - offset) !== tk.text.charAt(a - tk.start)) continue;
+        var piece = s.slice(a - offset, b - offset);
+        if (!piece) continue;
+        /*
+         * 分给这个节点的读音：按字数的比例切。拍数够分（假名不短于底字）时
+         * 逐字摊开（狂狂 くるくる → くる + くる），不够分就整段挂在第一个字上，
+         * 其余的字算"已被这个单元吃掉"、不再去走单字兜底（否则又冒出第二个读音）。
+         */
+        var baseLen = tk.end - tk.start;
+        var share = "";
+        if (!tk.hide && tk.kana) {
+          if (baseLen <= tk.kana.length) {
+            var kFrom = Math.floor(((a - tk.start) * tk.kana.length) / baseLen);
+            var kTo = Math.floor(((b - tk.start) * tk.kana.length) / baseLen);
+            if (kTo <= kFrom) kTo = Math.min(tk.kana.length, kFrom + 1);
+            share = tk.kana.slice(kFrom, kTo);
+          } else if (a === tk.start) {
+            share = tk.kana;
+          } else {
+            unitCovered = true;
+            continue;
+          }
+        }
+        if (!tk.hide && !share) continue;
+        mine.push({
+          text: piece,
+          start: a - offset,
+          end: b - offset,
+          kana: share,
+          kind: tk.kind,
+          hide: tk.hide,
+        });
       }
       if (mine.length) return mine;
+      if (unitCovered) return null;
       /* 整行一条都没落下来 -> 往下走"只按这个节点自己的文字"那条兜底 */
     }
     /*
@@ -4754,6 +4906,8 @@
      * 只在这一处加一，这样一轮 pass 里几百个节点共用同一个结论。
      */
     songLangGen++;
+    // 同理："这一行该用哪些修正"也每轮重算一次（见 furiganaFixes 的缓存）
+    fixesPassGen++;
     if (emergencyOff()) {
       warn("检测到紧急开关，停用插件");
       disable();
@@ -5510,7 +5664,9 @@
       '<div class="wk-row"><label>缓存目录 <input type="text" data-k="externalCacheDir" placeholder="留空 = BetterNCM 数据目录/lyrics/jp-furigana"></label></div>' +
       '<div class="wk-hint">每首歌一个 <code>&lt;歌曲ID&gt;.json</code>，格式与 <b>jp-furigana</b> 一致（两个插件可共用同一份缓存）；' +
       "放在插件目录之外，更新插件不会丢；缓存命中不联网。</div>" +
-      '<div class="wk-row"><button data-a="cacheRefresh">刷新列表</button> <span data-v="cacheInfo"></span></div>' +
+      '<div class="wk-row"><button data-a="cacheRefresh">刷新列表</button> <button data-a="cachePurge">清理旧缓存</button> <span data-v="cacheInfo"></span></div>' +
+      '<div class="wk-hint">「清理旧缓存」= 删掉早期版本留下的旧目录 <code>lyrics/lyric-ruby</code> ' +
+      "（里面的歌先搬进上面的目录）和 localStorage 里那份整首短缓存；现在的 <code>&lt;歌曲ID&gt;.json</code> 不动。</div>" +
       '<div class="wk-cache-list" data-v="cacheList"></div>' +
       "<h3>接口</h3>" +
       '<div class="wk-row"><label>接口地址 <input type="text" data-k="llmEndpoint"></label></div>' +
@@ -6118,11 +6274,6 @@
           } else if (what === "extRetry") {
             var extId = externalIdentity();
             var extKey = externalKeyOf(extId);
-            var cacheAll = externalCacheAll();
-            if (extKey && Object.prototype.hasOwnProperty.call(cacheAll, extKey)) {
-              delete cacheAll[extKey];
-              externalCacheSave(cacheAll);
-            }
             externalState.key = null;
             externalState.index = null;
             externalState.loading = false;
@@ -6166,6 +6317,22 @@
             }, 1500);
           } else if (what === "cacheRefresh") {
             refreshCacheList();
+          } else if (what === "cachePurge") {
+            // 只清"早期版本留下的"（老目录 + localStorage 短缓存），现在的 JSON 不动
+            var okPurge = false;
+            try {
+              okPurge = window.confirm("清理早期版本留下的外部读音缓存？\n\n会删掉：\n· 老目录 lyrics/lyric-ruby（里面的歌先搬进现在的目录）\n· localStorage 里那份整首短缓存\n\n现在的 <歌曲ID>.json 不受影响。");
+            } catch (ePurgeConfirm) {
+              okPurge = false;
+            }
+            if (okPurge) {
+              purgeLegacyCache().then(function (r) {
+                if (cacheInfoEl) {
+                  cacheInfoEl.textContent = "已清理：搬过来 " + r.moved + " 首，删掉 " + r.removed + " 个文件" + (r.ls ? "，短缓存 1 份" : "");
+                }
+                refreshCacheList();
+              });
+            }
           } else if (what === "dictRetry") {
             if (typeof WKFurigana !== "undefined" && WKFurigana.retry) {
               WKFurigana.retry();
@@ -6585,6 +6752,7 @@
     purgeStaleInlineFixes();
     migrateLineFixes();
     repairParenSpans();
+    purgeLegacyCacheOnce();
     installInlineEditor();
 
     state.annotator = WKAnnotate.createAnnotator({
@@ -6747,11 +6915,6 @@
           retry: function () {
             var extId = externalIdentity();
             var extKey = externalKeyOf(extId);
-            var cacheAll = externalCacheAll();
-            if (extKey && Object.prototype.hasOwnProperty.call(cacheAll, extKey)) {
-              delete cacheAll[extKey];
-              externalCacheSave(cacheAll);
-            }
             externalState.key = null;
             externalState.index = null;
             externalState.loading = false;

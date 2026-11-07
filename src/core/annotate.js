@@ -2474,11 +2474,13 @@ function buildRuby(base, gloss, provisional, source) {
          * 太短的节点一般跳过（"连一个可读词都没有"）。
          * 但逐字歌词把每个字拆成独立文本节点：单个汉字 / 假名 / 谚文也是有效的注音单位，
          * 不能因为长度 1 就丢掉 —— 否则逐字模式下只有"空格前那一个字"能被注音。
+         * 括号也算：逐字层里 `)` 常常是行尾那一格（前面没有排版空格、长度正好 1），
+         * 挡掉它的话括号读音就藏不干净（`狂狂(くるくる)` 的 `)` 一直露在屏幕上）。
          */
         if (
           text.length < 2 &&
           !matcher.hasReadable(text) &&
-          !/[\u3041-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3\uFF10-\uFF19]/.test(text)
+          !/[\u3041-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3\uFF10-\uFF19\uFF08\uFF09()]/.test(text)
         ) {
           continue;
         }
