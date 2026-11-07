@@ -1971,71 +1971,9 @@ test("暂定标记不会卡住：大模型失败后那一行立刻恢复成确�
   assert.strictEqual(p.querySelectorAll("ruby.wk-ruby.wk-pending").length, 0, "重扫也不许再淡");
 });
 
-test("按来源着色：类名一直在，颜色只由开关决定（开了立刻生效，不用重扫）", async () => {
-  const env = bootPlugin(NCM_HTML, { dev: true });
-  await env.runLoad();
-  await sleep(200);
-  const p = env.document.querySelector("ul.lyric li p");
-  assert.ok(p.querySelector("ruby.wk-src-dict"), "词典给的词要带 wk-src-dict：" + p.innerHTML);
-
-  const styleText = () => env.document.getElementById("lyric-ruby-style").textContent;
-  assert.strictEqual(env.api.colorize(), false, "默认不开");
-  assert.strictEqual(styleText().indexOf("wk-src-dict"), -1, "没开的时候一条颜色规则都不注入");
-
-  assert.strictEqual(env.api.colorize(true), true);
-  const css = styleText();
-  for (const src of ["dict", "letters", "romaji", "rule", "llm", "google"]) {
-    assert.ok(css.indexOf("wk-src-" + src) >= 0, "开了之后要有 " + src + " 的颜色规则");
-  }
-  assert.ok(css.indexOf("#46d17e") >= 0, "词典是绿色");
-
-  assert.strictEqual(env.api.colorize(false), false);
-  assert.strictEqual(styleText().indexOf("wk-src-dict"), -1, "关掉就撤掉颜色规则");
-  // 但类名还在（下次开开关不用重扫）
-  assert.ok(p.querySelector("ruby.wk-src-dict"), "类名不该跟着开关消失");
-});
-
-test("按来源着色：大模型换过的词，颜色跟着来源一起变", async () => {
-  const env = bootPlugin(LLM_HTML, {
-    config: {
-      llmEnabled: true,
-      llmKey: "sk-test",
-      llmEndpoint: "https://api.example.com/v1/chat/completions",
-      colorBySource: true,
-    },
-    fetch: function (url, init) {
-      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
-      const body = JSON.parse(init.body);
-      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
-      const out = {};
-      items.forEach((it, i) => {
-        out[String(i + 1)] = "カレイドスコープ";
-      });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
-      });
-    },
-  });
-  await env.runLoad();
-  await sleep(1400);
-
-  const p = env.document.querySelector("ul.lyric li p");
-  const rubies = [...p.querySelectorAll("ruby.wk-ruby")];
-  const light = rubies.find((r) => r.childNodes[0].nodeValue === "light");
-  const kaleido = rubies.find((r) => r.childNodes[0].nodeValue === "kaleidoscope");
-  assert.ok(light.classList.contains("wk-src-dict"), "词典命中的词是词典色：" + light.className);
-  assert.ok(
-    kaleido.classList.contains("wk-src-llm"),
-    "被大模型换过的词要变成大模型色（wk-src-llm），类名不能再留着 wk-src-rule：" + kaleido.className
-  );
-  assert.strictEqual(kaleido.className.indexOf("wk-src-rule"), -1, "旧来源的类名要换掉");
-});
-
 test("注音不透明度真的生效（老版本被一条 !important 压掉了）", () => {
   const ctx = loadCore(NCM_HTML);
-  ctx.WKAnnotate.applyStyles(ctx.document, { rtSize: 55, rtOpacity: 40, colorBySource: false });
+  ctx.WKAnnotate.applyStyles(ctx.document, { rtSize: 55, rtOpacity: 40 });
   const css = ctx.document.getElementById("lyric-ruby-style").textContent;
   assert.ok(/rt\.wk-rt,\s*\.wk-rt\s*\{\s*opacity:\s*0\.4\s*!important/.test(css), "注音按设置里的 40%：" + css);
   assert.ok(
@@ -2250,9 +2188,6 @@ test("层序：面板不让把「英文音译规则」换到词典/罗马音前�
   const warn = root.querySelector(".wk-layer-warn");
   assert.ok(warn, "要有挡路提醒：" + root.querySelector(".wk-layers").textContent);
   assert.ok(warn.textContent.indexOf("离线词典") >= 0 && warn.textContent.indexOf("永远用不上") >= 0, "要说清后果：" + warn.textContent);
-  // 而且大模型那块的告警要排在第一位（先修层序，再看别的）
-  const state = root.querySelector(".wk-llm-state").textContent;
-  assert.ok(state.indexOf("英文音译规则") >= 0, "大模型状态区也要提这件事：" + state);
 });
 
 test("设置面板：有「重试没结果的词」按钮，点了不会炸", async () => {
@@ -2264,32 +2199,6 @@ test("设置面板：有「重试没结果的词」按钮，点了不会炸", as
   assert.ok(btn.textContent.indexOf("没结果") >= 0, "文案要说清它重试的是哪些：" + btn.textContent);
   btn.dispatchEvent(new env.window.Event("click"));
   assert.ok(btn.textContent.indexOf("已重新排队") >= 0, "点完要给出结果：" + btn.textContent);
-});
-
-test("设置面板：模型层停摆时给出大白话告警 + 「立刻重试」（不用开 dev 也能看到）", async () => {
-  // 「第四首歌时读音全都没矫正」：接口抖一下进了退避，本地读音照旧、
-  // 模型一条都没改，面板上却什么都不说 —— 看着就像插件坏了。
-  const env = bootPlugin(LLM_HTML, {
-    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions", online: false },
-    fetch: function () {
-      return Promise.reject(new Error("offline (test)"));
-    },
-  });
-  await env.runLoad();
-  await sleep(1600); // 攒批窗口 + 失败
-
-  const root = env.listeners.config[0]();
-  const box = root.querySelector(".wk-llm-state");
-  assert.ok(box, "要有模型层状态区");
-  const text = box.textContent;
-  assert.ok(/退避|没成功/.test(text), "要说清现在为什么不矫正：" + text);
-  assert.ok(text.indexOf("不会矫正") >= 0, "要说清后果：" + text);
-
-  const btn = [...box.querySelectorAll("[data-a]")].find((b) => b.dataset.a === "llmRetryNow");
-  assert.ok(btn, "要有「立刻重试」按钮：" + box.innerHTML);
-  assert.ok(env.api.llm.stats().cooldownMs > 0, "前提：确实在退避中");
-  btn.dispatchEvent(new env.window.Event("click"));
-  assert.strictEqual(env.api.llm.stats().cooldownMs, 0, "点了之后退避要清掉");
 });
 
 test("罗马音节行：短音节按罗马音读（PI→ピ / ME→メ），普通英文行不受影响", async () => {
@@ -5120,6 +5029,33 @@ test("设置面板：罗马音排在词典前面时给出提醒（它会把英�
   );
 });
 
+test("设置面板：读音来源切到外部网站要先同意条款，取消保持词典", async () => {
+  const env = bootPlugin(NCM_HTML, { config: { online: false, llmEnabled: false } });
+  await env.runLoad();
+  const root = env.listeners.config[0]();
+  const sel = root.querySelector("[data-src]");
+  assert.ok(sel, "要有读音来源选择");
+  assert.strictEqual(sel.value, "dict", "默认是词典");
+
+  env.window.confirm = function () {
+    return false;
+  };
+  sel.value = "external";
+  sel.dispatchEvent(new env.window.Event("change"));
+  assert.strictEqual(env.api.config.externalUtaten, false, "取消就不开");
+  assert.strictEqual(sel.value, "dict", "选择框退回词典");
+
+  env.window.confirm = function () {
+    return true;
+  };
+  sel.value = "external";
+  sel.dispatchEvent(new env.window.Event("change"));
+  assert.strictEqual(env.api.config.externalUtaten, true, "确认后才开");
+  assert.strictEqual(env.api.config.externalConsent, true, "同意要记住");
+  assert.ok(root.querySelector("[data-manual]"), "要有手动指定歌词页");
+  assert.ok(root.querySelector('[data-a="extOpen"]'), "要有查看来源网页");
+});
+
 test("设置面板：默认只有三块（开关 / 大模型 / 预览），其余收进「高级设置」", async () => {
   // 面板这些轮下来加了太多东西（外观/范围/层序/用量/排障/操作），需要简化。
   // 现在默认只留最常用的，其余折进一个 details。
@@ -5143,7 +5079,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="llmKey"]',
     '[data-k="annotateLatinJa"]',
     '[data-a="llmTest"]',
-    ".wk-llm-state",
+    ".wk-source",
     ".wk-preview",
   ];
   for (const sel of outside) {
@@ -5164,8 +5100,6 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
     '[data-k="annotateAll"]',
     '[data-k="annotateNonJapanese"]',
     '[data-k="online"]',
-    '[data-k="externalUtaten"]',
-    '[data-k="colorBySource"]',
     '[data-a="learnClear"]',
     ".wk-layers",
     ".wk-usage",
@@ -5180,7 +5114,7 @@ test("设置面板：默认只有三块（开关 / 大模型 / 预览），其�
   const titles = [...adv.querySelectorAll("h3")].map((h) => h.textContent);
   assert.deepStrictEqual(
     titles,
-    ["外观", "自定义读音", "外部网站读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
+    ["外观", "自定义读音", "范围", "接口", "读音来源顺序", "API 用量", "操作"],
     "高级里的分组：" + titles.join(" / ")
   );
 });
