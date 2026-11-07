@@ -860,9 +860,23 @@
           }
           // 和 originalTextOf 同一套规矩：区域直接的空白文本不占位置
           if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
-          node.__wkOffset = at;
-          node.__wkLineText = lineText;
-          at += karaokeTextOf(node).length;
+          var piece = karaokeTextOf(node);
+          /*
+           * 偏移不要靠"一路累加"算：RNP 的逐字模式会在字与字之间塞空格，而空格
+           * 是否算进 lineText 两边不一定一致 —— 累加一位，后面每个字的读音就整体
+           * 错一位（真机现象：`共` 顶 な、`鳴` 顶 きょう）。
+           * 改成"在这一行里从上一个位置起找这个字"，找到就以它为准，空格自然跳过。
+           */
+          if (piece) {
+            var found = lineText.indexOf(piece, at);
+            if (found >= 0) at = found;
+            node.__wkOffset = at;
+            node.__wkLineText = lineText;
+            at += piece.length;
+          } else {
+            node.__wkOffset = at;
+            node.__wkLineText = lineText;
+          }
         }
       }
     }
