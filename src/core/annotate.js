@@ -665,6 +665,14 @@
          * class 消失，MutationObserver 会叫我们重扫，注音自己回来。
          */
         "|rnp-lyrics-overview-container|overview-mode-hide" +
+        /*
+         * RNP 的逐字动画 `slide` 会**再渲染一份同样的字**：每个词格是
+         *   div.rnp-karaoke-word > span(原字) + span.rnp-karaoke-word-filler(动画用的替身)
+         * 替身是绝对定位叠在原字上的，正常情况下 opacity:0、唱到那句时再亮起来。
+         * 它不是歌词 —— 收进"行原文"的话整行每个字都会出现两遍，
+         * 分词 / 偏移全歪（真机现象：唱到哪一句，那一句的注音就整体错位）。
+         */
+        "|rnp-karaoke-word-filler" +
         "|(^|[\\s_-])(?:romaji|romanized|translated|translation|trans|transLine|transText)([\\s_-]|$)" +
         "|lyricSubLine|lyricSubText|lyricTrans",
       "i"
@@ -852,6 +860,19 @@
         var node;
         while ((node = walker.nextNode())) {
           var p = node.parentNode;
+          /*
+           * 要跳过的那几层和 originalTextOf 用同一套判据，否则"行原文"（跳过罗马音 /
+           * 翻译 / 逐字替身）和这里累加出来的位置对不上 —— 位置错一格，整行读音就落到
+           * 隔壁字上。
+           */
+          var skipped = false;
+          for (var up = p; up && up !== region && up.nodeType === 1; up = up.parentNode) {
+            if (isSkippedRegion(up)) {
+              skipped = true;
+              break;
+            }
+          }
+          if (skipped) continue;
           if (p && p.nodeType === 1) {
             if (p.tagName === "RT" || p.tagName === "RP") continue;
             var cn = typeof p.className === "string" ? p.className : "";
@@ -2692,7 +2713,13 @@ function buildRuby(base, gloss, provisional, source) {
       "ruby.wk-ruby {",
       "  ruby-position: over;",
       "  -webkit-ruby-position: before;",
-      "  ruby-align: center;",
+      /*
+       * 注音**靠左对齐**（用户要求"基线对齐"，不要居中）：逐字歌词里一个字一格，
+       * 居中会让「げいじゅつ」这种比底字长的读音向两边溢出、盖到隔壁字上，
+       * 唱到哪个字时看起来就整体错位。靠左 = 读音从底字左边缘起排，和字的基线一致。
+       */
+      "  ruby-align: start;",
+      "  -webkit-ruby-align: start;",
       /*
        * 有注音的行和没注音的行要一样高。
        *
@@ -2728,12 +2755,15 @@ function buildRuby(base, gloss, provisional, source) {
       "}",
       '[data-wk-fallback] { position: relative; }',
       '[data-wk-fallback] > ruby.wk-ruby { position: relative; display: inline-block; }',
+      /*
+       * 内核不支持 ruby 排版时的降级：注音绝对定位到底字上方，**左边缘对齐**
+       * （以前是 left:50% + translateX(-50%)，居中 —— 读音比底字长时向两边溢出，
+       * 逐字歌词里就显得压在隔壁字上、越唱越歪）。
+       */
       '[data-wk-fallback] > ruby.wk-ruby > .wk-rt {',
       "  position: absolute;",
-      "  left: 50%;",
+      "  left: 0;",
       "  bottom: 100%;",
-      "  transform: translateX(-50%);",
-      "  -webkit-transform: translateX(-50%);",
       "  display: block;",
       "  pointer-events: none;",
       "}",

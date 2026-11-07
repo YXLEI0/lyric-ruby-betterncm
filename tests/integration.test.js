@@ -6591,6 +6591,49 @@ test("外部网站的读音压过括号读音（MY HEART(マイココロ) → �
   assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段还是要藏起来：" + p.innerHTML);
 });
 
+test("逐字歌词（RNP karaoke）：slide 动画的替身节点不算歌词（否则整行每个字出现两遍）", async () => {
+  /*
+   * RNP 3.0.2 的 slide 动画会给每个词格再渲染一份同样的字：
+   *   div.rnp-karaoke-word > span(原字) + span.rnp-karaoke-word-filler(动画替身)
+   * 替身是绝对定位叠在上面的，唱到那句时才亮。它不是歌词 —— 以前我们把两份都收进
+   * 行原文，整行每个字出现两遍，分词和偏移全歪（真机现象：唱到哪句，那句注音就错位）。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map(
+        (c, i, all) =>
+          '<div class="rnp-karaoke-word is-cjk' +
+          (i < all.length - 1 ? " end-with-space" : "") +
+          '"><span>' +
+          c +
+          (i < all.length - 1 ? " " : "") +
+          '</span><span class="rnp-karaoke-word-filler">' +
+          c +
+          (i < all.length - 1 ? " " : "") +
+          "</span></div>"
+      )
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${karaoke("体温が")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 体温: "タイオン", が: "ガ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const pairs = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(pairs, [["体", "たい"], ["温", "おん"]], "读音按整行分词、摊到各字：" + root.innerHTML);
+  assert.strictEqual(
+    root.querySelectorAll(".rnp-karaoke-word-filler ruby, .rnp-karaoke-word-filler .wk-rt").length,
+    0,
+    "替身节点上一个注音都不许有：" + root.innerHTML
+  );
+});
+
 test("西文词也能就地改读音（MY → エムワイ），留空 / 改回来都行", async () => {
   /*
    * 西文词的读音是注音层自己那套切词器给的，日语 / 中文两档都管不到它 ——

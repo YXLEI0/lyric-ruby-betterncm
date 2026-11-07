@@ -253,6 +253,84 @@
     /[\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF\u3041-\u3096\u30A1-\u30FA\u30FC\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5AA-Za-z\u00C0-\u024F\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/;
   var RE_ONLY_KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC]$/;
   var RE_PAREN_READING = /[（(][ \t\u3000]*([\u3041-\u3096\u30A1-\u30FA\u30FC\u30FB]{1,24})[ \t\u3000]*[）)]/g;
+  /*
+   * 括号读音的底字一般在**最后一个词**上，前面那些字是上一句的词：
+   *   `奇を衒った奴らの芸術（アルス）` → 芸術（不是整句 10 个字）
+   *   `氷を溶かす太陽（たいよう）` → 太陽
+   * 切词边界靠"夹在字中间的单个助词"（を が は に へ と で も の や）来认，
+   * 这是歌词里最常见的写法；真正的单字助词两边都是正文时才会切。
+   */
+  var PAREN_PARTICLES = "をがはにへとでのやをも";
+  /*
+   * 段落式的括号读音特例：括号里标的其实是**一整句**（作者把短语当一个词念）。
+   * 值 = 从括号前面那段文字里往左取几字（0 = 整段）。
+   */
+  var PAREN_WHOLE = ["怒れる人", "夜を越えて", "大人になった", "生きている"];
+
+  /**
+   * 括号读音的底字该往左取多远：字符 / 起点（起点是"那一段"在行里的下标）
+   * @returns {{base:string, start:number}|null}
+   */
+  function parenBaseOf(run, runStart, kana) {
+    if (!run) return null;
+    /*
+     * 西文底字整段算：`HEART(ココロ)`、`My Heart(マイハート)`。
+     * 西文没有"送假名"那种切法，按拍数收窄反而会把 HEART 削成 ART。
+     */
+    if (!/[\u3041-\u3096\u30A1-\u30FA\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF]/.test(run)) {
+      return { base: run, start: runStart };
+    }
+    // 特例：整段都是这个词（见 PAREN_WHOLE）
+    for (var w = 0; w < PAREN_WHOLE.length; w++) {
+      var whole = PAREN_WHOLE[w];
+      if (run.length >= whole.length && run.slice(run.length - whole.length) === whole) {
+        return { base: whole, start: runStart + run.length - whole.length };
+      }
+    }
+    /*
+     * 按"助词"切一刀，取最后那一段：`奇を衒った奴らの芸術` 在 の 后面切，剩 芸術。
+     * 判定只看它右边：单个助词后面紧跟正文（非假名）就是词边界
+     * （`奴らの芸術` 的 の、`君のことが好き` 的 が）；`ありがとう` 里的 が / と 后面还是假名，不切。
+     */
+    var cut = 0;
+    for (var i = 0; i < run.length - 1; i++) {
+      if (PAREN_PARTICLES.indexOf(run.charAt(i)) < 0) continue;
+      if (RE_ONLY_KANA.test(run.charAt(i + 1))) continue;
+      cut = i + 1;
+    }
+    var base = run.slice(cut);
+    var start = runStart + cut;
+    /*
+     * 剩下的开头的假名是前一个词的尾巴（`イナイイナイ×点`）—— 只在后面确实还有
+     * 汉字 / 西文 / 符号可注时才削；纯假名的底字（`ありがとう(センキュー)`）
+     * 一个字都不能削，否则只剩最后一个假名。
+     */
+    if (/[^\u3041-\u3096\u30A1-\u30FA]/.test(base)) {
+      var lead = 0;
+      while (lead < base.length - 1 && RE_ONLY_KANA.test(base.charAt(lead))) lead++;
+      base = base.slice(lead);
+      start += lead;
+    }
+    if (!base) return { base: run, start: runStart };
+    /*
+     * 拍数校验：这个底字本身的读音有没有这么长。
+     *   汉字最多约 3 拍、假名 1 拍、符号按 1 拍算 ——
+     *   `夜を越えて(よるをこえて)` 的 越えて 就只有 5 拍的量，6 拍一定盖了前面的词，
+     *   那就退回整段（作者把整句当一个词念）。
+     */
+    function capacity(t) {
+      var left = String(t).replace(/[\u3041-\u3096\u30A1-\u30FA]/g, "");
+      return left.length * 3 + (t.length - left.length);
+    }
+    if (kana.length > capacity(base) && cut > 0) {
+      var wholeBase = run;
+      var wholeStart = runStart;
+      if (kana.length <= capacity(wholeBase) || wholeBase.length < base.length) {
+        return { base: wholeBase, start: wholeStart };
+      }
+    }
+    return { base: base, start: start };
+  }
 
   /**
    * 这一行里的括号读音：[{ start, end, base, kana, hideStart, hideEnd }]
@@ -274,21 +352,16 @@
       while (q > 0 && RE_PAREN_BASE_CHAR.test(s.charAt(q - 1))) q--;
       if (q >= baseStop) continue;
       var run = s.slice(q, baseStop);
-      /*
-       * 左边那些假名多半是前一个词（`イナイイナイ×点(ばってん)` 的 イナイイナイ）：
-       * 只有夹在汉字中间时才是这个词的送假名（`怒れる人(ラングラー)` 的 れる）。
-       * 削光了（纯假名底字，`ありがとう(センキュー)`）才退回整段。
-       */
-      var lead = 0;
-      while (lead < run.length && RE_ONLY_KANA.test(run.charAt(lead))) lead++;
-      var base = lead < run.length ? run.slice(lead) : run;
-      var unitStart = q + (run.length - base.length);
       var kana = m[1].replace(/[・\s]/g, "");
       if (!kana) continue;
+      var unit = parenBaseOf(run, q, kana);
+      if (!unit || !unit.base) continue;
+      var base = unit.base;
+      var unitStart = unit.start;
       /*
-       * 纯汉字 / 符号的底字按拍数收窄：`一度嘲笑(わら)` 只该注 嘲笑（vendor 会把
-       * 一度嘲笑 整串都注成 わら）。带假名 / 西文的底字不动 —— 那本来就是一段词
-       * （怒れる人、HEART 要是按拍数收窄就只剩 ART 了）。
+       * 纯汉字 / 符号的底字再按拍数收窄一次：`一度嘲笑(わら)` 只该注 嘲笑
+       * （vendor 会把 一度嘲笑 整串都注成 わら）。带假名 / 西文的底字不动 ——
+       * 那本来就是一段词（怒れる人、HEART 要是按拍数收窄就只剩 ART 了）。
        */
       if (!/[\u3041-\u3096\u30A1-\u30FA]/.test(base) && !/[A-Za-z\u00C0-\u024F\uFF21-\uFF3A\uFF41-\uFF5A]/.test(base)) {
         var narrow = Math.min(base.length, kana.length);
