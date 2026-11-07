@@ -6591,12 +6591,13 @@ test("外部网站的读音压过括号读音（MY HEART(マイココロ) → �
   assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段还是要藏起来：" + p.innerHTML);
 });
 
-test("逐字歌词（RNP karaoke）：slide 动画的替身节点不算歌词（否则整行每个字出现两遍）", async () => {
+test("逐字歌词（RNP karaoke）：slide 动画的替身节点跟着一起注音（不然唱到那句就没注音、还重影）", async () => {
   /*
    * RNP 3.0.2 的 slide 动画会给每个词格再渲染一份同样的字：
    *   div.rnp-karaoke-word > span(原字) + span.rnp-karaoke-word-filler(动画替身)
-   * 替身是绝对定位叠在上面的，唱到那句时才亮。它不是歌词 —— 以前我们把两份都收进
-   * 行原文，整行每个字出现两遍，分词和偏移全歪（真机现象：唱到哪句，那句注音就错位）。
+   * 替身绝对定位叠在原字上，唱到那句时由它亮起来 —— 只注本体的话，唱到的那一句
+   * 就是"亮字没注音、底下暗字有注音"，两份还有高度差，看着就是重影。
+   * 但替身也不算歌词：算进行原文的话整行每个字出现两遍，分词 / 偏移全歪。
    */
   const karaoke = (line) =>
     Array.from(line)
@@ -6622,16 +6623,24 @@ test("逐字歌词（RNP karaoke）：slide 动画的替身节点不算歌词（
   await sleep(700);
 
   const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
-  const pairs = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [
-    (r.childNodes[0].nodeValue || "").trim(),
-    r.querySelector(".wk-rt").textContent,
-  ]);
-  assert.deepStrictEqual(pairs, [["体", "たい"], ["温", "おん"]], "读音按整行分词、摊到各字：" + root.innerHTML);
-  assert.strictEqual(
-    root.querySelectorAll(".rnp-karaoke-word-filler ruby, .rnp-karaoke-word-filler .wk-rt").length,
-    0,
-    "替身节点上一个注音都不许有：" + root.innerHTML
-  );
+  const words = Array.from(root.querySelectorAll(".rnp-karaoke-word"));
+  const rubies = (el) =>
+    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [
+      (r.childNodes[0].nodeValue || "").trim(),
+      r.querySelector(".wk-rt").textContent,
+    ]);
+  // 本体：读音按整行分词、摊到各字
+  const main = Array.from(root.querySelectorAll("span:not(.rnp-karaoke-word-filler)"))
+    .map((s) => rubies(s))
+    .flat();
+  assert.deepStrictEqual(main, [["体", "たい"], ["温", "おん"]], "读音按整行分词、摊到各字：" + root.innerHTML);
+  // 替身：和本体一模一样
+  for (const w of words) {
+    const host = w.querySelector("span:not(.rnp-karaoke-word-filler)");
+    const twin = w.querySelector(".rnp-karaoke-word-filler");
+    if (!twin) continue;
+    assert.deepStrictEqual(rubies(twin), rubies(host), "替身要和本体注得一模一样：" + w.innerHTML);
+  }
 });
 
 test("西文词也能就地改读音（MY → エムワイ），留空 / 改回来都行", async () => {

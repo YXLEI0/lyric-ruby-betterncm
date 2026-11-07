@@ -1509,6 +1509,15 @@
       host.insertBefore(tail, refNode);
       // 原文本节点（保留下来那条）的值也被我们改写过，同样算我们的
       if (!leadIsRuby) node.__wkOwned = true;
+      /*
+       * RNP 的 slide 动画给每个词格**再渲染一份同样的字**
+       * （`div.rnp-karaoke-word > span + span.rnp-karaoke-word-filler`）：
+       * 亮起来的是副本，我们只注本体的话，唱到的那一句就成了"亮字没注音、
+       * 底下暗字有注音"—— 两份错位叠在一起就是重影。
+       * 副本的内容和本体一模一样，所以把同样的片段抄一份过去
+       * （jp-furigana 的 fillerTwins 也是这么做的）。
+       */
+      var mirrors = mirrorFillers(host, pieces, text);
       // 记下注音时刻：出问题时 age 能直接区分"我们的注音活了多久"，
       // 从而分辨"死循环"（几十毫秒就没）和"正常重绘"（活了一两秒）
       host.__wkAt = clock();
@@ -1536,6 +1545,11 @@
         region: region,
         kept: node.parentNode === host,
         index: origIndex,
+        /*
+         * 同一词格里被我们一并注音的副本（RNP slide 动画的 filler）。
+         * 还原时要连它们一起写回原文，否则换歌之后副本上留着上一首的注音。
+         */
+        mirrors: mirrors,
         // 记下当时所在的行元素（jp-furigana 会给它挂 __fgText）。
         // 只能在注音时抓：等到出问题（宿主被摘掉）再顺着 host 往上找就已经晚了，
         // 那时 host 已经脱链，parentElement 全是 null，诊断只能输出"无标记"。
@@ -1601,8 +1615,63 @@
      * 哪个词是词典给的、哪个是规则猜的、哪个是模型换过的。类名一直在，
      * 不给它上色而已（这样开关一开立刻生效，不用重扫）。
      */
+    var RE_KARAOKE_WORD_CLASS = /(^|\s)rnp-karaoke-word(\s|$)/;
+    var RE_FILLER_CLASS = /(^|\s)rnp-karaoke-word-filler(\s|$)/;
+
+    /**
+     * 把刚注入的注音**同样抄到同一个词格的副本上**（RNP slide 动画的 filler）。
+     *
+     * 副本是 RNP 自己渲染的、内容与本体一字不差，绝对定位叠在本体上做"唱到就亮"。
+     * 只注本体 → 亮起来的那份没有注音，两份字还有半个注音的高度差，看着就是重影。
+     *
+     * @returns {Array<{el:Element, plain:string}>} 抄过的副本（给还原用）
+     */
+    function mirrorFillers(host, pieces, plain) {
+      var out = [];
+      var word = host && host.parentNode;
+      if (!word || word.nodeType !== 1 || typeof word.className !== "string") return out;
+      if (!RE_KARAOKE_WORD_CLASS.test(word.className)) return out;
+      var kids = word.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var twin = kids[i];
+        if (!twin || twin === host) continue;
+        if (!RE_FILLER_CLASS.test(typeof twin.className === "string" ? twin.className : "")) continue;
+        // 内容对不上说明 React 已经重渲染过，先不动它（下一轮会重新注）
+        if ((twin.textContent || "") !== plain) continue;
+        var built = [];
+        for (var k = 0; k < pieces.length; k++) {
+          var piece = pieces[k];
+          var child = piece.ruby
+            ? piece.ruby.cloneNode(true)
+            : piece.hide
+            ? makeHideSpan(doc, piece.text)
+            : piece.blank
+            ? makeBlankSpan(doc, piece.text)
+            : doc.createTextNode(piece.text);
+          built.push(child);
+        }
+        while (twin.firstChild) twin.removeChild(twin.firstChild);
+        for (var b = 0; b < built.length; b++) twin.appendChild(built[b]);
+        out.push({ el: twin, plain: plain });
+      }
+      return out;
+    }
+
+    /** 还原副本（换歌 / 关插件时把上一首的注音从副本上抹掉） */
+    function restoreMirrors(rec) {
+      var list = rec && rec.mirrors;
+      if (!list || !list.length) return;
+      for (var i = 0; i < list.length; i++) {
+        var m = list[i];
+        if (!m || !m.el || !m.el.isConnected) continue;
+        if (!m.el.querySelector) continue;
+        if (!m.el.querySelector("ruby.wk-ruby, .wk-hide, .wk-blank")) continue;
+        m.el.textContent = m.plain;
+      }
+    }
+
     /** 括号注音里的那段括号：藏起来（display:none），不占位 */
-function makeHideSpan(d, t) {
+    function makeHideSpan(d, t) {
   var el = d.createElement("span");
   el.className = "wk-hide";
   el.textContent = t;
@@ -1701,6 +1770,7 @@ function buildRuby(base, gloss, provisional, source) {
           // 原文已经在 DOM 里。这时绝对不能再把我们的旧节点插回去 ——
           // 那会和 React 的新节点并存，同一句话渲染两遍。
           // 只清掉我们插的节点，DOM 让 React 说了算。
+          restoreMirrors(rec);
           removeInjected(rec);
           records.delete(node);
           untagIfClean(host, rec.region);
@@ -1714,6 +1784,7 @@ function buildRuby(base, gloss, provisional, source) {
         }
       }
 
+      restoreMirrors(rec);
       removeInjected(rec);
       records.delete(node);
       untagIfClean(host, rec.region);
@@ -2709,6 +2780,8 @@ function buildRuby(base, gloss, provisional, source) {
     var size = opts.rtSize == null ? 60 : opts.rtSize;
     var opacity = (opts.rtOpacity == null ? 80 : opts.rtOpacity) / 100;
     var colorBySource = !!opts.colorBySource;
+    // 逐字词格要让出的高度（见下面 .rnp-karaoke-word > span 那条）：注音字号换算成 em
+    var padEm = Math.round((size / 100) * 0.95 * 1000) / 1000;
     return [
       "ruby.wk-ruby {",
       "  ruby-position: over;",
@@ -2759,18 +2832,21 @@ function buildRuby(base, gloss, provisional, source) {
       "  pointer-events: none;",
       "}",
       /*
-       * 底端对齐（用户要求）：注音是往上长的，带注音的词格比不带的高 ——
-       * 逐字歌词那一行是按格子排的，默认 stretch / baseline 会让**底字**被顶得
-       * 比旁边的字低（看着像整行居中、唱到哪就歪到哪）。
+       * 底端对齐（照 jp-furigana 的 `.fg-line.fg-word` 抄的机制）。
        *
-       * 两种排版各管一头：
-       *   - RNP 的 slide 动画把这一层写成 flex（display:flex），按底边对齐；
-       *   - 其它写法是一个个 inline-block 格子，按 vertical-align: bottom 对齐。
-       * 底字落在同一条线上，注音统一往上溢出。
+       * 逐字歌词里每个字是一个独立的 inline-block：注音的高度**撑不到外面那层行盒**
+       * （行盒高度不变），而 RNP 正是按 clientHeight 排行距的。于是：
+       *   ① 注音顶到上一行头上；
+       *   ② 只有"带注音的那个字"被注音撑高，它的字就比左右邻居低一截 ——
+       *      看着就是「整行居中、唱到哪就歪到哪」。
+       * 解法：给**每个**词格都让出同样的高度（padding-top），再用负的 margin-bottom
+       * 把这截还给行距。不分有没有注音 —— 只给带注音的那个加，它反而更矮。
+       * 让多少按注音字号算（rtSize% 就是那层注音的高度），换字号/换字体也跟得上。
        */
-      ".rnp-lyrics-line-karaoke { align-items: flex-end; }",
-      ".rnp-lyrics-line .rnp-karaoke-word { vertical-align: bottom; }",
-      "ruby.wk-ruby { vertical-align: baseline; }",
+      ".rnp-lyrics-line .rnp-karaoke-word > span {",
+      "  padding-top: " + padEm + "em;",
+      "  margin-bottom: -" + padEm + "em;",
+      "}",
       // 这几条是为了对抗 RefinedNowPlaying 之类的逐字歌词插件：它会给自己插的
       // 节点打 opacity，嵌套相乘会把注音压得几乎看不见，所以对注音强制不透明。
       //
