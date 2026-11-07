@@ -7085,6 +7085,29 @@ test("括号里作者标的读音不许被网站覆盖（限界超え（みの�
   assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段要藏起来：" + p.innerHTML);
 });
 
+test("括号不总是读音：`0点（エンド）` 整体注、`もう一回（もういいかい）` 不注且保留括号", async () => {
+  /*
+   * 用户给的三个真机案例：
+   *   ① `0点（エンド）`：底字要**带上数字**整体注成 エンド（以前 0 被漏掉，只注了 点）
+   *   ② `もう一回（もういいかい）`：括号里是跟着唱的问句，不是"回"的读法 ——
+   *      拍数比底字能有的读音长（6 > 5），整条不认，括号原样留着、一回也不注
+   *   ③ `101回目のソンな小指（メモリー）`：括号只管 小指（助词 な 之后那段）
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const W = ctx.window;
+  ctx.window.fetch = () => Promise.reject(new Error("offline"));
+  loadScripts(ctx.dom, VENDOR_FILES);
+  ctx.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 点: "テン", 小指: "コユビ", 回: "カイ" }));
+  const pairs = (s) => Array.from(ctx.window.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+  assert.deepStrictEqual(pairs("0点（エンド）じゃないなら"), [["0点", "エンド"], ["（エンド）", "HIDE"]], "数字要进底字");
+  assert.deepStrictEqual(pairs("もう一回（もういいかい）！？"), [], "问句不当读音");
+  assert.deepStrictEqual(
+    pairs("101回目のソンな小指（メモリー）拝借"),
+    [["101回", "ひゃくいっかい"], ["小指", "メモリー"], ["（メモリー）", "HIDE"]],
+    "括号只管 小指（助词 な 之后那一段）：" + JSON.stringify(pairs("101回目のソンな小指（メモリー）拝借"))
+  );
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>

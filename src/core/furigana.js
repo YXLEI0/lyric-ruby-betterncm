@@ -250,7 +250,7 @@
    * 中间可以夹空格（`舞台 (セカイ)`）。
    */
   var RE_PAREN_BASE_CHAR =
-    /[\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF\u3041-\u3096\u30A1-\u30FA\u30FC\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5AA-Za-z\u00C0-\u024F\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/;
+    /[\u3005\u3006\u3007\u4E00-\u9FFF\u3400-\u4DBF\u3041-\u3096\u30A1-\u30FA\u30FC0-9\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5AA-Za-z\u00C0-\u024F\u221E\u2605\u2606\u266A\u2661\u2665\u00D7\u00F7\u2211\u221A\u203B]/;
   var RE_ONLY_KANA = /^[\u3041-\u3096\u30A1-\u30FA\u30FC]$/;
   /*
    * 括号里除了假名，也可能是拉丁字母：`口吻（kiss）`、`革命（Revo）` ——
@@ -264,7 +264,7 @@
    * 切词边界靠"夹在字中间的单个助词"（を が は に へ と で も の や）来认，
    * 这是歌词里最常见的写法；真正的单字助词两边都是正文时才会切。
    */
-  var PAREN_PARTICLES = "をがはにへとでのやをも";
+  var PAREN_PARTICLES = "をがはにへとでのやをもな";
   /*
    * 段落式的括号读音特例：括号里标的其实是**一整句**（作者把短语当一个词念）。
    * 值 = 从括号前面那段文字里往左取几字（0 = 整段）。
@@ -318,20 +318,24 @@
     if (!base) return { base: run, start: runStart };
     /*
      * 拍数校验：这个底字本身的读音有没有这么长。
-     *   汉字最多约 3 拍、假名 1 拍、符号按 1 拍算 ——
-     *   `夜を越えて(よるをこえて)` 的 越えて 就只有 5 拍的量，6 拍一定盖了前面的词，
-     *   那就退回整段（作者把整句当一个词念）。
+     *   汉字最多约 2.5 拍、假名 1 拍、数字 1~2 拍 ——
+     *   `夜を越えて(よるをこえて)` 的 越えて 就只有 5 拍的量，6 拍一定盖了前面的词；
+     *   `もう一回(もういいかい)` 的括号其实是跟着唱的问句（不是"回"的读法），
+     *   6 拍 > 一回 能有的 5 拍 → 不当读音、括号留着。
      */
     function capacity(t) {
       var left = String(t).replace(/[\u3041-\u3096\u30A1-\u30FA]/g, "");
-      return left.length * 3 + (t.length - left.length);
+      return Math.floor(left.length * 2.5) + (t.length - left.length);
     }
-    if (kana.length > capacity(base) && cut > 0) {
-      var wholeBase = run;
-      var wholeStart = runStart;
-      if (kana.length <= capacity(wholeBase) || wholeBase.length < base.length) {
-        return { base: wholeBase, start: wholeStart };
-      }
+    if (kana.length > capacity(base)) {
+      /*
+       * 拍数比底字能有的读音还长 → 括号里那句**不是这个字的读音**
+       * （`もう一回（もういいかい）` 是跟着唱的问句，`一回` 顶多 5 拍）。
+       * 先看整段能不能装下（`夜を越えて(よるをこえて)` 这种整段念的），装不下就不认，
+       * 括号原样留在歌词里。
+       */
+      if (cut > 0 && kana.length <= capacity(run)) return { base: run, start: runStart };
+      return null;
     }
     return { base: base, start: start };
   }
@@ -667,6 +671,40 @@
      * 平假名 / 片假名设置走 —— 那是作词者标的读法，改写法等于改人家的东西。
      */
     var inlineUnits = parenReadings(s);
+    /*
+     * 括号**不是**读音的那些（`もう一回（もういいかい）`：括号里是跟着唱的问句）：
+     * vendor 那条 `[汉字]+(かな)` 正则已经把它当成读音藏起来了，这里要把那几条撤掉，
+     * 让括号原样留在歌词里（用户要求"这个一回不用注，保留括号"）。
+     */
+    if (s.indexOf("(") >= 0 || s.indexOf("（") >= 0) {
+      RE_PAREN_READING.lastIndex = 0;
+      var pm0;
+      while ((pm0 = RE_PAREN_READING.exec(s))) {
+        var claimed = false;
+        for (var cu = 0; cu < inlineUnits.length; cu++) {
+          if (inlineUnits[cu].hideStart >= pm0.index && inlineUnits[cu].hideStart <= pm0.index + pm0[0].length) {
+            claimed = true;
+            break;
+          }
+        }
+        if (claimed) continue;
+        var parenKana = String(pm0[1] || "").replace(/[・\s]/g, "");
+        var keptParen = [];
+        for (var kp = 0; kp < out.length; kp++) {
+          var okp = out[kp];
+          // 藏起来的括号、压在括号上的那几条，都撤掉
+          if (okp.hide) continue;
+          if (okp.start < pm0.index + pm0[0].length && pm0.index < okp.end) continue;
+          /*
+           * vendor 把括号里的读法直接写在前一个词上（`一回` = もういいかい）：
+           * 读音和括号内容一样的，也一并撤掉 —— 这个字回到"不注"的状态。
+           */
+          if (okp.end === pm0.index && okp.kana && toHira(okp.kana) === toHira(parenKana)) continue;
+          keptParen.push(okp);
+        }
+        out = keptParen;
+      }
+    }
     for (var iu = 0; iu < inlineUnits.length; iu++) {
       var unit = inlineUnits[iu];
       /*
