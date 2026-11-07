@@ -64,8 +64,9 @@ npm run install:plugin   # 顺便复制到 C:\betterncm\plugins
 没有收录时再查 Uta-net（只有罗马音，按行对齐成读音）；命中的行用网站读音，
 对不上的行照旧用词典 / 音译 / 大模型。客户端一行比网站长（网站拆成 2~3 行）时也能对上。
 缓存分两层：当场用的 localStorage（最近 8 首）+ 每首歌一个
-`<BetterNCM 数据目录>/lyrics/lyric-ruby/<歌曲ID>.json`（长期，更新插件不丢，
-可在「高级设置 → 本地歌词」里查看和删除），缓存命中不联网。随时可以切回词典或「撤销网站同意」。
+`<BetterNCM 数据目录>/lyrics/jp-furigana/<歌曲ID>.json`（格式与 jp-furigana 一致，
+两个插件可共用同一份缓存；更新插件不丢，可在「高级设置 → 本地歌词」里查看和删除），
+缓存命中不联网。随时可以切回词典或「撤销网站同意」。
 自动搜不到时可以「手动指定歌词页」，填 `https://utaten.com/lyric/…/` 直接读取该页。
 
 装了 RefinedNowPlayingNext 时，它的播放页设置菜单里会多一栏「注音」

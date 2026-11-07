@@ -1261,6 +1261,13 @@
    */
   function updateSongScope() {
     if (!state.annotator) return;
+    /*
+     * 每轮 pass 都重新取一遍"整首歌名 + 歌词"太贵（两次 findRegions + 逐行取文本），
+     * 歌词滚动时一秒几十轮就是白烧 CPU。1.5 秒内只算一次；换歌时 songScopeAt 清零。
+     */
+    var now = Date.now();
+    if (songScopeAt && now - songScopeAt < 1500) return;
+    songScopeAt = now;
     var title = "";
     var lyrics = "";
     try {
@@ -2682,23 +2689,52 @@
   }
 
   function installInlineEditor() {
-    document.addEventListener(
-      "dblclick",
-      function (ev) {
-        var t = ev.target;
-        while (t && t !== document.body) {
-          var cn = t && typeof t.className === "string" ? t.className : "";
-          // 注音（wk-ruby）和被留空的那一段（wk-blank）都能双击改
-          if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) break;
-          t = t.parentNode;
-        }
-        if (!t || t === document.body) return;
-        ev.preventDefault();
+    /** 这个节点是不是我们自己的注音 / 留空壳（往上找到 body 为止） */
+    function editableFrom(target) {
+      var t = target;
+      while (t && t !== document.body) {
+        var cn = t && typeof t.className === "string" ? t.className : "";
+        if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) return t;
+        t = t.parentNode;
+      }
+      return null;
+    }
+    /*
+     * 双击注音要能改读音，可 RNP / 网易云的歌词页**单击或双击整行就是"跳到这句"**。
+     * 事件如果在 window 捕获阶段就被对方接走，我们再 stopPropagation 已经晚了 ——
+     * 所以这里在 window 捕获阶段先拦：落在注音上的 click / dblclick 不往宿主传。
+     * （行里别的地方照旧能点，跳转功能不受影响。）
+     */
+    try {
+      var guard = function (ev) {
+        var t = editableFrom(ev.target);
+        if (!t) return;
         ev.stopPropagation();
+        /*
+         * 同一个节点（window 捕获）上还有多少监听器都要挡住 —— 宿主常把
+         * 「跳到这句」挂在 window / document 的捕获阶段，stopPropagation 挡不住同节点的。
+         */
+        if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+        if (ev.type !== "dblclick") return;
+        ev.preventDefault();
         openEditor(t);
-      },
-      true
-    );
+      };
+      window.addEventListener("click", guard, true);
+      window.addEventListener("dblclick", guard, true);
+    } catch (eGuard) {
+      /* 没有 window 的环境：退回 document（少见） */
+      document.addEventListener(
+        "dblclick",
+        function (ev) {
+          var t = editableFrom(ev.target);
+          if (!t) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          openEditor(t);
+        },
+        true
+      );
+    }
   }
 
   // ------------------------------------------------------------ 扫描调度
@@ -3306,8 +3342,17 @@
     return null;
   }
   var externalStoreCache = null;
+  var externalStoreTriedAt = 0;
   function findReduxStore() {
     if (externalStoreCache) return externalStoreCache;
+    /*
+     * 找不到就别每一轮再翻一遍：React fiber 树走一遍是几千个节点，
+     * 每轮 pass 都翻（歌词滚动时一秒几十轮）就是实打实的卡顿。
+     * 十秒内只试一次；找到了就一直用缓存。
+     */
+    var now = Date.now();
+    if (externalStoreTriedAt && now - externalStoreTriedAt < 10000) return null;
+    externalStoreTriedAt = now;
     try {
       var sels = ["#root", "#portal_root", "body"];
       for (var i = 0; i < sels.length; i++) {
@@ -3325,13 +3370,21 @@
         if (!fiber && el._reactRootContainer && el._reactRootContainer._internalRoot) fiber = el._reactRootContainer._internalRoot.current;
         if (!fiber) continue;
         var queue = [fiber];
-        var seen = [];
-        var budget = 20000;
+        // Set 查重是 O(1)；用数组 indexOf 的话 2 万个节点就是 4 亿次比较（真卡在这里）
+        var seen = typeof Set === "function" ? new Set() : null;
+        var seenList = seen ? null : [];
+        var budget = 8000;
         var head = 0;
         while (head < queue.length && budget-- > 0) {
           var f = queue[head++];
-          if (!f || seen.indexOf(f) >= 0) continue;
-          seen.push(f);
+          if (!f) continue;
+          if (seen) {
+            if (seen.has(f)) continue;
+            seen.add(f);
+          } else {
+            if (seenList.indexOf(f) >= 0) continue;
+            seenList.push(f);
+          }
           var st = storeIn(f.memoizedProps, 0) || storeIn(f.memoizedState, 0);
           if (st) {
             externalStoreCache = st;
@@ -3664,8 +3717,13 @@
 
   // ------------------------------------------------------------ 每首歌的 JSON 缓存
   /*
-   * 放在插件解压目录**之外**（默认 `<BetterNCM 数据目录>/lyrics/lyric-ruby/<歌曲ID>.json`），
-   * 更新插件时不会被删掉。一首歌一个文件，存网站原文 / 读音 / 来源地址 / 歌曲信息。
+   * 格式和目录都跟上游 jp-furigana 一致，两个插件可以共用同一份缓存：
+   *   <BetterNCM 数据目录>/lyrics/jp-furigana/<歌曲ID>.json
+   *   { schema:1, songId, fetchedAt:"ISO", provider:"utaten"|"utanet", url, title, artists, lines }
+   *     UtaTen 的行：{ text, segments:[{ text, rt? }] }
+   *     Uta-net 的行：{ text, romaji }
+   * 读到上游文件里带的 `userEdits` / `manualSource` 时原样保留（我们不用，但别给人家删了）。
+   * 老版本我们自己写在 `lyrics/lyric-ruby/` 下的文件也认，读取时会一起找。
    *
    * 为什么还要 localStorage：文件读写是异步的（betterncm.fs），有些环境干脆没有 fs；
    * localStorage 那份是"当场就能用"的短缓存，文件那份是长期缓存。
@@ -3687,11 +3745,29 @@
     var custom = String(config.externalCacheDir == null ? "" : config.externalCacheDir).replace(/^\s+|\s+$/g, "");
     if (custom) return custom.replace(/[\\/]+$/, "");
     var root = dataRoot();
-    return root + "/lyrics/lyric-ruby";
+    return root + "/lyrics/jp-furigana";
+  }
+
+  /** 老版本我们自己的目录（只读兼容，新写入一律走 jp-furigana 目录） */
+  function legacyCacheDir() {
+    var custom = String(config.externalCacheDir == null ? "" : config.externalCacheDir).replace(/^\s+|\s+$/g, "");
+    if (custom) return "";
+    return dataRoot() + "/lyrics/lyric-ruby";
   }
 
   function songFilePath(id) {
     return externalCacheDir() + "/" + String(id) + ".json";
+  }
+
+  /** 这首歌可能存在的文件（新目录优先，老目录兜底） */
+  function songFilePaths(id) {
+    var out = [songFilePath(id)];
+    var legacy = legacyCacheDir();
+    if (legacy) {
+      var p = legacy + "/" + String(id) + ".json";
+      if (p !== out[0]) out.push(p);
+    }
+    return out;
   }
 
   function fsApi() {
@@ -3757,48 +3833,62 @@
     return true;
   }
 
-  /** 读这首歌的 JSON（有就返回记录，没有 / 坏了返回 null） */
+  /** 读这首歌的 JSON（先找新目录 / 再找老目录；没有或坏了返回 null） */
   function readSongFile(id) {
     if (!id) return Promise.resolve(null);
-    var path = songFilePath(id);
-    return fsReadText(path).then(
-      function (text) {
-        var rec = null;
-        try {
-          rec = JSON.parse(String(text || ""));
-        } catch (e) {
-          rec = null;
+    var paths = songFilePaths(id);
+    function attempt(at) {
+      if (at >= paths.length) return Promise.resolve(null);
+      return fsReadText(paths[at]).then(
+        function (text) {
+          var rec = null;
+          try {
+            rec = JSON.parse(String(text || ""));
+          } catch (e) {
+            rec = null;
+          }
+          if (validSongFile(rec, id)) return rec;
+          return attempt(at + 1);
+        },
+        function () {
+          return attempt(at + 1);
         }
-        if (!validSongFile(rec, id)) return null;
-        return rec;
-      },
-      function () {
-        return null;
-      }
-    );
+      );
+    }
+    return attempt(0);
   }
 
-  /** 写这首歌的 JSON（失败只记提示，不影响本次显示） */
+  /**
+   * 写这首歌的 JSON。格式按 jp-furigana 的：`fetchedAt` 是 ISO 字符串；
+   * 已有文件里的 `userEdits` / `manualSource` 原样带过去，不丢人家的修改。
+   */
   function writeSongFile(id, rec) {
     if (!id) return Promise.resolve(false);
     var data = {
       schema: 1,
       songId: String(id),
+      fetchedAt: new Date().toISOString(),
       provider: rec.provider === "utanet" ? "utanet" : "utaten",
       url: rec.url || "",
       title: rec.title || "",
       artists: rec.artists || [],
-      savedAt: Date.now(),
       lines: rec.lines || [],
     };
-    return fsWriteText(songFilePath(id), JSON.stringify(data)).then(
-      function () {
-        return true;
-      },
-      function () {
-        return false;
+    return readSongFile(id).then(function (old) {
+      if (old) {
+        if (old.userEdits !== undefined) data.userEdits = old.userEdits;
       }
-    );
+      if (rec.manualSource) data.manualSource = rec.manualSource;
+      else if (old && old.manualSource !== undefined) data.manualSource = old.manualSource;
+      return fsWriteText(songFilePath(id), JSON.stringify(data, null, 1)).then(
+        function () {
+          return true;
+        },
+        function () {
+          return false;
+        }
+      );
+    });
   }
 
   /** 缓存里有哪些歌（给「本地歌词」管理用） */
@@ -3878,6 +3968,7 @@
           lines: rec.lines || [],
         };
         externalCacheSave(all);
+        if (manual) rec.manualSource = { provider: "utaten", url: manual };
         if (id) {
           writeSongFile(id, rec).then(function (ok) {
             if (!ok) {
@@ -3914,7 +4005,10 @@
     }
     var key = externalKeyOf(id);
     // 换歌了：先把上一首的索引清掉，别把上一首的读音套到这一首上（非日语歌也一样）
-    if (externalState.key !== key) externalState.index = null;
+    if (externalState.key !== key) {
+      externalState.index = null;
+      songScopeAt = 0; // 整首专属读音要按新歌重算，别等那 1.5 秒
+    }
     if (!songLooksJapanese()) {
       externalState.key = key;
       externalState.status = "非日语歌，跳过外部网站";
@@ -4327,6 +4421,8 @@
 
   /** 整首专属读音（见 SONG_READINGS）的缓存：同一首歌不必每轮重算 */
   var songScopeCache = { key: null, words: null };
+  /** 上次算"整首读音"的时刻（1.5 秒一次，换歌清零） */
+  var songScopeAt = 0;
   /**
    * 一个区域的"可见原文"（不含任何注音）。
    *
@@ -4872,7 +4968,16 @@
     }
   }
 
-  function updateJapaneseFont() {
+  var jpFontAt = 0;
+  function updateJapaneseFont(force) {
+    /*
+     * 字体这件事每轮 pass 都做太贵：要找 area、要数 [data-wk-region]、还要给每个
+     * 元素读一次内联样式。歌词滚动时一秒几十轮，白烧 CPU。
+     * 2 秒内只做一次；改设置 / 换歌时 force 一次立刻生效。
+     */
+    var now = Date.now();
+    if (!force && jpFontAt && now - jpFontAt < 2000) return;
+    jpFontAt = now;
     var want = config.jpnFont === true && songLooksJapanese();
     if (want) applyJapaneseFontInline(fontStack(config.jpnFontFamily));
     else applyJapaneseFontInline("");
@@ -5034,6 +5139,66 @@
     }
   }
 
+  /*
+   * 改了一个配置项之后要做什么 —— BetterNCM 设置页和 RNP 播放页「注音」栏共用这一份。
+   * 以前这段写在设置面板的 change 回调里，RNP 那边要再加一遍；现在只有这一处。
+   */
+  var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides"];
+  // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
+  var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
+  var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
+  var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
+
+  function applyConfigChange(key) {
+    saveConfig();
+    updateStyles();
+    if (key === "enabled") {
+      config.enabled ? enable() : disable();
+      return;
+    }
+    if (key === "online") {
+      if (state.corrector) state.corrector.setOnline(config.online);
+      if (config.online) rescan();
+      return;
+    }
+    if (key.indexOf("llm") === 0) {
+      // 接口地址 / 模型 / key 变了，把新配置推给客户端再重扫：
+      // 关掉或清空 key 时，已经命中缓存的那些词也要退回去，所以必须重扫
+      if (state.llm) {
+        state.llm.configure({
+          enabled: config.llmEnabled !== false,
+          endpoint: config.llmEndpoint,
+          model: config.llmModel,
+          key: config.llmKey,
+        });
+      }
+      rescan();
+      return;
+    }
+    if (NEEDS_RESCAN.indexOf(key) >= 0) {
+      // 自定义读音改了要先灌进振假名层，再重扫才会用新读音
+      if (key === "furiganaOverrides" && typeof WKFurigana !== "undefined" && WKFurigana.clearCache) {
+        WKFurigana.clearCache();
+      }
+      rescan();
+      return;
+    }
+    if (NEEDS_LINEHEIGHT.indexOf(key) >= 0) {
+      updateLineHeight();
+      return;
+    }
+    if (NEEDS_FONT.indexOf(key) >= 0) {
+      // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次
+      jpFontCss = null;
+      updateJapaneseFont(true);
+      return;
+    }
+    if (NEEDS_RESTYLE.indexOf(key) >= 0) {
+      if (state.annotator) state.annotator.restoreAll();
+      schedule(0);
+    }
+  }
+
   // ------------------------------------------------------------ 设置面板
 
   var REPO = REPO_URL;
@@ -5140,8 +5305,8 @@
       '<div class="wk-hint">关掉「非日语歌也注音」= 只标日语歌: 整首歌词一个假名都没有的整首跳过; ' +
       "判据看整首, 所以日语歌里的纯英文行照旧注音</div>" +
       "<h3>本地歌词</h3>" +
-      '<div class="wk-row"><label>缓存目录 <input type="text" data-k="externalCacheDir" placeholder="留空 = BetterNCM 数据目录/lyrics/lyric-ruby"></label></div>' +
-      '<div class="wk-hint">每首歌一个 <code>&lt;歌曲ID&gt;.json</code>（网站原文 / 读音 / 来源地址 / 获取时间），' +
+      '<div class="wk-row"><label>缓存目录 <input type="text" data-k="externalCacheDir" placeholder="留空 = BetterNCM 数据目录/lyrics/jp-furigana"></label></div>' +
+      '<div class="wk-hint">每首歌一个 <code>&lt;歌曲ID&gt;.json</code>，格式与 <b>jp-furigana</b> 一致（两个插件可共用同一份缓存）；' +
       "放在插件目录之外，更新插件不会丢；缓存命中不联网。</div>" +
       '<div class="wk-row"><button data-a="cacheRefresh">刷新列表</button> <span data-v="cacheInfo"></span></div>' +
       '<div class="wk-cache-list" data-v="cacheList"></div>' +
@@ -5527,12 +5692,6 @@
       renderHealth();
     }, 1000);
 
-    var NEEDS_RESCAN = ["annotateAll", "scope", "customSelector", "annotateNonJapanese", "annotateHanzi", "annotateHangul", "annotateLatin", "annotateLatinJa", "furigana", "furiganaKana", "furiganaOverrides"];
-    // 字体只影响渲染，不用重扫：清掉缓存值让它下一轮重算一遍样式表
-    var NEEDS_FONT = ["jpnFont", "jpnFontFamily"];
-    var NEEDS_LINEHEIGHT = ["uniformLineHeight", "lineHeight"];
-    var NEEDS_RESTYLE = ["rtSize", "rtOpacity"];
-
     var inputs = root.querySelectorAll("[data-k]");
     for (var i = 0; i < inputs.length; i++) {
       (function (el) {
@@ -5568,46 +5727,9 @@
               el.value = clean;
             }
           }
-          saveConfig();
+          applyConfigChange(key);
           var out = root.querySelector('[data-v="' + key + '"]');
           if (out) out.textContent = fmt(key);
-          updateStyles();
-          if (key === "enabled") {
-            config.enabled ? enable() : disable();
-          } else if (key === "online") {
-            if (state.corrector) state.corrector.setOnline(config.online);
-            if (config.online) rescan();
-          } else if (key.indexOf("llm") === 0) {
-            // 接口地址 / 模型 / key 变了，把新配置推给客户端再重扫：
-            // 关掉或清空 key 时，已经命中缓存的那些词也要退回去，所以必须重扫
-            if (state.llm) {
-              state.llm.configure({
-                enabled: config.llmEnabled !== false,
-                endpoint: config.llmEndpoint,
-                model: config.llmModel,
-                key: config.llmKey,
-              });
-            }
-            rescan();
-          } else if (NEEDS_RESCAN.indexOf(key) >= 0) {
-            // 自定义读音改了要先灌进振假名层，再重扫才会用新读音
-            if (key === "furiganaOverrides") {
-              if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
-              var cnt = parseFuriganaRules(config.furiganaOverrides).length;
-              var state0 = root.querySelector('[data-v="ovState"]');
-              if (state0) state0.textContent = cnt ? "已生效 " + cnt + " 条" : "没有规则";
-            }
-            rescan();
-          } else if (NEEDS_LINEHEIGHT.indexOf(key) >= 0) {
-            updateLineHeight();
-          } else if (NEEDS_FONT.indexOf(key) >= 0) {
-            // 字体只改渲染：清掉缓存值，下一轮 pass 重算一次样式表
-            jpFontCss = null;
-            updateJapaneseFont();
-          } else if (NEEDS_RESTYLE.indexOf(key) >= 0) {
-            if (state.annotator) state.annotator.restoreAll();
-            schedule(0);
-          }
           refreshAll();
         };
         el.addEventListener("change", commit);
@@ -5742,15 +5864,20 @@
           ok = false;
         }
         if (!ok) return;
-        fsRemove(songFilePath(sid)).then(
-          function () {
-            if (cacheInfoEl) cacheInfoEl.textContent = "已删除";
-            refreshCacheList();
-          },
-          function (err) {
-            if (cacheInfoEl) cacheInfoEl.textContent = "删除失败：" + String((err && err.message) || err);
-          }
-        );
+        var paths = songFilePaths(sid);
+        var jobs = [];
+        for (var pi = 0; pi < paths.length; pi++) {
+          jobs.push(
+            fsRemove(paths[pi]).then(
+              function () {},
+              function () {}
+            )
+          );
+        }
+        Promise.all(jobs).then(function () {
+          if (cacheInfoEl) cacheInfoEl.textContent = "已删除";
+          refreshCacheList();
+        });
       });
       refreshCacheList();
     }
@@ -5985,6 +6112,7 @@
     else bits.push("词典未开始加载");
     var r = state.lastResult;
     if (r) bits.push("本首：扫到 " + (r.scanned || 0) + " 行，标上 " + (r.changed || 0) + " 行");
+    if (state.lastPassMs > 60) bits.push("最近一轮 " + state.lastPassMs + " ms");
     if (r && f && !f.ready && r.scanned > 0 && !r.changed) bits.push("→ 词典没就绪，所以一个读音都没有");
     return bits.join(" · ");
   }
@@ -6023,6 +6151,8 @@
                 errors: (r.errors || []).slice(0, 4),
               }
             : null,
+          // 这一轮扫描花了多久（卡顿时看它）
+          ms: state.lastPassMs || 0,
           // 外部网站这一路的状态：开没开、有没有取到、取到几行
           ext: {
             on: externalEnabled(),
@@ -6328,6 +6458,17 @@
             return {
               enabled: config.enabled !== false,
               furigana: config.furigana !== false,
+              furiganaKana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
+              jpnFont: config.jpnFont === true,
+              jpnFontFamily: config.jpnFontFamily || "",
+              annotateLatin: config.annotateLatin !== false,
+              annotateLatinJa: config.annotateLatinJa !== false,
+              annotateHanzi: config.annotateHanzi === true,
+              annotateHangul: config.annotateHangul === true,
+              rtSize: Number(config.rtSize) || 55,
+              rtOpacity: Number(config.rtOpacity) || 80,
+              uniformLineHeight: config.uniformLineHeight !== false,
+              lineHeight: Number(config.lineHeight) || 1.6,
               external: externalEnabled(),
               provider: config.externalProvider || "auto",
             };
@@ -6335,16 +6476,7 @@
           set: function (key, value) {
             if (key === "enabled") {
               config.enabled = !!value;
-              saveConfig();
-              if (value) enable();
-              else disable();
-              rescan();
-              return;
-            }
-            if (key === "furigana") {
-              config.furigana = !!value;
-              saveConfig();
-              rescan();
+              applyConfigChange(key);
               return;
             }
             if (key === "externalProvider") {
@@ -6381,7 +6513,14 @@
               externalState.status = want ? "等待获取" : "";
               saveConfig();
               rescan();
+              return;
             }
+            /*
+             * 其余都是普通配置项：写进去，然后走和设置面板同一套"改完要做什么"
+             * （重扫 / 改行高 / 换字体 / 重画注音）。
+             */
+            config[key] = value;
+            applyConfigChange(key);
           },
           status: function () {
             var text = externalState.status || (externalEnabled() ? "外部网站已开" : "离线词典");

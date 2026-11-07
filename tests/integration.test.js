@@ -6687,13 +6687,18 @@ test("本地歌词：抓到的 JSON 写进缓存目录，下次播放直接读�
   await env.runLoad();
   await sleep(1200);
 
-  const filePath = "C:/betterncm/lyrics/lyric-ruby/777.json";
-  assert.ok(files[filePath], "要写进缓存目录：" + JSON.stringify(Object.keys(files)));
+  // 目录 / 字段都按 jp-furigana 的格式来，两个插件可以共用缓存
+  const filePath = "C:/betterncm/lyrics/jp-furigana/777.json";
+  assert.ok(files[filePath], "要写进 jp-furigana 的缓存目录：" + JSON.stringify(Object.keys(files)));
   const saved = JSON.parse(files[filePath]);
   assert.strictEqual(saved.schema, 1);
   assert.strictEqual(saved.songId, "777");
   assert.strictEqual(saved.provider, "utaten");
+  assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(saved.fetchedAt), "fetchedAt 用 ISO 字符串：" + saved.fetchedAt);
   assert.ok(saved.lines.length >= 1);
+  // 模拟上游那份文件里带的人工修改：我们再写一次时不许把它删掉
+  saved.userEdits = [{ line: "泥水の夜", word: "泥水", reading: "でいすい" }];
+  files[filePath] = JSON.stringify(saved);
   assert.ok(fetched > 0, "第一次要联网");
 
   // 第二次：清掉 localStorage 那份，只留文件；不许联网
@@ -6738,10 +6743,46 @@ test("RNP 播放页设置：在「歌词」后面加一栏「注音」，开关�
   const group = doc.querySelector('.rnp-group[data-tab="lyric-ruby"]');
   assert.ok(group, "要加设置栏");
   assert.ok(group.textContent.indexOf("读音来源") >= 0, "要有读音来源选择：" + group.textContent);
+  // 设置页里那些项都搬进来了
+  for (const text of ["标振假名", "日语歌词用日文字体", "注音字号", "注音不透明度", "统一行距", "行高", "西文歌词标片假名", "日语歌里夹的西文也标", "中文歌词标普通话读音", "朝鲜语歌词标朝鲜语读音"]) {
+    assert.ok(group.textContent.indexOf(text) >= 0, "缺了「" + text + "」：" + group.textContent);
+  }
   const cb = group.querySelector('input[data-key="furigana"]');
   assert.ok(cb && cb.checked, "默认开");
   cb.checked = false;
   cb.dispatchEvent(new env.window.Event("change"));
   await sleep(50);
   assert.strictEqual(env.api.config.furigana, false, "关掉要写进配置");
+
+  // 滑块：注音字号改完要写进配置
+  const size = group.querySelector('[data-key="rtSize"]');
+  assert.ok(size && size.type === "range", "要有字号滑块");
+  size.value = "77";
+  size.dispatchEvent(new env.window.Event("change"));
+  await sleep(50);
+  assert.strictEqual(env.api.config.rtSize, 77, "字号要写进配置");
+  // 假名类型选择
+  const kata = group.querySelector('[data-choice="furiganaKana"] [data-value="katakana"]');
+  kata.dispatchEvent(new env.window.Event("click", { bubbles: true }));
+  await sleep(50);
+  assert.strictEqual(env.api.config.furiganaKana, "katakana", "假名类型要写进配置");
+});
+
+test("RNP 歌词页：双击注音只开编辑器，不把「跳到这句」传给宿主", async () => {
+  const HTML = "<!doctype html><html><head></head><body><div class=\"rnp-lyrics\"><div class=\"rnp-lyrics-line\"><div class=\"rnp-lyrics-line-original\">泥水の夜</div></div></div><ul class=\"lyric\"><li class=\"line\"><p>泥水の夜</p></li></ul></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル" }));
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  const ruby = doc.querySelector("ruby.wk-ruby");
+  // 宿主（RNP / 网易云）在 window / document 捕获阶段监听「跳到这句」
+  let seeks = 0;
+  env.window.addEventListener("dblclick", () => seeks++, true);
+  env.window.addEventListener("click", () => seeks++, true);
+  ruby.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true }));
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true }));
+  await sleep(80);
+  assert.strictEqual(seeks, 0, "落在注音上的点击不许传给宿主");
+  assert.ok(doc.querySelector("[data-wk-edit]"), "编辑器要打开");
 });

@@ -4,8 +4,9 @@
  * 为什么要单独一个模块：RNP 的设置菜单是它自己渲染的一组 `.rnp-group`（按 tab 分栏），
  * 只有等它被点开、真的插进 DOM 之后才能往里加东西。这个模块只做一件事：
  * 盯着 `.rnp-settings-menu`，一出现就在「歌词」那一栏后面补一个「注音」栏，
- * 复用 RNP 自己的按钮 / 开关样式。**不修改 RNP 的任何文件**，它没装或改版了
- * 就什么都不做（设置仍然在 BetterNCM 的插件设置页里）。
+ * 把 BetterNCM 插件设置页里那些项（振假名 / 假名类型 / 日文字体 / 字号 / 不透明度 /
+ * 行距 / 其它语言 / 外部网站）搬过来，复用 RNP 自己的开关、按钮和滑块样式。
+ * **不修改 RNP 的任何文件**；它没装或改版了就什么都不做（设置仍在 BetterNCM 页里）。
  *
  * 挂到 globalThis.WKRnpPanel。
  */
@@ -32,22 +33,28 @@
         '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-note{opacity:.65;font-size:13px;line-height:1.5;margin:0 0 14px;white-space:pre-wrap;overflow-wrap:anywhere;}' +
         '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;}' +
         '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-row button{flex:1 1 120px;min-width:0;}' +
-        '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-hint{opacity:.6;font-size:12px;line-height:1.4;margin:0 0 10px;}';
+        '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-sub{font-size:16px;opacity:.6;margin:18px 0 10px;}' +
+        '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-text{display:flex;gap:8px;align-items:center;margin:0 0 12px;}' +
+        '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-text input{flex:1 1 auto;min-width:0;padding:6px 8px;border-radius:6px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;font:inherit;}' +
+        '.rnp-group[data-tab="' + TAB + '"] .wk-rnp-text button{flex:0 0 auto;}';
       (doc.head || doc.documentElement).appendChild(style);
     }
 
+    function el(tag, cls, text) {
+      var n = doc.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
     function checkbox(group, key, label) {
-      var wrap = doc.createElement("div");
-      wrap.className = "rnp-checkbox-wrapper";
-      var input = doc.createElement("input");
+      var wrap = el("div", "rnp-checkbox-wrapper");
+      var input = el("input", "rnp-checkbox");
       input.type = "checkbox";
-      input.className = "rnp-checkbox";
-      input.dataset.key = key;
       input.id = "wk-rnp-" + key;
-      var lb = doc.createElement("label");
-      lb.className = "rnp-checkbox-label";
+      input.dataset.key = key;
+      var lb = el("label", "rnp-checkbox-label", label);
       lb.setAttribute("for", input.id);
-      lb.textContent = label;
       wrap.appendChild(input);
       wrap.appendChild(lb);
       group.appendChild(wrap);
@@ -55,39 +62,87 @@
     }
 
     function choice(group, key, label, options) {
-      var wrap = doc.createElement("div");
-      wrap.className = "rnp-select-group-wrapper";
-      var title = doc.createElement("div");
-      title.className = "rnp-select-group-label";
-      title.textContent = label;
-      var box = doc.createElement("div");
-      box.className = "rnp-select-group";
+      var wrap = el("div", "rnp-select-group-wrapper");
+      wrap.appendChild(el("div", "rnp-select-group-label", label));
+      var box = el("div", "rnp-select-group");
       box.dataset.choice = key;
+      box.setAttribute("role", "group");
+      box.setAttribute("aria-label", label);
       for (var i = 0; i < options.length; i++) {
-        var b = doc.createElement("button");
+        var b = el("button", "rnp-select-group-btn", options[i][1]);
         b.type = "button";
-        b.className = "rnp-select-group-btn";
         b.dataset.value = options[i][0];
-        b.textContent = options[i][1];
+        b.setAttribute("aria-pressed", "false");
         box.appendChild(b);
       }
-      wrap.appendChild(title);
       wrap.appendChild(box);
       group.appendChild(wrap);
       return box;
     }
 
-    function buildGroup() {
-      var group = doc.createElement("div");
-      group.className = "rnp-group";
-      group.dataset.tab = TAB;
-      var heading = doc.createElement("div");
-      heading.className = "rnp-group-title";
-      heading.textContent = "注音";
-      group.appendChild(heading);
+    function slider(group, key, label, min, max, step, unit) {
+      var wrap = el("div", "rnp-slider-wrapper");
+      var lb = el("label", "rnp-slider-label");
+      lb.setAttribute("for", "wk-rnp-" + key);
+      lb.appendChild(doc.createTextNode(label + " "));
+      var out = el("span", "", "");
+      out.dataset.valueFor = key;
+      lb.appendChild(out);
+      var input = el("input", "rnp-slider");
+      input.type = "range";
+      input.id = "wk-rnp-" + key;
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      input.dataset.key = key;
+      input.dataset.unit = unit || "";
+      wrap.appendChild(lb);
+      wrap.appendChild(input);
+      group.appendChild(wrap);
+      return { input: input, out: out };
+    }
 
-      var enabled = checkbox(group, "enabled", "振假名注音");
+    function textRow(group, key, placeholder, buttonLabel, buttonAction) {
+      var row = el("div", "wk-rnp-text");
+      var input = el("input", "");
+      input.type = "text";
+      input.placeholder = placeholder;
+      input.dataset.key = key;
+      row.appendChild(input);
+      var btn = el("button", "rnp-select-group-btn", buttonLabel);
+      btn.type = "button";
+      btn.dataset.action = buttonAction;
+      row.appendChild(btn);
+      group.appendChild(row);
+      return { input: input, button: btn };
+    }
+
+    function buildGroup() {
+      var group = el("div", "rnp-group");
+      group.dataset.tab = TAB;
+      group.appendChild(el("div", "rnp-group-title", "注音"));
+
+      var enabled = checkbox(group, "enabled", "启用注音");
       var furigana = checkbox(group, "furigana", "歌词标振假名");
+      var kana = choice(group, "furiganaKana", "假名类型", [
+        ["hiragana", "平假名"],
+        ["katakana", "片假名"],
+      ]);
+      var jpnFont = checkbox(group, "jpnFont", "日语歌词用日文字体");
+      var fontRow = textRow(group, "jpnFontFamily", "字体名（逗号分隔多个）", "重置", "fontReset");
+
+      var rtSize = slider(group, "rtSize", "注音字号", 30, 120, 1, "%");
+      var rtOpacity = slider(group, "rtOpacity", "注音不透明度", 10, 100, 1, "%");
+      var uniform = checkbox(group, "uniformLineHeight", "统一行距（有注音 / 没注音一样高）");
+      var lineHeight = slider(group, "lineHeight", "行高", 1.2, 2.6, 0.1, "");
+
+      group.appendChild(el("div", "wk-rnp-sub", "其它语言"));
+      var latin = checkbox(group, "annotateLatin", "西文歌词标片假名");
+      var latinJa = checkbox(group, "annotateLatinJa", "日语歌里夹的西文也标");
+      var hanzi = checkbox(group, "annotateHanzi", "中文歌词标普通话读音");
+      var hangul = checkbox(group, "annotateHangul", "朝鲜语歌词标朝鲜语读音");
+
+      group.appendChild(el("div", "wk-rnp-sub", "外部网站"));
       var source = choice(group, "source", "读音来源", [
         ["dict", "离线词典"],
         ["external", "外部网站"],
@@ -97,39 +152,49 @@
         ["utaten", "UtaTen"],
         ["utanet", "Uta-net"],
       ]);
-      var actions = doc.createElement("div");
-      actions.className = "wk-rnp-row";
-      var retry = doc.createElement("button");
+      var actions = el("div", "wk-rnp-row");
+      var retry = el("button", "rnp-select-group-btn", "重新获取本首");
       retry.type = "button";
-      retry.className = "rnp-select-group-btn";
-      retry.textContent = "重新获取本首";
-      var open = doc.createElement("button");
+      retry.dataset.action = "retry";
+      var open = el("button", "rnp-select-group-btn", "查看来源网页");
       open.type = "button";
-      open.className = "rnp-select-group-btn";
-      open.textContent = "查看来源网页";
+      open.dataset.action = "open";
       actions.appendChild(retry);
       actions.appendChild(open);
       group.appendChild(actions);
 
-      var status = doc.createElement("p");
-      status.className = "wk-rnp-note";
+      var status = el("p", "wk-rnp-note");
       status.setAttribute("role", "status");
       group.appendChild(status);
+
+      var all = group.querySelectorAll("[data-key]");
 
       function refresh() {
         var cfg = api.config();
         var info = api.status();
-        enabled.checked = !!cfg.enabled;
-        furigana.checked = !!cfg.furigana;
-        var boxes = [source, provider];
-        for (var i = 0; i < boxes.length; i++) {
-          var key = boxes[i].dataset.choice;
-          var want = key === "source" ? (cfg.external ? "external" : "dict") : cfg.provider;
-          for (var j = 0; j < boxes[i].children.length; j++) {
-            var b = boxes[i].children[j];
-            var on = b.dataset.value === want;
-            b.classList.toggle("selected", on);
-            b.setAttribute("aria-pressed", String(on));
+        for (var i = 0; i < all.length; i++) {
+          var node = all[i];
+          var key = node.dataset.key;
+          var value = cfg[key];
+          if (node.type === "checkbox") {
+            node.checked = !!value;
+          } else if (node.type === "range") {
+            if (doc.activeElement !== node) node.value = String(value);
+            var out = group.querySelector('[data-value-for="' + key + '"]');
+            if (out) out.textContent = String(value) + (node.dataset.unit || "");
+          } else if (doc.activeElement !== node) {
+            node.value = value == null ? "" : String(value);
+          }
+        }
+        var boxes = [kana, source, provider];
+        for (var b = 0; b < boxes.length; b++) {
+          var key2 = boxes[b].dataset.choice;
+          var want = key2 === "source" ? (cfg.external ? "external" : "dict") : cfg[key2];
+          for (var j = 0; j < boxes[b].children.length; j++) {
+            var btn = boxes[b].children[j];
+            var on = btn.dataset.value === want;
+            btn.classList.toggle("selected", on);
+            btn.setAttribute("aria-pressed", String(on));
           }
         }
         provider.parentNode.hidden = !cfg.external;
@@ -137,32 +202,38 @@
         if (status.textContent !== text) status.textContent = text;
         retry.disabled = !(info && info.canRetry);
         open.disabled = !(info && info.canOpen);
+        group.querySelector('[data-key="jpnFontFamily"]').disabled = !cfg.jpnFont;
       }
 
-      enabled.addEventListener("change", function () {
-        api.set("enabled", enabled.checked);
-        refresh();
-      });
-      furigana.addEventListener("change", function () {
-        api.set("furigana", furigana.checked);
-        refresh();
-      });
+      function readValue(node) {
+        if (node.type === "checkbox") return node.checked;
+        if (node.type === "range") return Number(node.value);
+        return node.value;
+      }
+
+      for (var i = 0; i < all.length; i++) {
+        (function (node) {
+          var commit = function () {
+            api.set(node.dataset.key, readValue(node));
+            refresh();
+          };
+          node.addEventListener("change", commit);
+          if (node.type === "range") node.addEventListener("input", commit);
+        })(all[i]);
+      }
+
       group.addEventListener("click", function (e) {
         var btn = e.target && e.target.closest ? e.target.closest("button") : null;
-        if (!btn || btn.disabled) return;
+        if (!btn) return;
+        if (btn.disabled && btn.dataset.action !== "fontReset") return;
         var box = btn.parentElement && btn.parentElement.dataset ? btn.parentElement.dataset.choice : "";
-        if (box === "source") {
-          api.set("external", btn.dataset.value === "external");
-          refresh();
-        } else if (box === "provider") {
-          api.set("externalProvider", btn.dataset.value);
-          refresh();
-        } else if (btn === retry) {
-          api.retry();
-          refresh();
-        } else if (btn === open) {
-          api.openSource();
-        }
+        if (box === "furiganaKana") api.set("furiganaKana", btn.dataset.value);
+        else if (box === "source") api.set("external", btn.dataset.value === "external");
+        else if (box === "provider") api.set("externalProvider", btn.dataset.value);
+        else if (btn.dataset.action === "retry") api.retry();
+        else if (btn.dataset.action === "open") api.openSource();
+        else if (btn.dataset.action === "fontReset") api.set("jpnFontFamily", "");
+        refresh();
       });
 
       return { group: group, refresh: refresh };
@@ -179,10 +250,8 @@
       if (!lyricTab || !lyricGroup) return;
       ensureStyle();
 
-      var tab = doc.createElement("div");
-      tab.className = "rnp-settings-menu-tab";
+      var tab = el("div", "rnp-settings-menu-tab", "注音");
       tab.dataset.tab = TAB;
-      tab.textContent = "注音";
       tab.tabIndex = 0;
       tab.setAttribute("role", "button");
       var built = buildGroup();
@@ -222,24 +291,22 @@
       for (var j = 0; j < found.length; j++) mount(found[j]);
     }
 
-    var observer = new win.MutationObserver(function (records) {
-      var selector = ".rnp-settings-menu,.rnp-settings-menu-tabs,.rnp-settings-menu-inner";
-      var relevant = false;
-      for (var i = 0; i < records.length && !relevant; i++) {
-        var nodes = records[i].addedNodes;
-        for (var k = 0; k < nodes.length; k++) {
-          var n = nodes[k];
-          if (n.nodeType !== 1) continue;
-          if ((n.matches && n.matches(selector)) || (n.querySelector && n.querySelector(selector))) {
-            relevant = true;
-            break;
-          }
-        }
-      }
-      for (var q = 0; q < menus.length && !relevant; q++) {
-        if (!menus[q].entry.group.isConnected) relevant = true;
-      }
-      if (relevant) scan();
+    /*
+     * 菜单是 RNP 点开设置才渲染的，但歌词动画每秒会制造成百上千条 DOM 变更。
+     * 每条都去分析、去 querySelector 就是卡顿的来源 —— 这里只挂一个节流：
+     * 一批变更最多排一次 400ms 后的 scan，scan 里再按"菜单还在不在"决定要不要动。
+     */
+    var scanTimer = null;
+    function scheduleScan() {
+      if (scanTimer || stopped) return;
+      scanTimer = setTimeout(function () {
+        scanTimer = null;
+        scan();
+      }, 400);
+    }
+
+    var observer = new win.MutationObserver(function () {
+      scheduleScan();
     });
     observer.observe(doc.body || doc.documentElement, { childList: true, subtree: true });
     scan();
@@ -251,6 +318,7 @@
       },
       destroy: function () {
         stopped = true;
+        if (scanTimer) clearTimeout(scanTimer);
         observer.disconnect();
         for (var i = 0; i < menus.length; i++) {
           if (menus[i].entry.group.parentNode) menus[i].entry.group.parentNode.removeChild(menus[i].entry.group);
