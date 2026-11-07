@@ -6592,7 +6592,11 @@ test("外部网站的读音压过括号读音（MY HEART(マイココロ) → �
   const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const heart = pairs.filter((x) => x[0] === "HEART")[0];
   assert.deepStrictEqual(heart, ["HEART", "こころ"], "网站标的读音要压过括号读音：" + p.innerHTML);
-  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段还是要藏起来：" + p.innerHTML);
+  /*
+   * 西文底字的括号**不当读音**（见 furigana.js 的 kanji 判据：`More More（フップー）`
+   * 那种括号是唱出来的喊话，藏掉就少一句歌词），所以这里不再有 wk-hide。
+   */
+  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 0, "西文底字的括号不该被藏起来：" + p.innerHTML);
 });
 
 test("逐字歌词（RNP karaoke）：slide 动画的替身节点跟着一起注音（不然唱到那句就没注音、还重影）", async () => {
@@ -7149,6 +7153,55 @@ test("本地歌词：抓到的 JSON 写进缓存目录，下次播放直接读�
   const pairs2 = Array.from(p2.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs2, [["泥水", "でいすい"], ["夜", "よる"]], "从文件读出来的读音：" + p2.innerHTML);
   assert.strictEqual(fetched2, 0, "缓存命中不许联网");
+});
+
+test("RNP 歌词页：右下角竖排按钮组上方有个「ふりがな」开关（一键开关振假名）", async () => {
+  /*
+   * 用户要求：在 `译 / 音 / 逐字` 那一列上面加一个竖排按钮，标 ふりがな，点一下开关振假名。
+   * 样式直接复用 RNP 的 `.rnp-lyrics-switch-btn`（它的 CSS 里就是
+   * writing-mode: vertical-lr + .active 态），所以挂同一个类名即可。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="rnp-lyrics">
+  <div class="rnp-lyrics-switch">
+    <button class="rnp-lyrics-switch-btn" title="复制模式">c</button>
+    <button class="rnp-lyrics-switch-btn active" title="翻译">译</button>
+    <button class="rnp-lyrics-switch-btn" title="罗马音">音</button>
+    <button class="rnp-lyrics-switch-btn" title="逐字歌词">逐字</button>
+  </div>
+</div>
+<div class="m-lyric"><ul class="lyric"><li class="line"><p>綴るセカイ</p></li></ul></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 綴: "ツヅ", セカイ: "セカイ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const doc = env.document;
+  const box = doc.querySelector(".rnp-lyrics-switch");
+  const btn = box.querySelector(".wk-rnp-furigana-btn");
+  assert.ok(btn, "要插入按钮：" + box.innerHTML);
+  assert.strictEqual(btn.textContent, "ふりがな", "按钮上写 ふりがな");
+  assert.ok(/(^|\s)rnp-lyrics-switch-btn(\s|$)/.test(btn.className), "复用 RNP 的竖排样式类：" + btn.className);
+  assert.ok(/(^|\s)active(\s|$)/.test(btn.className), "默认开 → active 态：" + btn.className);
+  // 位置：在 译 / 音 / 逐字 前面（容器是 column + flex-end，前面就是上面）
+  const order = Array.from(box.children).map((b) => b.textContent);
+  assert.ok(order.indexOf("ふりがな") >= 0 && order.indexOf("ふりがな") < order.indexOf("译"), "要在 译 上面：" + JSON.stringify(order));
+
+  // 点一下 → 关掉振假名，读音从行里撤掉
+  const p = doc.querySelector("ul.lyric li p");
+  assert.ok(p.querySelectorAll("ruby.wk-ruby").length > 0, "先得有注音：" + p.innerHTML);
+  btn.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(env.api.config.furigana, false, "点击要写进配置");
+  assert.ok(!/(^|\s)active(\s|$)/.test(btn.className), "关掉后不该是 active：" + btn.className);
+  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "关掉后读音要撤掉：" + p.innerHTML);
+
+  // 再点一下 → 打开
+  btn.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(env.api.config.furigana, true, "再点一次打开");
+  assert.ok(p.querySelectorAll("ruby.wk-ruby").length > 0, "打开后读音要回来：" + p.innerHTML);
 });
 
 test("RNP 播放页设置：在「歌词」后面加一栏「注音」，开关能改配置", async () => {

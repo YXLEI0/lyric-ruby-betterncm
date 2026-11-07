@@ -627,11 +627,13 @@ test("括号读音的底字按网站的范围取（假名 / 西文 / 符号都�
     [["怒れる人", "ラングラー"], ["(ラングラー)", "HIDE"]],
     "含送假名的底字整段算：" + JSON.stringify(pairs("怒れる人(ラングラー)"))
   );
-  assert.deepStrictEqual(
-    pairs("HEART(ココロ)"),
-    [["HEART", "ココロ"], ["(ココロ)", "HIDE"]],
-    "西文底字也要认（这一行一个汉字都没有）：" + JSON.stringify(pairs("HEART(ココロ)"))
-  );
+  /*
+   * 西文 / 纯假名底字**不算**括号读音（照 jp-furigana 的 RE_INLINE_RUBY：要求括号前是汉字）。
+   * 真机反例：`More More（フップー）` 的括号是唱出来的喊话，不是写法说明 ——
+   * 当读音处理会把这段歌词整段藏掉。西文词的读音交给网站 / 词典那条路。
+   */
+  assert.deepStrictEqual(pairs("HEART(ココロ)"), [], "西文底字不认括号读音");
+  assert.deepStrictEqual(pairs("More More（フップー）"), [], "括号里的喊话不当读音");
   assert.deepStrictEqual(
     pairs("イナイイナイ×点(ばってん)"),
     [["×点", "ばってん"], ["(ばってん)", "HIDE"]],

@@ -277,6 +277,76 @@
       built.refresh();
     }
 
+    /*
+     * 歌词页右下角那组竖排按钮（译 / 音 / 逐字）的**上面**再加一个「ふりがな」，
+     * 一键开关振假名歌词。
+     *
+     * 样式直接复用 RNP 自己的 `.rnp-lyrics-switch-btn`：它的 CSS 里写着
+     *   writing-mode: vertical-lr; width: 20px; margin-top: 5px; border-radius: 4px;
+     *   .active { background-color: rgba(...,.8) }
+     * 所以只要挂同一个类名，字就是竖的、选中态也是 RNP 那套（不用自己写样式，
+     * 换主题 / 改配色也跟着走）。
+     *
+     * 插入位置：`译`（title="翻译"）前面 —— 那三个按钮在容器最后，容器是
+     * flex-direction: column + justify-content: flex-end，所以排在它们前面
+     * 就显示在它们上方。找不到就贴到容器末尾（至少能点）。
+     */
+    var switchBtn = null;
+    var SWITCH_TITLES = ["翻译", "罗马音", "逐字歌词"];
+    var RE_FURI_BTN = /(^|\s)wk-rnp-furigana-btn(\s|$)/;
+
+    function switchOn() {
+      var cfg = api && typeof api.config === "function" ? api.config() : null;
+      return !(cfg && cfg.furigana === false);
+    }
+
+    function syncSwitch() {
+      if (!switchBtn) return;
+      var on = switchOn();
+      if (on) {
+        if (!/(^|\s)active(\s|$)/.test(switchBtn.className)) switchBtn.className = switchBtn.className + " active";
+      } else {
+        switchBtn.className = switchBtn.className.replace(/(^|\s)active(\s|$)/g, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+      }
+      switchBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      switchBtn.title = on ? "振假名歌词：开（点击关闭）" : "振假名歌词：关（点击开启）";
+    }
+
+    function mountSwitch() {
+      var box = doc.querySelector(".rnp-lyrics-switch");
+      if (!box) return;
+      if (switchBtn && switchBtn.isConnected && switchBtn.parentNode === box) {
+        syncSwitch();
+        return;
+      }
+      var btn = el("button", "rnp-lyrics-switch-btn wk-rnp-furigana-btn", "ふりがな");
+      btn.type = "button";
+      btn.dataset.wkFurigana = "1";
+      var ref = null;
+      var kids = box.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var t = kids[i].getAttribute ? kids[i].getAttribute("title") : "";
+        if (t && SWITCH_TITLES.indexOf(t) >= 0) {
+          ref = kids[i];
+          break;
+        }
+      }
+      box.insertBefore(btn, ref || null);
+      switchBtn = btn;
+      btn.addEventListener("click", function (e) {
+        try {
+          e.preventDefault();
+          e.stopPropagation();
+        } catch (eStop) {
+          /* 没关系 */
+        }
+        if (!api || typeof api.set !== "function") return;
+        api.set("furigana", !switchOn());
+        syncSwitch();
+      });
+      syncSwitch();
+    }
+
     function scan() {
       if (stopped) return;
       for (var i = menus.length - 1; i >= 0; i--) {
@@ -289,6 +359,11 @@
       }
       var found = doc.querySelectorAll(".rnp-settings-menu");
       for (var j = 0; j < found.length; j++) mount(found[j]);
+      try {
+        mountSwitch();
+      } catch (eSwitch) {
+        /* 这组按钮长得不一样就算了 */
+      }
     }
 
     /*
@@ -315,6 +390,7 @@
       scan: scan,
       refresh: function () {
         for (var i = 0; i < menus.length; i++) menus[i].entry.refresh();
+        syncSwitch();
       },
       destroy: function () {
         stopped = true;
@@ -325,6 +401,8 @@
           if (menus[i].tab.parentNode) menus[i].tab.parentNode.removeChild(menus[i].tab);
         }
         menus = [];
+        if (switchBtn && switchBtn.parentNode) switchBtn.parentNode.removeChild(switchBtn);
+        switchBtn = null;
       },
     };
   }
