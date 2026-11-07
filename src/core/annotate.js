@@ -2713,13 +2713,7 @@ function buildRuby(base, gloss, provisional, source) {
       "ruby.wk-ruby {",
       "  ruby-position: over;",
       "  -webkit-ruby-position: before;",
-      /*
-       * 注音**靠左对齐**（用户要求"基线对齐"，不要居中）：逐字歌词里一个字一格，
-       * 居中会让「げいじゅつ」这种比底字长的读音向两边溢出、盖到隔壁字上，
-       * 唱到哪个字时看起来就整体错位。靠左 = 读音从底字左边缘起排，和字的基线一致。
-       */
-      "  ruby-align: start;",
-      "  -webkit-ruby-align: start;",
+      "  ruby-align: center;",
       /*
        * 有注音的行和没注音的行要一样高。
        *
@@ -2755,18 +2749,28 @@ function buildRuby(base, gloss, provisional, source) {
       "}",
       '[data-wk-fallback] { position: relative; }',
       '[data-wk-fallback] > ruby.wk-ruby { position: relative; display: inline-block; }',
-      /*
-       * 内核不支持 ruby 排版时的降级：注音绝对定位到底字上方，**左边缘对齐**
-       * （以前是 left:50% + translateX(-50%)，居中 —— 读音比底字长时向两边溢出，
-       * 逐字歌词里就显得压在隔壁字上、越唱越歪）。
-       */
       '[data-wk-fallback] > ruby.wk-ruby > .wk-rt {',
       "  position: absolute;",
-      "  left: 0;",
+      "  left: 50%;",
       "  bottom: 100%;",
+      "  transform: translateX(-50%);",
+      "  -webkit-transform: translateX(-50%);",
       "  display: block;",
       "  pointer-events: none;",
       "}",
+      /*
+       * 底端对齐（用户要求）：注音是往上长的，带注音的词格比不带的高 ——
+       * 逐字歌词那一行是按格子排的，默认 stretch / baseline 会让**底字**被顶得
+       * 比旁边的字低（看着像整行居中、唱到哪就歪到哪）。
+       *
+       * 两种排版各管一头：
+       *   - RNP 的 slide 动画把这一层写成 flex（display:flex），按底边对齐；
+       *   - 其它写法是一个个 inline-block 格子，按 vertical-align: bottom 对齐。
+       * 底字落在同一条线上，注音统一往上溢出。
+       */
+      ".rnp-lyrics-line-karaoke { align-items: flex-end; }",
+      ".rnp-lyrics-line .rnp-karaoke-word { vertical-align: bottom; }",
+      "ruby.wk-ruby { vertical-align: baseline; }",
       // 这几条是为了对抗 RefinedNowPlaying 之类的逐字歌词插件：它会给自己插的
       // 节点打 opacity，嵌套相乘会把注音压得几乎看不见，所以对注音强制不透明。
       //
