@@ -2338,6 +2338,44 @@
     return null;
   }
 
+  /*
+   * 日语里一个写法有多个读法的常用词：双击注音时给一排候选，点一下直接切过去
+   * （不用整串重打）。键是注音的**底字**：
+   *   - 明日 / 今日 / 何 是整词，候选就是整词的读音；
+   *   - 行 / 抱 / 解 是动词词干，送假名在底字外面，编辑器存的也是词干读音
+   *     （行く → 行=い / ゆ、抱く → 抱=だ / いだ、解く → 解=と / ほど）。
+   * 想加词就往这里补一行，值按"常用 → 少见"排。
+   */
+  var JP_READING_VARIANTS = {
+    "明日": ["あした", "あす", "みょうにち"],
+    "今日": ["きょう", "こんにち"],
+    "昨日": ["きのう", "さくじつ"],
+    "一昨日": ["おととい", "おとつい"],
+    "今朝": ["けさ", "こんちょう"],
+    "大人": ["おとな", "たいじん"],
+    "今年": ["ことし", "こんねん"],
+    "何": ["なに", "なん"],
+    "行": ["い", "ゆ", "おこな"],
+    "抱": ["だ", "いだ", "かか"],
+    "解": ["と", "ほど"]
+  };
+
+  /** 片假名 → 平假名（候选和当前读音都比较平假名，面板切到片假名时也算同一个） */
+  function hiraOnly(t) {
+    return String(t == null ? "" : t).replace(/[\u30A1-\u30F6]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0x60);
+    });
+  }
+
+  /** 候选按面板上的写法显示 / 存盘（平假名 / 片假名） */
+  function kanaByConfig(t) {
+    var s = String(t == null ? "" : t);
+    if (config.furiganaKana !== "katakana") return s;
+    return s.replace(/[\u3041-\u3096]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) + 0x60);
+    });
+  }
+
   function openEditor(rubyEl) {
     if (!rubyEl || !rubyEl.parentNode) return;
     var parts = rubyParts(rubyEl);
@@ -2353,6 +2391,11 @@
      * 合起来的那一段（`辛` + `辛` → `辛辛` からがら、`日` + `々` → `日々` ひび）。
      */
     var span = { at: startAt, word: word };
+    // 这个底字有没有多个读法（明日 / 行 / 抱 / 解 / 何…），有就在下面放一排候选按钮
+    var variantReadings = JP_READING_VARIANTS[word] || null;
+    var variantChips = null;
+    var variantButtons = [];
+    if (variantReadings && variantReadings.length < 2) variantReadings = null;
 
     closeEditor();
     var wrap = document.createElement("div");
@@ -2366,6 +2409,7 @@
     wrap.style.boxShadow = "0 2px 10px rgba(0,0,0,.45)";
     wrap.style.fontSize = "13px";
     wrap.style.display = "flex";
+    wrap.style.flexWrap = "wrap";
     wrap.style.gap = "4px";
     wrap.style.alignItems = "center";
 
@@ -2403,6 +2447,8 @@
         var joined = lineText.substr(at, a.word.length + z.word.length);
         if (!joined) return;
         span = { at: at, word: joined };
+        // 合并之后底字变了，原来的候选对不上了 —— 收起来，别点出个错的
+        if (variantChips) variantChips.style.display = "none";
         box.value = a.kana + z.kana;
         box.select();
       });
@@ -2426,10 +2472,63 @@
     });
     wrap.appendChild(resetBtn);
 
+    /*
+     * 多个读法的候选：点一下直接切过去（编辑器不关，可以接着点另一个比较）。
+     * 当前读音那个按钮置灰、加粗 —— 一眼能看出现在用的是哪一个。
+     */
+    function markVariant(sel) {
+      for (var vi = 0; vi < variantButtons.length; vi++) {
+        var vb = variantButtons[vi];
+        var on = hiraOnly(vb.getAttribute("data-kana")) === hiraOnly(sel);
+        vb.disabled = on;
+        vb.style.opacity = on ? ".55" : "1";
+        vb.style.fontWeight = on ? "700" : "400";
+      }
+    }
+    if (variantReadings) {
+      variantChips = document.createElement("div");
+      variantChips.className = "wk-edit-variants";
+      variantChips.setAttribute("data-wk-variants", "1");
+      variantChips.style.display = "flex";
+      variantChips.style.flexWrap = "wrap";
+      variantChips.style.gap = "4px";
+      variantChips.style.flexBasis = "100%";
+      variantChips.style.marginTop = "4px";
+      for (var vr = 0; vr < variantReadings.length; vr++) {
+        (function (reading) {
+          var vb = document.createElement("button");
+          vb.type = "button";
+          vb.className = "wk-edit-variant";
+          vb.setAttribute("data-kana", reading);
+          vb.textContent = kanaByConfig(reading);
+          vb.title = "切到「" + kanaByConfig(reading) + "」";
+          vb.style.fontSize = "12px";
+          vb.style.padding = "1px 6px";
+          vb.addEventListener("mousedown", function (ev) {
+            ev.preventDefault(); // 别让输入框失焦（失焦就把编辑器关了）
+            ev.stopPropagation();
+            var val = kanaByConfig(reading);
+            box.value = val;
+            saveInlineFix(lineText, span.at, span.word, val);
+            markVariant(reading);
+            try {
+              box.focus();
+            } catch (eFocus) {
+              /* 焦点回不去也不影响已经存下的读音 */
+            }
+          });
+          variantButtons.push(vb);
+          variantChips.appendChild(vb);
+        })(variantReadings[vr]);
+      }
+      wrap.appendChild(variantChips);
+      markVariant(current);
+    }
+
     try {
       var r = rubyEl.getBoundingClientRect();
       wrap.style.left = Math.max(4, r.left) + "px";
-      wrap.style.top = Math.max(4, r.top - 34) + "px";
+      wrap.style.top = Math.max(4, r.top - (variantChips ? 60 : 34)) + "px";
     } catch (e2) {
       wrap.style.left = "20px";
       wrap.style.top = "20px";

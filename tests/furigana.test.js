@@ -346,6 +346,65 @@ test("振假名：叠字符 々 整词注（日々 ひび）、数字+汉字整�
   assert.deepStrictEqual(pairs("あの星々は"), [["星", "ほし"], ["々", "ぼし"]], "叠字符跟着前一个字读：" + JSON.stringify(pairs("あの星々は")));
 });
 
+test("单字 + 固定语法：良 よ / 皆 みな（皆一緒 かいいっしょ）/ 等 など / 達 たち / 故 ゆえ", async () => {
+  /*
+   * IPADIC 单独看一个字时会按音読み / 罕见训読み给：
+   *   良 → リョウ（形容词词干应该 よ）
+   *   皆 + 一緒 → カイ + イッショ（歌词里是 みないっしょ）
+   *   等 → ヒトシ（などの 等）、達 → イタル（たち）、故 → コ（ゆえ）
+   * 这些读音由后面的语法定，改单字那条，整词（良質 / 皆無 / 等分 / 故郷）不动。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  W.WKFurigana.configure({ dicPath: path.join(ROOT, "vendor", "dict") });
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    W.WKFurigana.load(() => resolve(true));
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("词典加载超时"));
+      }
+    }, 50);
+  });
+
+  const pairs = (s) => Array.from(W.WKFurigana.tokens(s) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(pairs("良"), [["良", "よ"]], "单独一个 良：" + JSON.stringify(pairs("良")));
+  assert.deepStrictEqual(pairs("良、"), [["良", "よ"]], "后面是标点也一样");
+  assert.deepStrictEqual(pairs("良かった"), [["良", "よ"]], "形容词活用照旧");
+  assert.deepStrictEqual(pairs("良質"), [["良質", "りょうしつ"]], "整词 りょう 不动");
+  assert.deepStrictEqual(pairs("良心"), [["良心", "りょうしん"]], "整词 りょう 不动");
+
+  assert.deepStrictEqual(pairs("皆一緒"), [["皆", "みな"], ["一緒", "いっしょ"]], "皆一緒 みないっしょ：" + JSON.stringify(pairs("皆一緒")));
+  assert.deepStrictEqual(pairs("皆一緒に"), [["皆", "みな"], ["一緒", "いっしょ"]], "皆一緒に 也一样");
+  assert.deepStrictEqual(pairs("皆無"), [["皆無", "かいむ"]], "整词 かい 不动");
+  assert.deepStrictEqual(pairs("皆勤"), [["皆勤", "かいきん"]], "整词 かい 不动");
+  assert.deepStrictEqual(pairs("皆さん"), [["皆", "みな"]], "皆さん みな");
+
+  assert.deepStrictEqual(pairs("等"), [["等", "など"]], "单独一个 等：" + JSON.stringify(pairs("等")));
+  assert.deepStrictEqual(pairs("等、"), [["等", "など"]], "后面是标点也一样");
+  assert.deepStrictEqual(pairs("等しい"), [["等", "ひと"]], "等しい 是 ひとしい，不是 など：" + JSON.stringify(pairs("等しい")));
+  assert.deepStrictEqual(pairs("等分"), [["等分", "とうぶん"]], "整词 とう 不动");
+  assert.deepStrictEqual(pairs("達"), [["達", "たち"]], "单独一个 達：" + JSON.stringify(pairs("達")));
+  assert.deepStrictEqual(pairs("達する"), [["達", "たっ"]], "達する 是 たっする，不是 たち：" + JSON.stringify(pairs("達する")));
+  assert.deepStrictEqual(pairs("故"), [["故", "ゆえ"]], "单独一个 故：" + JSON.stringify(pairs("故")));
+  assert.deepStrictEqual(pairs("故郷"), [["故郷", "こきょう"]], "整词 こ 不动");
+});
+
 test("词典读不出的汉字：用「字 + 送假名」探读音（掻 か）", async () => {
   /*
    * 掻 单独的 IPADIC 词条没有读音，整段留白（真机现象：「掻鳴らせ」的 掻 一直空着）。

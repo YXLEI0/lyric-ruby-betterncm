@@ -408,6 +408,34 @@
       }
     }
     /*
+     * 单字 + 固定语法：IPADIC 单独看一个字时会按音読み / 罕见的训読み给读音。
+     *   良 —— 形容词词干（良く・良かった・良ければ・良さ），单独出现也读 よ；
+     *   皆 —— 在 一緒 前面会被切成「皆 カイ + 一緒」，歌词里是 みないっしょ；
+     *   等 / 達 / 故 —— 单独一个字的固定读法是 など / たち / ゆえ。
+     *
+     * 只改"底字正好是这一个字"的片段：良質 / 皆無 / 皆勤 / 皆伝 / 皆目 / 故郷 这些
+     * 整词自带的读音一律不动。良 后面紧跟汉字时也不动 —— 那多半是 良+質 这种被切开的
+     * 音読み复合词（规则在 BARE_READINGS 的 notBeforeKanji）。
+     */
+    for (var bq = 0; bq < out.length; bq++) {
+      var bt = out[bq];
+      if (!bt || bt.hide || bt.blank || !bt.kana) continue;
+      var bareRule = BARE_READINGS[bt.text];
+      if (!bareRule) continue;
+      if (bareRule.notBeforeKanji && /[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(s.charAt(bt.end))) continue;
+      /*
+       * particleOnly：后面跟的是送假名时不动 —— `等しい` ひとしい、`達する` たっする、
+       * `故に` ゆえに 是词典那边对的读音，不是单字。只有后面是助词 / 标点 / 行尾时
+       * 才按单字的固定读法改（`等の` などの、`達、` たち、`故` ゆえ）。
+       */
+      if (bareRule.particleOnly) {
+        var nextCh = s.charAt(bt.end);
+        if (/[\u3041-\u3096\u30A1-\u30FA\u30FC]/.test(nextCh) && PARTICLE_CHARS.indexOf(nextCh) < 0) continue;
+      }
+      if (toHira(bt.kana) === bareRule.kana) continue;
+      bt.kana = toKanaMode(bareRule.kana, kana);
+    }
+    /*
      * 作词者自己写的括号读音，**中间夹了空格 / 换行**的写法：`舞台 (セカイ)`。
      *
      * vendor 那条正则要求括号紧贴汉字，所以 `舞台 (セカイ)` 匹配不到 ——
@@ -948,6 +976,23 @@
 
   /** 词典读不出来、但歌词里会唱的符号 */
   var SYMBOL_READINGS = { "\u221E": "むげん", "\u3006": "しめ" };
+
+  /*
+   * 单个汉字的固定读法（底字正好是这一个字时才生效，见 tokens 里的 BARE_READINGS 循环）。
+   *
+   * notBeforeKanji: 后面紧跟汉字就不改 —— 那多半是音読み的复合词被切开
+   * （良+質 / 等+分 / 故+人），按词典给的音読み才对。
+   */
+  var BARE_READINGS = {
+    "良": { kana: "よ", notBeforeKanji: true },
+    "皆": { kana: "みな" },
+    "等": { kana: "など", notBeforeKanji: true, particleOnly: true },
+    "達": { kana: "たち", notBeforeKanji: true, particleOnly: true },
+    "故": { kana: "ゆえ", notBeforeKanji: true, particleOnly: true }
+  };
+
+  /** 单字后面可能是助词的那几个假名（particleOnly 用；送假名 しい / する 不在里面） */
+  var PARTICLE_CHARS = "のにはがをともへやかねよなだでわぞぜさま";
 
   /*
    * 叠字符 々 的读音：前一个字的读音，按日语的连浊规律浊化第一个假名。

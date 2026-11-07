@@ -5466,6 +5466,87 @@ test("就地改读音只改点中的那一处（同一行两个相同的字不�
   );
 });
 
+test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 点一下切换", async () => {
+  /*
+   * 这几组写法都有好几个读法（明日 あした/あす/みょうにち、抱く だく/いだく、
+   * 解く とく/ほどく、何 なに/なん）。以前は候補を知る手段がなく、毎回输入框里
+   * 整串重打。现在双击时给一排候选按钮：点一下直接切过去，编辑器不关，可以接着点
+   * 另一个比较；当前读音那个置灰加粗。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>明日行く抱く解く何</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(perCharTokenizer({ 明日: "アシタ", 行: "イ", 抱: "イダ", 解: "ト", 何: "ナニ", く: "ク" }));
+  await env.runLoad();
+  await sleep(500);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const read = () =>
+    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const rubyOf = (word) => Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "").trim() === word)[0];
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
+  const chip = (label) => chips().filter((b) => b.textContent === label)[0];
+
+  assert.deepStrictEqual(
+    read(),
+    [["明日", "あした"], ["行", "い"], ["抱", "いだ"], ["解", "と"], ["何", "なに"]],
+    "初始读音：" + p.innerHTML
+  );
+
+  // 明日：三个候选，当前那个 disabled
+  dbl(rubyOf("明日"));
+  await sleep(50);
+  assert.deepStrictEqual(
+    chips().map((b) => [b.textContent, !!b.disabled]),
+    [["あした", true], ["あす", false], ["みょうにち", false]],
+    "明日 的候选：" + env.document.querySelector(".wk-edit-box").innerHTML
+  );
+  mdown(chip("みょうにち"));
+  await sleep(500);
+  assert.strictEqual(read()[0][1], "みょうにち", "点候选直接切过去：" + p.innerHTML);
+  assert.ok(env.document.querySelector("input.wk-edit"), "点了候选编辑器别关，能接着点另一个");
+
+  // 行：い / ゆ / おこな
+  dbl(rubyOf("行"));
+  await sleep(50);
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["い", "ゆ", "おこな"], "行 的候选");
+  mdown(chip("ゆ"));
+  await sleep(500);
+  assert.strictEqual(read()[1][1], "ゆ", "行 = ゆ：" + p.innerHTML);
+
+  // 抱：だ / いだ / かか
+  dbl(rubyOf("抱"));
+  await sleep(50);
+  mdown(chip("だ"));
+  await sleep(500);
+  assert.strictEqual(read()[2][1], "だ", "抱 = だ：" + p.innerHTML);
+
+  // 解：と / ほど
+  dbl(rubyOf("解"));
+  await sleep(50);
+  mdown(chip("ほど"));
+  await sleep(500);
+  assert.strictEqual(read()[3][1], "ほど", "解 = ほど：" + p.innerHTML);
+
+  // 何：なに / なん
+  dbl(rubyOf("何"));
+  await sleep(50);
+  mdown(chip("なん"));
+  await sleep(500);
+  assert.strictEqual(read()[4][1], "なん", "何 = なん：" + p.innerHTML);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
+  assert.deepStrictEqual(
+    saved.furiganaLineSpans["明日行く抱く解く何"],
+    [[0, "明日", "みょうにち"], [2, "行", "ゆ"], [4, "抱", "だ"], [6, "解", "ほど"], [8, "何", "なん"]],
+    "候选也按位置存：" + JSON.stringify(saved.furiganaLineSpans)
+  );
+});
+
 test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら", async () => {
   /*
    * 熟字训 / 叠字符常常被切开注（辛 + 辛、日 + 々），用户要能把它们合成一个词。
