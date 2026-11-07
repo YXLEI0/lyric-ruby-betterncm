@@ -194,7 +194,15 @@
     return { entries: entries, count: record.lines.length };
   }
 
-  /** 当前歌词行在网站索引里的读音 token（对不上返回 null） */
+  /**
+   * 当前歌词行在网站索引里的读音 token（对不上返回 null）。
+   *
+   * 关键：下标必须用**当前这一行**的空白映射（c.map），不能用网站那一行的。
+   * 两行去掉空白后一模一样才配对，但空白的**位置**可以不同 ——
+   * RNP 会在词之间插空格（`内緒話も 独り言も`），网站那行没有空格。
+   * 拿网站的下标去切当前行，整体右移一格：`独` 的读音落到空格上、
+   * `言` 的读音落到 `り` 上 —— 真机现象就是行里多出一个"ひと"、り 顶着 ごと。
+   */
   function tokensFor(lineText, index) {
     if (!index || !index.entries) return null;
     var c = compact(lineText);
@@ -205,8 +213,8 @@
     for (var i = 0; i < e.segs.length; i++) {
       var seg = e.segs[i];
       if (!(seg.to > seg.from)) continue;
-      var start = e.map[seg.from];
-      var end = e.map[seg.to - 1] + 1;
+      var start = c.map[seg.from];
+      var end = c.map[seg.to - 1] + 1;
       if (!(start >= 0) || !(end > start)) continue;
       out.push({ text: str(lineText).slice(start, end), start: start, end: end, kana: seg.rt });
     }

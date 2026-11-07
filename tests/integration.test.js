@@ -5715,6 +5715,47 @@ test("数字也有候选：4 よん/し、7 なな/しち、四 し/よん、七
   assert.deepStrictEqual(chips().map((b) => b.textContent), ["しち", "なな"], "七 的候选");
 });
 
+test("外部网站读音：两行的空白位置不同也要对准（RNP 的词间空格）", () => {
+  /*
+   * 真机现象：`内緒話も 独り言も` 这一行里，独 的读音跑到了**空格**上（屏幕上多出一个
+   * 平假名宽度的小字），り 顶着 言 的读音。
+   * 原因：对齐下标用的是网站那一行的空白映射，而两行只在"空白位置"上不同。
+   * 去掉空白后两行一样，配对是成立的，切字符串必须用当前行的映射。
+   */
+  const ctx = loadCore("<!doctype html><html><head></head><body></body></html>");
+  const X = ctx.window.WKExternal;
+  const rec = {
+    lines: [
+      {
+        text: "内緒話も独り言も",
+        segments: [
+          { text: "内緒", rt: "ないしょ" },
+          { text: "話", rt: "ばなし" },
+          { text: "も" },
+          { text: "独", rt: "ひと" },
+          { text: "り" },
+          { text: "言", rt: "ごと" },
+          { text: "も" },
+        ],
+      },
+    ],
+  };
+  const idx = X.buildIndex(rec);
+  const got = X.tokensFor("内緒話も 独り言も", idx);
+  assert.strictEqual(
+    JSON.stringify(got),
+    JSON.stringify([
+      { text: "内緒", start: 0, end: 2, kana: "ないしょ" },
+      { text: "話", start: 2, end: 3, kana: "ばなし" },
+      { text: "独", start: 5, end: 6, kana: "ひと" },
+      { text: "言", start: 7, end: 8, kana: "ごと" },
+    ]),
+    "读音要落在汉字上，不能落到空格：" + JSON.stringify(got)
+  );
+  // 全角空格同理
+  assert.strictEqual(JSON.stringify(X.tokensFor("内緒話も　独り言も", idx)), JSON.stringify(got));
+});
+
 test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不上的行回退词典", async () => {
   /*
    * 外部网站默认关；打开并同意条款后按歌名 / 歌手查 UtaTen，命中行的振假名压过

@@ -5678,6 +5678,12 @@
                 errors: (r.errors || []).slice(0, 4),
               }
             : null,
+          // 外部网站这一路的状态：开没开、有没有取到、取到几行
+          ext: {
+            on: externalEnabled(),
+            lines: externalState.index ? externalState.index.count : 0,
+            status: externalState.status || "",
+          },
         })
       );
     } catch (e) {
