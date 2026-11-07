@@ -296,6 +296,12 @@
      * 判定只看它右边：单个助词后面紧跟正文（非假名）就是词边界
      * （`奴らの芸術` 的 の、`君のことが好き` 的 が）；`ありがとう` 里的 が / と 后面还是假名，不切。
      */
+    /*
+     * 底字不该以助词收尾（`心の（こころん）` 的读音只管 心）—— 先把尾巴上的助词去掉。
+     */
+    while (run.length > 1 && PAREN_PARTICLES.indexOf(run.charAt(run.length - 1)) >= 0) {
+      run = run.slice(0, run.length - 1);
+    }
     var cut = 0;
     for (var i = 0; i < run.length - 1; i++) {
       if (PAREN_PARTICLES.indexOf(run.charAt(i)) < 0) continue;
