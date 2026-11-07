@@ -603,6 +603,8 @@
 
     // host -> { at }：这个宿主上次注音的时刻，用来算 age（churn 那套判据要用）
     var decidedByHost = new WeakMap();
+    /** 这一轮里"整行文字"的缓存（行元素 -> 文字），pass 开始时清空 */
+    var lineTextCache = new Map();
 
     // 不进去的标签
     var SKIP_TAGS = {
@@ -901,7 +903,18 @@
             return NodeFilter.FILTER_ACCEPT;
           },
         });
-        while (walker.nextNode()) out.push(walker.currentNode);
+        while (walker.nextNode()) {
+          var tn = walker.currentNode;
+          /*
+           * 顺手记下"这个文本节点属于哪个区域"。
+           *
+           * 以前 pass() 里对**每个节点**都遍历整个区域列表做 region.contains(node)：
+           * 72 行 × 每行几十个逐字 span = 每轮十几万次 contains，歌词动画时就是卡顿。
+           * 这里本来就在逐区域遍历，标一次就够了。
+           */
+          tn.__wkRegion = region;
+          out.push(tn);
+        }
       }
       return out;
     }
@@ -945,11 +958,20 @@
     function enclosingLineText(el) {
       var best = lineElementOf(el);
       if (!best) return null;
+      /*
+       * 逐字歌词一行有几十个 span，每个节点都往上取一次整行文字就是几十次整行遍历；
+       * 同一轮里这一行的文字不会变，缓存起来（pass 开始时清空）。
+       */
+      var hit = lineTextCache.get(best);
+      if (hit !== undefined) return hit;
+      var text = null;
       try {
-        return visibleText(best);
+        text = visibleText(best);
       } catch (e) {
-        return null;
+        text = null;
       }
+      lineTextCache.set(best, text);
+      return text;
     }
 
     /**
@@ -2190,6 +2212,7 @@ function buildRuby(base, gloss, provisional, source) {
       // 只清掉宿主已经脱离文档的记录（那块 DOM 已经没了）
       var restored = dropDetached();
       skipNotes = [];
+      lineTextCache.clear(); // 整行文字是"这一轮"的结论
 
       // 注意判断顺序：传了数组就用传进来的，哪怕是空数组。
       // 旧写法 `regions && regions.length ? regions : findRegions(...)`
@@ -2264,12 +2287,15 @@ function buildRuby(base, gloss, provisional, source) {
       for (var i = 0; i < candidates.length; i++) {
         var node = candidates[i];
 
-        // 所属区域：可能是被包含的子区域，取文档顺序里第一个包含它的
-        var region = list[0];
-        for (var ri = 0; ri < list.length; ri++) {
-          if (list[ri].contains(node)) {
-            region = list[ri];
-            break;
+        // 所属区域：collectTextNodes 已经标好了；老路径（外部传进来的）才回退到遍历
+        var region = node.__wkRegion;
+        if (!region) {
+          region = list[0];
+          for (var ri = 0; ri < list.length; ri++) {
+            if (list[ri].contains(node)) {
+              region = list[ri];
+              break;
+            }
           }
         }
         if (!regionVisible(region)) continue;

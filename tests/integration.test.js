@@ -5699,14 +5699,14 @@ test("数字也有候选：4 よん/し、7 なな/しち、四 し/よん、七
 
   dbl(byWord("4"));
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["よん", "し"], "4 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["よん", "し", "フォー"], "4 的候选（多了英文片假名）");
   mdown(chips().filter((b) => b.textContent === "し")[0]);
   await sleep(400);
   assert.strictEqual(byWord("4").querySelector(".wk-rt").textContent, "し", "4 = し：" + p.innerHTML);
 
   dbl(byWord("7"));
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["なな", "しち"], "7 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent), ["なな", "しち", "セブン"], "7 的候选（多了英文片假名）");
   dbl(byWord("四"));
   await sleep(50);
   assert.deepStrictEqual(chips().map((b) => b.textContent), ["し", "よん"], "四 的候选");
@@ -6629,7 +6629,7 @@ test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词�
     return Promise.resolve(url.indexOf("/search/") >= 0 ? SEARCH : SONG);
   };
   await env.runLoad();
-  await sleep(900);
+  await sleep(1800);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
     Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
@@ -6785,4 +6785,30 @@ test("RNP 歌词页：双击注音只开编辑器，不把「跳到这句」传�
   await sleep(80);
   assert.strictEqual(seeks, 0, "落在注音上的点击不许传给宿主");
   assert.ok(doc.querySelector("[data-wk-edit]"), "编辑器要打开");
+});
+
+test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假名", async () => {
+  /*
+   * 同一串数字歌词里两种唱法都有：`12` じゅうに / いちに / ワンツー。
+   */
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>12と105の</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ と: "ト", の: "ノ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector('ul.lyric li p');
+  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
+  dbl(byWord('12'));
+  await sleep(50);
+  assert.deepStrictEqual(chips(), ['じゅうに', 'いちに', 'ワンツー'], '12 的候选：' + chips().join('/'));
+  dbl(byWord('105'));
+  await sleep(50);
+  assert.deepStrictEqual(chips(), ['ひゃくご', 'いちぜろご', 'ワンゼロファイブ'], '105 的候选：' + chips().join('/'));
+  // 点英文那个，读音要落盘并显示
+  const en = env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')[2];
+  en.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(byWord('105').querySelector('.wk-rt').textContent, 'ワンゼロファイブ', p.innerHTML);
 });

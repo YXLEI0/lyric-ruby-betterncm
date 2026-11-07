@@ -2355,17 +2355,18 @@
     "微笑": [{ kana: "びしょう" }, { kana: "ほほえみ", notAfter: /^[むまめんっ]/ }],
     "寂": [{ kana: "さび", label: "さびしい" }, { kana: "さみ", label: "さみしい" }],
     // 数字：阿拉伯数字（WKNumbers 注的音）和汉字数字都给另一套读法
-    "0": ["ぜろ", "れい", "まる"],
-    "1": ["いち", "ひと"],
-    "2": ["に", "ふた"],
-    "3": ["さん", "み"],
-    "4": ["よん", "し"],
-    "5": ["ご", "いつ"],
-    "6": ["ろく", "む"],
-    "7": ["なな", "しち"],
-    "8": ["はち", "や"],
-    "9": ["きゅう", "く"],
-    "10": ["じゅう", "とお"],
+    // 阿拉伯数字另外给英文片假名读法（ワン / ツー…），逐个数字分开读在 numberVariants 里生成
+    "0": ["ぜろ", "れい", "まる", "ゼロ"],
+    "1": ["いち", "ひと", "ワン"],
+    "2": ["に", "ふた", "ツー"],
+    "3": ["さん", "み", "スリー"],
+    "4": ["よん", "し", "フォー"],
+    "5": ["ご", "いつ", "ファイブ"],
+    "6": ["ろく", "む", "シックス"],
+    "7": ["なな", "しち", "セブン"],
+    "8": ["はち", "や", "エイト"],
+    "9": ["きゅう", "く", "ナイン"],
+    "10": ["じゅう", "とお", "テン"],
     "100": ["ひゃく", "もも"],
     "1000": ["せん", "ち"],
     "一": ["いち", "ひと"],
@@ -2396,6 +2397,49 @@
     });
   }
 
+  /** 0-9 的日语读法（逐位读用）与英文读法（片假名） */
+  var NUMBER_JP = ["ぜろ", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"];
+  var NUMBER_EN = ["ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン"];
+
+  /**
+   * 数字的候选读音：整串读法 + 逐个数字分开读（日语 / 英文片假名）。
+   *
+   *   `105` -> ひゃくご / いちれいご / ワンゼロファイブ
+   *   `12`  -> じゅうに / いちに / ワンツー
+   *
+   * 歌词里同一串数字经常两种唱法都有（`24` にじゅうよん / ツーフォー），
+   * 逐个读还得能选英文，所以三个都列出来。
+   */
+  function numberVariants(word) {
+    var s = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+    var out = [];
+    if (!/^[0-9]+$/.test(s)) return out;
+    var whole = null;
+    try {
+      if (typeof WKNumbers !== "undefined" && WKNumbers.reading) whole = WKNumbers.reading(s);
+    } catch (eWhole) {
+      whole = null;
+    }
+    if (whole) {
+      var w = hiraOnly(whole);
+      out.push({ kana: w, label: w });
+    }
+    if (s.length >= 2) {
+      var jp = "";
+      var en = "";
+      for (var i = 0; i < s.length; i++) {
+        var d = s.charCodeAt(i) - 48;
+        jp += NUMBER_JP[d];
+        en += NUMBER_EN[d];
+      }
+      out.push({ kana: jp, label: jp });
+      out.push({ kana: en, label: en });
+    }
+    return out;
+  }
+
   /** 候选按面板上的写法显示 / 存盘（平假名 / 片假名） */
   function kanaByConfig(t) {
     var s = String(t == null ? "" : t);
@@ -2411,7 +2455,11 @@
    * `{kana, label}` —— kana 是注音存的词干读音，label 是按钮上显示的整个词读音。
    */
   function editorVariants(word, lineText, at) {
-    var list = JP_READING_VARIANTS[word];
+    // 全角数字也按半角查表（`４` 和 `4` 是同一组候选）
+    var norm = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+    var list = JP_READING_VARIANTS[word] || JP_READING_VARIANTS[norm];
     var out = [];
     var i;
     /*
@@ -2425,13 +2473,30 @@
       if (v.notAfter && v.notAfter.test(after)) return false;
       return true;
     }
+    /** 同一个读音只留一个（切到片假名时 ぜろ / ゼロ 会变成同一个按钮） */
+    function dedupe(items) {
+      var seen = {};
+      var res = [];
+      for (var q = 0; q < items.length; q++) {
+        var label = kanaByConfig(items[q].label || items[q].kana);
+        if (Object.prototype.hasOwnProperty.call(seen, label)) continue;
+        seen[label] = 1;
+        res.push(items[q]);
+      }
+      return res;
+    }
     if (list && list.length) {
       for (i = 0; i < list.length; i++) {
         var v = list[i];
         if (typeof v === "string") out.push({ kana: v, label: v });
         else if (v && v.kana && keep(v)) out.push({ kana: v.kana, label: v.label || v.kana });
       }
-      return out;
+      return dedupe(out);
+    }
+    // 多位数（12 / 105）：整串读法 + 逐个数字读（日语 / 英文片假名）
+    if (/^[0-9]+$/.test(norm)) {
+      var nums = numberVariants(norm);
+      if (nums.length) return dedupe(nums);
     }
     if (typeof WKFurigana === "undefined" || !WKFurigana.variants) return out;
     var found = [];
@@ -2445,7 +2510,7 @@
       if (!f || !f.kana) continue;
       out.push({ kana: f.kana, label: f.label || f.kana });
     }
-    return out;
+    return dedupe(out);
   }
 
   function openEditor(rubyEl) {
@@ -4645,6 +4710,10 @@
    *
    * delay=0 表示「观测到 DOM 变了，要立刻补注音」：必须赶在下一帧绘制之前
    * 跑完，否则那一帧画出来就是没有注音的样子 —— 肉眼就是一闪。
+   *
+   * 但如果上一轮本身就很慢（大页面 / 逐字歌词：一轮几十毫秒），"每 40ms 再跑一轮"
+   * 就等于把主线程占满，歌词动画直接变卡。所以这里按上一轮的耗时自适应拉长间隔：
+   * 一轮 80ms 就至少隔 160ms 再跑，宁可晚一点补，也不让画面掉帧。
    */
   var MIN_PASS_GAP_MS = 40;
   function schedule(delay) {
@@ -4657,11 +4726,18 @@
       }, d);
       return;
     }
+    var gap = MIN_PASS_GAP_MS;
+    if (state.lastPassMs > 30) gap = Math.min(250, Math.round(state.lastPassMs * 2));
     var since = Date.now() - (state.lastPassAt || 0);
-    var wait = since < MIN_PASS_GAP_MS ? MIN_PASS_GAP_MS - since : 0;
+    var wait = since < gap ? gap - since : 0;
     var run = function () {
       state.timer = null;
       state.timerIsRaf = false;
+      if (typeof document !== "undefined" && document.hidden) {
+        // 窗口在后台：没必要扫，回来再说
+        state.timer = setTimeout(run, 500);
+        return;
+      }
       pass();
     };
     if (wait > 0) {
@@ -6131,35 +6207,47 @@
   var lastStatusAt = 0;
   function reportStatus() {
     var now = Date.now();
-    if (lastStatusAt && now - lastStatusAt < 3000) return;
+    /*
+     * localStorage 是同步写盘，写得勤会顶住主线程（真机上是能感觉到的顿一下）。
+     * 10 秒一次，而且内容和上次一样就不写。
+     */
+    if (lastStatusAt && now - lastStatusAt < 10000) return;
     lastStatusAt = now;
     try {
       var f = typeof WKFurigana !== "undefined" && WKFurigana.status ? WKFurigana.status() : null;
       var r = state.lastResult || null;
+      var payload = JSON.stringify({
+        at: now,
+        dict: f
+          ? { ready: f.ready, loading: f.loading, error: f.error, path: f.path || "", tried: f.tried || [] }
+          : null,
+        pass: r
+          ? {
+              scanned: r.scanned || 0,
+              changed: r.changed || 0,
+              skips: (r.skips || []).slice(0, 6),
+              errors: (r.errors || []).slice(0, 4),
+            }
+          : null,
+        // 这一轮扫描花了多久（卡顿时看它）
+        ms: state.lastPassMs || 0,
+        // 外部网站这一路的状态：开没开、有没有取到、取到几行
+        ext: {
+          on: externalEnabled(),
+          lines: externalState.index ? externalState.index.count : 0,
+          status: externalState.status || "",
+        },
+      });
+      var prev = "";
+      try {
+        prev = localStorage.getItem(STATUS_KEY) || "";
+      } catch (ePrev) {
+        prev = "";
+      }
+      if (prev && prev.indexOf('"ms":' + (state.lastPassMs || 0)) >= 0) return;
       localStorage.setItem(
         STATUS_KEY,
-        JSON.stringify({
-          at: now,
-          dict: f
-            ? { ready: f.ready, loading: f.loading, error: f.error, path: f.path || "", tried: f.tried || [] }
-            : null,
-          pass: r
-            ? {
-                scanned: r.scanned || 0,
-                changed: r.changed || 0,
-                skips: (r.skips || []).slice(0, 6),
-                errors: (r.errors || []).slice(0, 4),
-              }
-            : null,
-          // 这一轮扫描花了多久（卡顿时看它）
-          ms: state.lastPassMs || 0,
-          // 外部网站这一路的状态：开没开、有没有取到、取到几行
-          ext: {
-            on: externalEnabled(),
-            lines: externalState.index ? externalState.index.count : 0,
-            status: externalState.status || "",
-          },
-        })
+        payload
       );
     } catch (e) {
       /* localStorage 满了 / 不可用都不影响注音 */
