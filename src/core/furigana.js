@@ -330,10 +330,12 @@
     /*
      * 全片假名的括号读音是"标注"（`幕（エンドロール）`、`拍手（ポップコーン）`、
      * `天（スターダム）`）—— 借词本来就比汉字长，不按拍数卡。
-     * 平假名的长短语则多半是跟着唱的词（`もう一回（もういいかい）`），才用拍数判。
+     * 单个汉字也不卡：`谺(こだま)` 这种表外字的读法本来就长。
+     * 只有"两个以上汉字 + 平假名长短语"才用拍数判（`もう一回（もういいかい）`）。
      */
     var katakanaOnly = /^[\u30A1-\u30FA\u30FC\u30FB]+$/.test(kana);
-    if (!katakanaOnly && kana.length > capacity(base)) {
+    var baseNonKana = String(base).replace(/[\u3041-\u3096\u30A1-\u30FA]/g, "");
+    if (!katakanaOnly && baseNonKana.length > 1 && kana.length > capacity(base)) {
       /*
        * 拍数比底字能有的读音还长 → 括号里那句**不是这个字的读音**
        * （`もう一回（もういいかい）` 是跟着唱的问句，`一回` 顶多 5 拍）。

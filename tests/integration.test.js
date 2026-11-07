@@ -7156,6 +7156,29 @@ test("括号读音的底字太宽、网站有更窄的同读法时用网站的�
   );
 });
 
+test("永遠 有 とわ 候选（歌词里常按 とわ 唱）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>永遠の約束を</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 永遠: "エイエン", の: "ノ", 約束: "ヤクソク", を: "ヲ" }));
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "永遠")[0];
+  assert.ok(ruby, "永远 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  assert.ok(chips.indexOf("とわ") >= 0, "候选里要有 とわ：" + JSON.stringify(chips));
+  const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "とわ")[0];
+  chip.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  const after = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(after[0], ["永遠", "とわ"], "点 とわ 要生效：" + p.innerHTML);
+});
+
 test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词典", async () => {
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td><a href="/song/123/">泡沫の夢</a></td>
