@@ -2912,7 +2912,11 @@ function buildRuby(base, gloss, provisional, source) {
       }
 
       var slots = slotsOf(region);
-      if (!wrapSafe(region, slots)) return 0;
+      if (!wrapSafe(region, slots)) {
+        // 留给排障：这一行"整行改写不安全"（里面有别人的节点 / 宿主嵌套），退回逐节点那条路
+        noteSkip("整行改写不安全", slots ? slots.text : "", region);
+        return 0;
+      }
       var text = slots.text;
       /*
        * 「这行一直在变」和「注什么就被抹什么」那两道闸门。

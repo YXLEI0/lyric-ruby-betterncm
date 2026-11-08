@@ -10,11 +10,11 @@
  *   2. 日式罗马音切分（sekai -> セカイ，歌词里官方写的罗马音）
  *   3. 西文各语种的拼读（core/langs.js：法 / 德 / 拉 / 葡 / 荷 / 斯瓦希里 / 拼音 / 俄 / 希）
  *      以及各语言的借词表（core/loan.js）
- *   4. 免费接口（开着在线时，只查"猜的、没把握"的词）
+ *   4. 大模型校正 / 免费接口（配了 key 或开着在线时，只查"猜的、没把握"的词）
  *   5. 英文音译规则（light -> ライト，兜底，永远给得出结果）
  *
- * 日语读音不走大模型（只留离线词典 / 罗马音 / 网站读音 / 规则，可复现、不花钱）；
- * 大模型那层只服务中文歌词的多音字。
+ * 大模型管的是**西文读音**（还有中文多音字）；日语汉字的振假名不走它 ——
+ * 那条路只用离线词典 / 罗马音 / 网站读音 / 规则，可复现、不花钱。
  *
  * 另外两档"整首 / 整句专属读音"排在所有层前面（core/songs.js 与本文件里的
  * LINE_READINGS）；"连字符标记长音"是在常规读音之后再补一拍。
@@ -143,7 +143,7 @@
   var DEFAULTS = {
     enabled: true,
     online: true, // 词典/规则都没把握时是否联网校正（Google 接口，不用填 key）
-    // ---- 大模型（只用于中文歌词的多音字；日语读音不走它）
+    // ---- 大模型校正（西文读音 + 中文多音字；日语汉字的振假名不走它，见下）
     llmEnabled: true,
     llmEndpoint: "https://api.deepseek.com/chat/completions",
     llmModel: "deepseek-chat",
@@ -153,7 +153,7 @@
      * 记号 / 缩写 / 字母名 / 长音符罗马字不在这张表里 —— 那是"这个词该怎么断"，
      * 不是"读音该信谁"，永远最先判（见 core/reading.js 的 lookup）。
      */
-    layerOrder: ["dict", "romaji", "google", "rule"],
+    layerOrder: ["dict", "romaji", "llm", "google", "rule"],
     // ---- API 用量统计：单价只用来"估算花费"，0 = 不算（单位：元 / 百万 token）
     usagePriceIn: 0,
     usagePriceOut: 0,
@@ -235,10 +235,11 @@
    * 记号 / 缩写 / 字母名 / 长音符罗马字（`D/N/A`、`I'll`、`LDK`、`Tōkyō`）不在这张表里，
    * 它们决定的不是"读音该信谁"，而是"这个词该怎么断"，永远最先判。
    */
-  var LAYER_IDS = ["dict", "romaji", "google", "rule"];
+  var LAYER_IDS = ["dict", "romaji", "llm", "google", "rule"];
   var LAYER_NAMES = {
     dict: "离线词典",
     romaji: "日式罗马音",
+    llm: "大模型校正",
     google: "免费接口",
     rule: "英文音译规则",
   };
@@ -1879,6 +1880,13 @@
           var capsKey = capsWord.toLowerCase();
           var fallbackKana = own(UNCERTAIN_FALLBACK, capsKey) ? UNCERTAIN_FALLBACK[capsKey] : null;
           if (fallbackKana) return { kana: fallbackKana, source: "rule", confident: false };
+          if (state.llm && state.llm.want) {
+            try {
+              state.llm.want(capsWord, line);
+            } catch (e) {
+              /* 记不上不影响注音 */
+            }
+          }
           return null;
         }
       }
@@ -2037,7 +2045,34 @@
       if (!ASYNC_LAYERS[id]) continue;
       // 排在当前答案后面的在线层不参与：不发请求、也不覆盖
       if (i >= mine) break;
+      /*
+       * 大模型这一层现在用不了（没配 key / 没开）也要记一笔：
+       * 注音层只在注音那一刻走这里一次，不记的话等 key 补上/这一层重新打开时
+       * 就没人再问那个词了 —— 页面上看到的正是「这个单词一直是黄的」
+       * （`sieh` 就是这么一直黄着的）。记下来之后，这一层一可用就会补问。
+       */
+      if (id === "llm" && !layerAvailable(id)) {
+        if (state.llm.want) {
+          try {
+            state.llm.want(word, line);
+          } catch (e) {
+            /* 记不上不影响注音 */
+          }
+        }
+        continue;
+      }
       if (!layerAvailable(id)) continue;
+
+      if (id === "llm") {
+        if (line !== undefined && line !== null) {
+          var llm = state.llm.lookup(word, line);
+          if (llm) return { kana: llm, source: "llm" };
+        }
+        // 这个词还没问到结果：先用在别的句子里拿到的读音，其次用当前这层的读音顶上
+        var seen = state.llm.peek(word);
+        if (seen) return { kana: seen, source: "llm" };
+        return { kana: r.kana, source: r.source };
+      }
 
       // 免费接口（Google）
       var fixed = state.corrector.lookup(word);
@@ -2084,7 +2119,11 @@
       if (!ASYNC_LAYERS[id]) continue;
       if (i >= mine) break; // 这一层不参与，后面的更不参与
       if (!layerAvailable(id)) continue;
-      if (state.corrector.isWaiting && state.corrector.isWaiting(word)) return true;
+      if (id === "llm") {
+        if (state.llm.isWaiting && state.llm.isWaiting(word, line)) return true;
+      } else if (state.corrector.isWaiting && state.corrector.isWaiting(word)) {
+        return true;
+      }
       // 这一层已经答过了（或确定给不出）—— 显示的就是最终答案，不是暂定
       return false;
     }
@@ -4415,22 +4454,41 @@
   }
 
   /**
-   * 两批 token 的读音是不是一模一样（平/片假名不算区别）
-   *
-   * 用来判"只是切得粗细不同"：网站 `芸術 = げいじゅつ` 一个词，词典
-   * `芸 = げい` + `術 = じゅつ` 两个字 —— 念出来一样，取**切得更细**的那一方
-   * （细的那种一格一个读音，逐字歌词里才对得上；用户要求）。
+   * 读音的比较形式：去空白/中点，片假名折平假名（长音符原样保留）。
+   * 见下面的 sameKana（"两边读音一样、只是切得粗细不同"那种判据要用它）。
    */
+  function normKana(s) {
+    var t = String(s == null ? "" : s).replace(/[\s\u3000・]/g, "");
+    return t.replace(/[\u30A1-\u30FA\u30FC]/g, function (c) {
+      var code = c.charCodeAt(0);
+      if (code === 0x30FC) return "\u30FC";
+      return String.fromCharCode(code - 0x60);
+    });
+  }
+
   function sameKana(a, b) {
-    function norm(s) {
-      var t = String(s == null ? "" : s).replace(/[\s\u3000・]/g, "");
-      return t.replace(/[\u30A1-\u30FA\u30FC]/g, function (c) {
-        var code = c.charCodeAt(0);
-        if (code === 0x30FC) return "\u30FC";
-        return String.fromCharCode(code - 0x60);
-      });
+    return normKana(a) === normKana(b);
+  }
+
+  /**
+   * 网站那几段有没有把 [from, to) **整段**拼满；拼满了返回用到的段数，否则 0。
+   *
+   * 用来区分"网站只是另一种切法"（拼满 ≥2 段：`斜界` 被切成 斜/界）和
+   * "网站只标了其中一部分"（`翔ろ天` 只标 天）—— 前者别把作者的括号读音顶掉。
+   */
+  function coveredSpanCount(list, from, to) {
+    var n = 0;
+    var at = from;
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t || t.end <= at) continue;
+      if (t.start > at) break; // 中间断了，拼不满
+      if (t.start !== at) continue;
+      n++;
+      at = t.end;
+      if (at >= to) return n;
     }
-    return norm(a) === norm(b);
+    return 0;
   }
 
   /**
@@ -4500,6 +4558,15 @@
       for (i = 0; i < base.length; i++) {
         var itk = base[i];
         if (!itk || itk.kind !== "inline" || !itk.kana) continue;
+        /*
+         * 网站把这段**整段**重新切了一遍（≥2 段、首尾正好拼满）时不让：
+         * 那只是同一段文字的另一种切法，作者在括号里写的就是官方读法。
+         * 真机：`斜界(しゃかい)` 网站标 斜=はす / 界=しゃかい —— 让给网站之后
+         * 读音落到 界 一个字上，屏幕上就是「斜界只注了界」（用户报的）。
+         * 网站只标了其中**一部分**（`翔ろ天(スターダム)` 只标 天）时才让给它：
+         * 那种情况是作者括号写得宽了，会把 翔 的读音一起盖掉。
+         */
+        if (coveredSpanCount(ext, itk.start, itk.end) >= 2) continue;
         var cands = extByEnd[String(itk.end)];
         if (!cands) continue;
         for (j = 0; j < cands.length; j++) {
@@ -4509,6 +4576,31 @@
           break;
         }
       }
+    }
+    /*
+     * 网站那一段正好在本地更粗的 token **尾巴上**、读音也一致 —— 这条不许把它顶掉。
+     *
+     * 真机：`100回` 分词给的是 100回=ひゃっかい，网站只把 回 标成 かい。
+     * 按"有交集就替换"的规矩，粗的那条被丢掉、网站那条补上 —— 结果 `100`
+     * 一个读音都没有（用户报的「100 没读音」）。读音对得上就说明是同一条，
+     * 粗的那条信息更全，留着。
+     */
+    function siteTailOfCoarser(extTok) {
+      var mine = normKana(extTok.kana);
+      if (!mine) return false;
+      for (var q = 0; q < base.length; q++) {
+        var bt2 = base[q];
+        if (!bt2 || !bt2.kana || bt2.hide || bt2.blank) continue;
+        if (bt2.start >= extTok.start) continue; // 没有更靠前的部分，不是"尾巴"
+        if (bt2.end !== extTok.end) continue; // 尾巴必须对齐
+        var theirs = normKana(bt2.kana);
+        if (theirs.length > mine.length && theirs.slice(theirs.length - mine.length) === mine) return true;
+      }
+      return false;
+    }
+    var siteCoarser = [];
+    for (j = 0; j < ext.length; j++) {
+      if (siteTailOfCoarser(ext[j])) siteCoarser[j] = true;
     }
     for (i = 0; i < base.length; i++) {
       var tk = base[i];
@@ -4526,7 +4618,7 @@
       }
       var hit = false;
       for (j = 0; j < ext.length; j++) {
-        if (coarser[j]) continue; // 这一格比本地切得粗：本地那几段留着
+        if (coarser[j] || siteCoarser[j]) continue; // 这一格比本地切得粗 / 只是粗那条的尾巴：本地那几段留着
         if (ext[j].start < tk.end && tk.start < ext[j].end) {
           hit = true;
           break;
@@ -4535,7 +4627,7 @@
       if (!hit) out.push(tk);
     }
     for (j = 0; j < ext.length; j++) {
-      if (coarser[j]) continue;
+      if (coarser[j] || siteCoarser[j]) continue;
       var blocked = false;
       for (i = 0; i < base.length; i++) {
         var keepTk = base[i];
@@ -5842,17 +5934,17 @@
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateLatinJa"> 日语歌里夹的西文也标</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHanzi"> 中文歌词标普通话读音</label></div>' +
       '<div class="wk-row"><label><input type="checkbox" data-k="annotateHangul"> 朝鲜语歌词标朝鲜语读音</label></div>' +
-      "<h3>大模型</h3>" +
+      "<h3>大模型校正</h3>" +
       /*
-       * 日语读音**不走大模型**了（用户明确要求删掉那一路）：本插件给日语歌词
-       * 标的读音只来自词典 / 罗马音 / 网站 / 规则，可复现、不花钱、不会因为
-       * 模型换个答案就变。这里留着的大模型只服务一件事：中文歌词里的多音字
-       * （`行` 读 xíng 还是 háng）—— 中文没有网站读音兜底，离线表只能给最常见那档。
+       * 大模型管两件事：西文词的片假名读音（词典没收录、规则只能拼个大概的那些，
+       * `kaleidoscope` → カレイドスコープ）、中文歌词的多音字（行 xíng / háng）。
+       * **日语汉字的振假名不走它**（用户明确要求删掉那一路）：那一路的读音只来自
+       * 词典 / 罗马音 / 网站 / 规则，可复现、不花钱、不会因为模型换个答案就变。
        */
-      '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型挑中文多音字读音</label></div>' +
+      '<div class="wk-row"><label><input type="checkbox" data-k="llmEnabled"> 用大模型校正读音</label></div>' +
       '<div class="wk-row"><input type="password" data-k="llmKey" placeholder="大模型 API Key（留空则不用）"> ' +
       '<button data-a="llmTest">测试</button> <span data-v="llmTest"></span></div>' +
-      '<div class="wk-hint">只影响中文歌词（普通话读音）；日语读音不用大模型。</div>' +
+      '<div class="wk-hint">管西文词的片假名读音和中文多音字；日语汉字的振假名不用大模型。</div>' +
       "<h3>预览</h3>" +
       '<div class="wk-preview"></div>' +
       '<details class="wk-adv"><summary>高级设置</summary>' +
@@ -5929,6 +6021,7 @@
       if (id === "dict") return "(" + (typeof WKDict !== "undefined" ? WKDict.count : "?") + " 条, 纯离线)";
       if (id === "romaji") return "(歌词里的日式罗马字, 纯离线)";
       if (id === "rule") return "(拼写音译, 永远给得出结果)";
+      if (id === "llm") return llmAvailable() ? "(已启用)" : "(没启用 / 没填 key)";
       if (id === "google") return googleAvailable() ? "(已开启)" : "(已关闭)";
       return "";
     }
