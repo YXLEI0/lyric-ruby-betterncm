@@ -699,23 +699,6 @@ test("逐字词格：逐字层改回 block（和普通行一样按基线排、�
  * 结构照 RNP 真机来：时长 / 起始推迟写在格子里那个 span 上，
  * 不在词格 div 上（写到 div 上等于没写，真机上高亮照旧只跑头一格）。
  */
-/*
- * 整组扫光靠我们自己的 CSS 动画（`@keyframes wk-sweep`）：
- *   - 时长是整组时长、用负 delay 跳进度；
- *   - 不在当前行时必须撤掉动画（animation: none !important），
- *     否则唱完那一行之后遮罩会一直停在"已唱完"，下一轮歌词全亮着。
- */
-test("跨格的词：样式表里有 wk-sweep 关键帧，非当前行撤掉动画", () => {
-  const ctx = newCtx();
-  ctx.WKAnnotate.applyStyles(ctx.document, {});
-  const css = ctx.document.getElementById("lyric-ruby-style").textContent;
-  assert.match(css, /@keyframes wk-sweep \{[^@]*?-webkit-mask-position-x:\s*100%/, "要有 wk-sweep 关键帧：" + css.slice(0, 200));
-  assert.match(
-    css,
-    /body\.rnp-karaoke-animation-slide[^{]*:not\(\[offset="0"\]\)[^{]*\.rnp-karaoke-word-filler \{[^}]*animation:\s*none !important/,
-    "不在当前行要撤掉动画"
-  );
-});
 
 test("跨格的词：逐字时长 = 整组的时间跨度（写在格内 span 和它的替身上）", () => {
   /*
@@ -810,41 +793,6 @@ test("跨格的词：行开始时（offset 变化后的下一轮）重新累加�
   );
 });
 
-/*
- * 已经在跑的 transition 改不了时长（CSS Transitions 规定 transition-* 的改动
- * 不影响运行中的过渡），所以整组扫光改用**我们自己的 CSS 动画**：动画盖得住
- * 内联样式和 transition，还能用负 delay 跳到任意进度。
- */
-test("跨格的词：整组扫光用 wk-sweep 动画，按已经过去的毫秒数跳进度", () => {
-  const cell = (c, r, n) =>
-    `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">` +
-    `<span>${c}</span>` +
-    `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s">${c}</span></div>`;
-  const ctx = newCtx(`<!doctype html><html><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", 0, 200)}${cell("温", 200, 200)}</div></div></div>
-</body></html>`);
-  forceRubyLayout(ctx, true);
-  const ann = makeAnnotator(ctx, {
-    annotator: { lineTokens: () => [{ start: 0, end: 2, kana: "たいおん" }] },
-  });
-  ann.pass();
-  const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
-  const filler = words[0].querySelector(".rnp-karaoke-word-filler");
-  assert.strictEqual(filler.style.animationName, "wk-sweep", "要用我们的动画：" + filler.getAttribute("style"));
-  assert.strictEqual(filler.style.animationDuration, "400ms", "整组时长：" + filler.getAttribute("style"));
-  assert.strictEqual(filler.style.animationFillMode, "both", "跑完要停在已唱完的状态");
-  // 刚开始唱：锚点到这一趟扫描之间可能已经过了几毫秒，所以只要求"接近 0"
-  const startDelay = parseFloat(filler.style.animationDelay) || 0;
-  assert.ok(Math.abs(startDelay) <= 60, "刚开始唱应该从 ~0 起：" + filler.getAttribute("style"));
-  assert.strictEqual(filler.__wkGrp, 400, "标记里记着整组时长（排障导出用）");
-  // 兜底的 transition 时长也一起写（动画被别的规则撤掉时还能用）
-  assert.match(filler.style.transitionDuration, /^400ms/, "兜底的 transition 时长：" + filler.getAttribute("style"));
-
-  // RNP 重绘：把替身的时长写回它自己的那一格，再补一次
-  filler.style.transitionDuration = "200ms, 160ms, 0.5s";
-  ann.retimeLines();
-  assert.match(filler.style.transitionDuration, /^400ms/, "补回整组时长：" + filler.getAttribute("style"));
-});
 
 test("跨格的词：紧跟的括号读音那几格也算进同一组的时长", () => {
   const line = "怒れる人(ラングラー)を";
@@ -896,44 +844,32 @@ test("跨格的词：紧跟的括号读音那几格也算进同一组的时长",
 });
 
 /*
- * 后面的词不许抢跑。
+ * 负数的 `transition-delay` 必须能读。
  *
- * 每个词的动画推迟要用**它自己的起点**：这一行唱了 0ms 时，起点 400ms 的那个词
- * 得 delay = 400ms（等着），而不是 0ms —— 1.32.11 只写了"已经跑了多久"（负 delay），
- * 把 RNP 的起始推迟整个丢了，第二个注音词立刻就亮（用户报的「第二个有注音的词抢跑了」）。
+ * RNP 给当前行写的推迟是**倒计时**：已经开唱的词是负数（`-300ms`）。
+ * 以前这里只认正数，读到负数当成"读不出来"、整组直接跳过 —— 句首那些
+ * "行一开始就唱"的词因此永远拿不到整组时长，扫光按头一格的时间刷一下就完
+ * （真机：一切合切 跳太快）。这条守着它。
  */
-test("跨格的词：还没轮到的词要等着（delay = 起点 - 已唱时长）", () => {
-  let now = 1000;
+test("跨格的词：负的推迟（已经开唱）也要能读出整组时长", () => {
   const cell = (c, r, n) =>
     `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">` +
     `<span>${c}</span>` +
     `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s">${c}</span></div>`;
+  // 头一格已经开唱 300ms、最后一格还要 100ms 才开始：整组 = -100 + 200 - (-300) = 400ms
   const ctx = newCtx(`<!doctype html><html><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", 0, 200)}${cell("温", 200, 200)}${cell("心", 400, 200)}${cell("の", 600, 200)}</div></div></div>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", -300, 200)}${cell("温", -100, 200)}</div></div></div>
 </body></html>`);
   forceRubyLayout(ctx, true);
-  const ann = makeAnnotator(ctx, {
-    annotator: {
-      now: () => now,
-      lineTokens: () => [
-        { start: 0, end: 2, kana: "たいおん" },
-        { start: 2, end: 4, kana: "こころの" },
-      ],
-    },
-  });
-  ann.pass();
+  makeAnnotator(ctx, {
+    annotator: { lineTokens: () => [{ start: 0, end: 2, kana: "たいおん" }] },
+  }).pass();
 
   const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
-  const f1 = words[0].querySelector(".rnp-karaoke-word-filler");
-  const f2 = words[2].querySelector(".rnp-karaoke-word-filler");
-  assert.strictEqual(f1.style.animationDuration, "400ms", "第一组 0→400ms：" + f1.getAttribute("style"));
-  assert.strictEqual(f1.style.animationDelay, "0ms", "第一组立刻开始：" + f1.getAttribute("style"));
-  assert.strictEqual(f2.style.animationDuration, "400ms", "第二组也是 400ms：" + f2.getAttribute("style"));
-  assert.strictEqual(f2.style.animationDelay, "400ms", "第二组要等它自己的起点（400ms）才亮：" + f2.getAttribute("style"));
-
-  // 半秒之后再看：第一组早就跑完了，第二组正好唱到 100ms
-  now = 1500;
-  ann.pass();
-  assert.strictEqual(f2.style.animationDelay, "-100ms", "第二组应该已经唱了 100ms：" + f2.getAttribute("style"));
-  assert.strictEqual(f2.style.animationFillMode, "both", "跑完要停在已唱完的状态");
+  const filler = words[0].querySelector(".rnp-karaoke-word-filler");
+  assert.match(
+    filler.style.transitionDuration,
+    /^400ms/,
+    "整组 400ms（负数推迟也要算进去）：" + filler.getAttribute("style")
+  );
 });
