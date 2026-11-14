@@ -2932,6 +2932,12 @@ function buildRuby(base, gloss, provisional, source, flat) {
         var tc = timingElOf(hosts[ci]);
         perCell.push([readMs(tc.style.transitionDelay), readMs(tc.style.transitionDuration)]);
       }
+      /*
+       * 这一组"已经唱了多久" = 这一行唱了多久 - 这一组的起点。
+       * 负数 = 还没轮到它（写成正的 delay 让它等着，别抢跑）。
+       */
+      var lineMs = lineElapsedMs(first);
+      var since = lineMs == null ? 0 : lineMs - r0;
       noteRetime({
         at: clock(),
         line: String(grp.line || "").slice(0, 60),
@@ -2940,6 +2946,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
         rN: rN,
         dN: dN,
         total: total,
+        since: since,
+        lineMs: lineMs,
         cellS: perCell,
         prev: filler.style.transitionDuration,
         // 原始字符串：`1ms` 和 `0.001s` 读出来都是 1，要看清是谁写的
@@ -2947,7 +2955,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
         delay0: String(t0.style.transitionDelay || ""),
         offset: offsetOf(first),
       });
-      retimeFiller(filler, total, readMs(t0.style.transitionDuration));
+      retimeFiller(filler, total, since);
     }
 
     /**
@@ -2958,49 +2966,82 @@ function buildRuby(base, gloss, provisional, source, flat) {
      * RNP 就用"头一格那点时间"把扫光起了个头，我们下一帧再改就是白改；靠"重启一次"
      * 补，又依赖 pass 什么时候跑（一帧到几百毫秒都有），时序一歪就看着像跳。
      *
-     * 换成 CSS 动画就不一样了：动画**盖得住**内联样式和 transition，
-     * 而且可以随时用负的 `animation-delay` **跳到任意进度** —— 于是每次 pass 都能写
-     * "按现在已经过去多少毫秒，从哪儿接着跑"，写多少次结果都一样（幂等），
-     * 不再依赖谁先谁后。
+     * 换成 CSS 动画就不一样了：动画**盖得住**内联样式和 transition，而且可以随时用
+     * `animation-delay` **跳到任意进度**（负 delay = 已经跑了多久，正 delay = 还要等多久）。
+     *
+     * 时间从哪来：**这一行唱了多久**（我们自己在 offset 变成 "0" 的那一刻打个点，
+     * 见 lineElapsedMs）。减去这一组自己的起点 r0 就是"这一组已经唱了多久"——
+     * 负数说明还没轮到它，那就写成正的 delay 让它等着。这样每个词都按自己的
+     * 起点走，晚出现的词不会抢跑（1.32.11 的毛病：只写了负 delay，把 RNP 的
+     * 起始推迟整个丢了，第二个词立刻就亮）。
      */
-    function sweepProgress(el) {
-      try {
-        var win = doc.defaultView;
-        if (!win || !win.getComputedStyle) return null;
-        var cs = win.getComputedStyle(el);
-        var v = cs.webkitMaskPositionX || cs.getPropertyValue("-webkit-mask-position-x");
-        var n = parseFloat(String(v || ""));
-        if (!isFinite(n)) return null;
-        return Math.max(0, Math.min(1, 1 - n / 100));
-      } catch (e) {
-        return null;
-      }
-    }
-
-    function retimeFiller(el, total, ownMs) {
+    function retimeFiller(el, total, since) {
       var dur = total + "ms, " + Math.round(total * 0.8) + "ms, 0.5s";
-      /*
-       * 已经过去多少毫秒：看遮罩现在停在百分之几。
-       *   - 第一次（还没接上我们的动画）：遮罩是 RNP 那条 transition 在动，
-       *     它的时长是"头一格自己的时长"，所以用 ownMs 换算
-       *   - 之后：遮罩是我们的动画在动，用整组时长换算
-       * 换算出来的数就是"这一组已经唱了多少"，写进负 delay 就能接上，不会重头再来。
-       */
-      var prog = sweepProgress(el);
-      var span = el.__wkGrp === total && el.__wkSweep ? total : ownMs || total;
-      var elapsed = prog == null ? 0 : Math.round(prog * span);
-      if (elapsed > total) elapsed = total;
       if (el.style.transitionDuration !== dur) el.style.transitionDuration = dur;
+      var at = since == null ? 0 : since;
+      if (at < -total) at = -total;
+      if (at > total) at = total;
       el.__wkGrp = total;
+      el.__wkSince = at;
+      /*
+       * 进度没变（同一轮 pass 重算）就不重起动画 —— 重起要走一次强制刷新，
+       * 而且每次都重起会看着一抖一抖的。
+       */
+      if (el.__wkSweep && Math.abs(at - el.__wkSinceApplied) < 60 && el.style.animationName === "wk-sweep" && el.style.animationDuration === total + "ms") {
+        return;
+      }
       el.__wkSweep = 1;
-      // 先撤掉动画并刷一次样式，否则同名动画不会重新起（时长变了但 delay 不会更新）
+      el.__wkSinceApplied = at;
+      // 先撤掉动画并刷一次样式，否则同名动画不会重新起（时长 / delay 都不会更新）
       el.style.animationName = "none";
       if (el.offsetWidth !== undefined) el.offsetWidth;
       el.style.animationName = "wk-sweep";
       el.style.animationDuration = total + "ms";
       el.style.animationTimingFunction = "linear";
       el.style.animationFillMode = "both";
-      el.style.animationDelay = "-" + elapsed + "ms";
+      el.style.animationDelay = (-at) + "ms";
+    }
+
+    /**
+     * 给每一行打"什么时候变成当前行"的点（只认带 `offset` 属性的 RNP 歌词行）。
+     *
+     * RNP 每次换行会把**所有**行的 offset 重写一遍（offset = 行号 - 当前行号），
+     * 所以只看变化：变成 "0" 的那一刻记时间戳，离开 "0" 就清掉。
+     */
+    function noteLineClocks(regions) {
+      for (var i = 0; i < regions.length; i++) {
+        var r = regions[i];
+        if (!r || r.nodeType !== 1 || !r.getAttribute) continue;
+        var off = r.getAttribute("offset");
+        if (off == null || r.__wkOff === off) continue;
+        r.__wkOff = off;
+        r.__wkAt = off === "0" ? clock() : null;
+      }
+    }
+
+    /**
+     * 这一行已经唱了多少毫秒；还没轮到（offset 不是 "0"）就返回 null。
+     *
+     * 为什么自己打点：RNP 把 `r = 词起点 - 行起点` 写在每一格上，但行起点本身
+     * 拿不到（而且实测会随每次重绘漂），所以就在"这一行变成当前行"的那一刻记一次
+     * 时间戳（noteLineClocks），之后都从它算。
+     */
+    function lineElapsedMs(el) {
+      var line = null;
+      for (var p = el, d = 0; p && p.nodeType === 1 && d < 8; p = p.parentNode, d++) {
+        if (p.getAttribute && p.getAttribute("offset") != null) {
+          line = p;
+          break;
+        }
+      }
+      if (!line) return null;
+      var off = line.getAttribute("offset");
+      if (line.__wkOff !== off) {
+        line.__wkOff = off;
+        line.__wkAt = off === "0" ? clock() : null;
+      }
+      if (!line.__wkAt) return null;
+      return clock() - line.__wkAt;
     }
 
     function retimeGroups(rec) {
@@ -3413,6 +3454,12 @@ function buildRuby(base, gloss, provisional, source, flat) {
       // 会把空数组当成"没传"，于是"不标任何区域"反而变成了"扫默认区域"——
       // 设置里关掉播放栏标注后它还在注音，就是这个 bug。
       var list = regions ? regions : findRegions("safe");
+      /*
+       * 先给"哪一行什么时候变成当前行"打点（见 lineElapsedMs）。
+       * 必须在这里、每轮都看一眼：等到我们要重记时长时才第一次看，锚点就晚了几百毫秒，
+       * 那几拍会被当成"这一行才刚开始"，整组高亮跟着往后拖。
+       */
+      noteLineClocks(list);
 
       var changed = 0;
       var skipped = 0;
