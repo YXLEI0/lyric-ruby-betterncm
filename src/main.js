@@ -5327,6 +5327,18 @@
       try {
         for (var i = 0; i < records.length; i++) {
           var r = records[i];
+          /*
+           * 逐字歌词换行时 RNP 只改两样东西：这一行的 `offset` 属性、以及每个
+           * 词格的 inline style（当前行才有逐字时长）。这两样不改就发现不了
+           * 「这一行开始唱了」—— 跨格词的时长要在那一刻重新加一次。
+           * style 每帧都在变，只认 offset（一行只变一次）。
+           */
+          if (r.type === "attributes") {
+            if (r.attributeName !== "offset") continue;
+            if (!touchesLyrics(r.target)) continue;
+            schedule(0);
+            return;
+          }
           if (r.type !== "characterData" && r.type !== "childList") continue;
           if (!touchesLyrics(r.target)) continue;
           schedule(0);
@@ -5337,7 +5349,13 @@
       }
     });
     state.observer = observer;
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["offset"],
+    });
 
     // 兜底：observer 可能漏掉（React 换了元素、或我们自己在 pass 里清了记录）。
     // 但先花一次选择器确认页面上真有一块歌词 —— 没有就别排扫描了。

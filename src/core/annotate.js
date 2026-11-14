@@ -1730,26 +1730,10 @@ function makeBlankSpan(d, t) {
  * 断行、避让交给内核。
  */
 function buildRuby(base, gloss, provisional, source, flat) {
-      var ruby = doc.createElement(flat ? "span" : "ruby");
+      var ruby = doc.createElement("ruby");
       ruby.className = "wk-ruby" + (provisional ? " wk-pending" : "") + (source ? " wk-src-" + source : "");
       ruby.appendChild(doc.createTextNode(base));
-      /*
-       * 逐字词格里的注音要缩到不超出底字宽度：RNP 的高亮副本（filler）带遮罩，
-       * 遮罩只覆盖副本自己的盒子，超出格子的注音会被裁掉两头。
-       * 把「底字数 / 读音数」写成变量，样式表里 font-size 取
-       * min(面板字号, 这个值) —— 刚好缩到底字那么宽。
-       */
-      if (flat && base && gloss) {
-        var fit = Math.round((String(base).length / String(gloss).length) * 100);
-        if (fit > 0 && fit < 400) {
-          try {
-            ruby.style.setProperty("--wk-rt-fit", fit + "%");
-          } catch (eFit) {
-            /* 不支持变量就算了，退回面板字号 */
-          }
-        }
-      }
-      if (!flat && hasRubyLayout(doc)) {
+      if (hasRubyLayout(doc)) {
         var rt = doc.createElement("rt");
         rt.className = "wk-rt";
         rt.textContent = gloss;
@@ -3135,53 +3119,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return 2;
     }
 
-    /*
-     * 让 RNP 重量一次行高。
-     *
-     * RNP 把每行的位置算成"前面各行 clientHeight 之和"，而这个和只在它自己
-     * recalc 的时候重量（换字号 / 开歌词页 / 窗口 resize）。我们给逐字词格加
-     * 让位高度之后，它手里那份还是旧数字 —— 行距就对不上（真机上表现为
-     * 行与行之间忽大忽小，或者注音压到上一行）。它自己留了 `recalc-lyrics`
-     * 这个 window 事件用来强制重量，jp-furigana 也是这么通知它的。
-     *
-     * 只在真的改过行的时候发，而且 400ms 内只发一次：换歌时连续几轮重建，
-     * 每轮都发就等于让 RNP 一直重排。
-     */
-    var recalcTimer = null;
-    var lastRecalcAt = 0;
-
-    function requestRecalc() {
-      var win = doc && doc.defaultView;
-      if (!win || !win.setTimeout || !win.dispatchEvent) return;
-      var now = Date.now();
-      if (now - lastRecalcAt < 400) return;
-      var karaoke = false;
-      try {
-        karaoke = !!doc.querySelector(".rnp-lyrics-line, .rnp-karaoke-word, .lyric-bar-inner");
-      } catch (eQ) {
-        karaoke = false;
-      }
-      if (!karaoke) return; // 没有逐字歌词插件就没人听
-      lastRecalcAt = now;
-      if (recalcTimer) return;
-      // 放到本轮之后发：它同步改的 DOM 会被这一轮的收尾逻辑当成"行被重建了"
-      recalcTimer = win.setTimeout(function () {
-        recalcTimer = null;
-        try {
-          win.dispatchEvent(new win.Event("recalc-lyrics"));
-        } catch (eD) {
-          /* 没有这个事件就算了 */
-        }
-      }, 0);
-    }
-
-    /** 记一条"过一会儿再试"（取最短的那个） */
-    function noteCtxRetry(ctx, ms) {
-      if (!(ms > 0)) return -1;
-      if (!(ctx.retry > 0) || ms < ctx.retry) ctx.retry = Math.round(ms);
-      return ctx.retry;
-    }
-
     /**
      * 跑一遍。
      *   regions 传了 -> 只扫这些区域
@@ -3584,7 +3521,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
        * 改过行就通知逐字歌词插件重量行高：它按 clientHeight 排行距，
        * 不重量就会拿着旧高度排行（换歌/换行时整块歌词会跳一下）。
        */
-      if (wrapOn && (wrapChanged || restored)) requestRecalc();
       /*
        * 把这一轮真正处理过的区域也交回去：上层（统一行距）要按"原文行"逐个写内联样式，
        * 自己再调一次 findRegions("lyrics") 就等于每轮多查一遍 DOM
@@ -3740,7 +3676,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "}",
       "rt.wk-rt, .wk-rt {",
       // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
-      "  font-size: min(var(--wk-rt-size, " + size + "%), var(--wk-rt-fit, 400%));",
+      "  font-size: " + size + "%;",
       "  opacity: " + opacity + ";",
       "  font-weight: normal;",
       "  font-style: normal;",
@@ -3775,57 +3711,19 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "  pointer-events: none;",
       "}",
       /*
-       * 逐字词格（RNP 的 `div.rnp-karaoke-word > span`）：整行改写后 wrap 是
-       * `span.wk-line.wk-word`。
+       * 逐字歌词的词格：和普通歌词行一样排，只是每格还带着 RNP 的动画。
        *
-       * 这里只做一件事：让注音**不占宽度、也不改行高**。
+       * RNP 在 slide 动画下把这一层设成 `display:flex; flex-wrap:wrap` —— 每个词格
+       * 是一个 flex 项。项高不一样（带注音的被 ruby 撑高），基线就对不齐；注音比
+       * 底字宽时整行的断行也和普通行不一样。
+       * 这里改回 `display:block`：词格是 inline-block，跟普通文字一样按基线排、
+       * 按字断行 —— 注音把格子撑宽、把行撑高，和没开逐字时一模一样。
        *
-       * ① 宽度。逐字行是 `display:flex; flex-wrap:wrap`，每个词格是一个 flex 项；
-       *    原生 ruby 的宽度是 max(底字, 注音)，一个字配两拍读音就变成 1.2em。
-       *    整行被注音撑长之后，行尾的字会被挤到下一行 —— 真机现象就是
-       *    `否 笑い合ってさよなら` 的「なら」掉到第二行。
-       *    所以词格里的注音绝对定位在底字正上方，格子宽度永远等于底字。
-       *
-       * ② 行高：**一格都不许变**。这一条踩过两次：
-       *    - 给词格加 padding-top 让位 → 带注音的行比不带注音的行高出一截，
-       *      RNP 按 clientHeight 排行距，两种行就排不到一起；
-       *    - 老路径那条 `> span:not(.wk-line)` 的 padding 会打到 RNP 的替身
-       *      （`.rnp-karaoke-word-filler`）上 —— 高亮那份被往下压 0.57em，
-       *      和底字那份错开，看着就是重影。
-       *    所以这里是零 padding、零 margin、line-height 不写（跟着 RNP 走）：
-       *    注音落在字和上一行之间本来就有空隙里。
-       *
-       * 也不用 `<ruby>`：网易云 3.x 的内核是 Chromium 91，给 ruby 做
-       * inline-block / 给 rt 做 absolute，它不按 ruby 排，会把注音当普通行内
-       * 内容丢到字后面（真机：`しょう` 跑到 `小` 的左边还折成两行）。
-       * 普通 span 就没有这个问题（jp-furigana 的降级模式也是这么写的）。
+       * 高亮副本（filler）的遮罩只覆盖副本自己的盒子，而原生 ruby 的盒子本来就
+       * 包含注音（宽度和高度都算进去了），所以不会被裁。
        */
-      ".rnp-karaoke-word .wk-line.wk-word {",
-      "  display: inline-block;",
-      "}",
-      ".rnp-karaoke-word .wk-line.wk-word .wk-ruby {",
-      "  position: relative;",
-      "  display: inline-block;",
-      "}",
-      ".rnp-karaoke-word .wk-line.wk-word .wk-rt {",
-      "  position: absolute;",
-      "  left: 50%;",
-      "  bottom: 100%;",
-      "  transform: translateX(-50%);",
-      "  -webkit-transform: translateX(-50%);",
-      "  display: block;",
-      "  line-height: 1.1;",
-      "  pointer-events: none;",
-      "}",
-      /*
-       * 高亮副本（filler）自带一层遮罩做"从左往右亮过去"，而遮罩默认只覆盖
-       * 副本自己的盒子（mask-clip: border-box）—— 注音在字的上方、超出盒子，
-       * 就会被裁掉。这里把盒子上边撑高 1em，再用负 margin 把内容挪回原位：
-       * 遮罩是横向渐变，纵向多高都不影响扫过的节奏，只是多给了注音一块地方。
-       */
-      ".rnp-karaoke-word .rnp-karaoke-word-filler {",
-      "  padding-top: 1em;",
-      "  margin-top: -1em;",
+      "body.rnp-karaoke-animation-slide .rnp-lyrics-line .rnp-lyrics-line-karaoke {",
+      "  display: block !important;",
       "}",
       // 词格里的 wrap 别再吃一层 opacity：RNP 的 `.rnp-karaoke-word span` 会给
       // 每一层 span 都写 0.4，嵌套相乘之后底字只剩 0.16，注音淡到看不见

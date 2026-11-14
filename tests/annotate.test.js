@@ -677,57 +677,18 @@ test("署名判据不能靠大小写不敏感的 /i：Music by the lake / Words 
 });
 
 /*
- * 逐字歌词（RNP 的 flex + wrap）最怕注音把词格撑宽：
- * 一格一个 flex 项，注音比底字宽就把整行撑长，行尾的字被挤到下一行
- * （真机：`否 笑い合ってさよなら` 的「なら」掉到第二行）。
- * 所以词格里的注音必须**不占宽度**，而且不能改行高（padding 一加，带注音的行
- * 就比别的行高一截，RNP 排出来的行距全乱）。
+ * 逐字歌词的词格要和普通歌词行一样排：注音把格子撑宽、把行撑高，按基线对齐。
+ * RNP 在 slide 动画下把逐字层设成 display:flex —— 每格一个 flex 项，带注音的
+ * 格子被 ruby 撑高，基线就和没注音的格子对不齐，断行也不一样。所以这里把它
+ * 改回 display:block，让词格像普通文字那样排。
  */
-test("逐字词格：wrap 是 inline-block，注音是绝对定位（不撑宽格子）", () => {
+test("逐字词格：逐字层改回 block（和普通行一样按基线排、按字断行）", () => {
   const ctx = newCtx();
   ctx.WKAnnotate.applyStyles(ctx.document, {});
   const css = ctx.document.getElementById("lyric-ruby-style").textContent;
-  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \{[^}]*display:\s*inline-block/);
-  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \.wk-rt \{[^}]*position:\s*absolute/);
-  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \.wk-rt \{[^}]*left:\s*50%/);
-});
-
-/*
- * 让位高度改了行高，RNP 却只在 recalc 时重量 —— 不通知它，行距就是旧数字。
- * jp-furigana 也是发这个事件通知它的。
- */
-test("逐字行改过之后通知 RNP 重量行高（recalc-lyrics）", async () => {
-  const ctx = newCtx(`<!doctype html><html><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke"><div class="rnp-karaoke-word is-cjk end-with-space"><span>否 </span><span class="rnp-karaoke-word-filler">否 </span></div><div class="rnp-karaoke-word is-cjk"><span>笑 </span><span class="rnp-karaoke-word-filler">笑 </span></div><div class="rnp-karaoke-word is-cjk"><span>合 </span><span class="rnp-karaoke-word-filler">合 </span></div><div class="rnp-karaoke-word is-cjk"><span>う </span><span class="rnp-karaoke-word-filler">う </span></div></div></div></div>
-</body></html>`);
-  forceRubyLayout(ctx, true);
-  let fired = 0;
-  ctx.window.addEventListener("recalc-lyrics", () => {
-    fired++;
-  });
-  makeAnnotator(ctx, {
-    annotator: {
-      lineTokens: () => [
-        { start: 0, end: 1, kana: "いな" },
-        { start: 1, end: 2, kana: "わら" },
-        { start: 2, end: 3, kana: "あ" },
-        { start: 3, end: 4, kana: "う" },
-      ],
-    },
-  }).pass();
-  // 事件是 setTimeout(0) 发的，等一拍
-  await new Promise((r) => setTimeout(r, 30));
-  assert.strictEqual(fired, 1, "改过逐字行之后要发一次 recalc-lyrics");
-
-  // 没有逐字歌词的页面不该发（原生歌词页没有这个事件，发了也是白发）
-  const plain = newCtx();
-  let plainFired = 0;
-  plain.window.addEventListener("recalc-lyrics", () => {
-    plainFired++;
-  });
-  makeAnnotator(plain).pass();
-  await new Promise((r) => setTimeout(r, 30));
-  assert.strictEqual(plainFired, 0);
+  assert.match(css, /body\.rnp-karaoke-animation-slide[^{]*\.rnp-lyrics-line-karaoke \{[^}]*display:\s*block/);
+  // 词格里还是真 ruby（注音跟着 ruby 排版，不缩、不裁）
+  assert.doesNotMatch(css, /\.rnp-karaoke-word \.wk-line\.wk-word \.wk-rt \{[^}]*position:\s*absolute/);
 });
 
 /*
@@ -764,4 +725,47 @@ test("跨格的词：逐字时长 = 各格时长之和（含括号读音那几�
   );
   const filler = words[0].querySelector(".rnp-karaoke-word-filler");
   assert.match(filler.style.transitionDuration, /^400ms/, "替身也要跟着改：" + filler.getAttribute("style"));
+});
+
+/*
+ * 行还没轮到的时候 RNP 给的是 0ms；真正开始唱时它才把每格的时长写进
+ * inline style（并且只改 offset 属性）—— 那一轮必须重新加起来，
+ * 否则高亮还是只跑头一格的时间（真机现象）。
+ */
+test("跨格的词：行开始时（offset 变化后的下一轮）重新累加时长", () => {
+  const style0 = ' style="transition-duration: 0ms, 0ms, 0.5s; transition-delay: 0ms, 0ms, 0ms"';
+  const cell = (c) =>
+    '<div class="rnp-karaoke-word is-cjk"' + style0 + '><span>' + c + "</span>" +
+    '<span class="rnp-karaoke-word-filler"' + style0 + ">" + c + "</span></div>";
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="3"><div class="rnp-lyrics-line-karaoke">${cell("体")}${cell("温")}${cell("が")}</div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  const ann = makeAnnotator(ctx, {
+    annotator: {
+      lineTokens: () => [
+        { start: 0, end: 2, kana: "たいおん" },
+        { start: 2, end: 3, kana: "が" },
+      ],
+    },
+  });
+  ann.pass();
+
+  // 这一行开始唱了：RNP 把 offset 改成 0、把每格的真实时长写进 style
+  const line = ctx.document.querySelector(".rnp-lyrics-line");
+  line.setAttribute("offset", "0");
+  const words = line.querySelectorAll(".rnp-karaoke-word");
+  for (let i = 0; i < words.length; i++) {
+    words[i].setAttribute(
+      "style",
+      "transition-duration: 200ms, 160ms, 0.5s; transition-delay: 0ms, 100ms, 0ms"
+    );
+  }
+  ann.pass();
+
+  assert.match(
+    words[0].style.transitionDuration,
+    /^400ms/,
+    "开始唱之后头一格要是 200+200：" + words[0].getAttribute("style")
+  );
 });
