@@ -580,7 +580,15 @@ test("作词者的括号读音：中间夹空格也要采（舞台 (セカイ)�
     t.text,
     t.kana || (t.hide ? "HIDE" : ""),
   ]);
-  assert.deepStrictEqual(bySpan, [["舞台", "ぶたい"]], "用户自己改的读音最优先：" + JSON.stringify(bySpan));
+  /*
+   * 用户自己改的读音最优先 —— 但**括号照样要藏**：读音让给用户，不等于把括号
+   * 又摆回歌词里（真机「心の（こころん）」改了读音之后括号冒出来）。
+   */
+  assert.deepStrictEqual(
+    bySpan,
+    [["舞台", "ぶたい"], [" (セカイ)", "HIDE"]],
+    "用户改过读音时括号也要藏：" + JSON.stringify(bySpan)
+  );
 });
 
 test("符号读音 / 括号读音带上左边的符号（∞回 なんかい、∞ むげん）", () => {

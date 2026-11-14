@@ -790,7 +790,21 @@
       for (var uq2 = 0; uq2 < spans.length; uq2++) {
         if (spans[uq2].start < unit.end && unit.start < spans[uq2].end) userFixed = true;
       }
-      if (userFixed) continue;
+      if (userFixed) {
+        /*
+         * 用户就地改过这一处的读音 —— 读音让给用户，但**括号照样要藏**
+         * （不然括号明晃晃留在歌词里：真机「心の（こころん）」改了读音之后
+         * 括号又冒出来了）。只藏括号，不动读音。
+         */
+        out.push({
+          text: s.slice(unit.hideStart, unit.hideEnd),
+          start: unit.hideStart,
+          end: unit.hideEnd,
+          hide: true,
+          kind: "hide",
+        });
+        continue;
+      }
       /*
        * 覆盖掉词典 / 模型 / vendor 给的那几条（舞台 ぶたい、狂 きょう）：
        * 作词者在括号里写的才是官方读法。vendor 藏好的括号也一起摘掉 ——

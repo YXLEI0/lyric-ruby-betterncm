@@ -2174,6 +2174,16 @@
 
   function saveInlineFix(lineText, at, word, kana) {
     if (!lineText || !word) return;
+    /*
+     * 记一笔"就地改读音"的细节（排障导出用）。真机上「改不动读音」有两种可能：
+     * 保存的键（行文本）和注音那一轮用的不一致，或者起点算歪了 ——
+     * 把这几项一起带走，一眼能看出来是哪一种。
+     */
+    try {
+      noteEditDiag({ line: lineText, word: word, kana: kana == null ? "" : kana, at: at });
+    } catch (eEd) {
+      /* 排障记录失败不影响保存 */
+    }
     var map = config.furiganaLineSpans;
     if (!map || typeof map !== "object") map = config.furiganaLineSpans = {};
     var list = map[lineText];
@@ -5048,14 +5058,43 @@
     return out;
   }
 
+  /** 最近几次"就地改读音"的保存细节（排障导出用，见 collectDiag 的 edits） */
+  var editDiag = [];
+  var EDIT_DIAG_KEEP = 6;
+
+  function noteEditDiag(row) {
+    editDiag.push({
+      at: Date.now(),
+      line: String(row.line || "").slice(0, 80),
+      lineLen: String(row.line || "").length,
+      at: row.at,
+      word: row.word,
+      kana: row.kana,
+      // 起点和底字对不对得上（对不上就等于保存了一条永远匹配不到的记录）
+      matches: String(row.line || "").substr(row.at, String(row.word || "").length) === String(row.word || ""),
+    });
+    while (editDiag.length > EDIT_DIAG_KEEP) editDiag.shift();
+  }
+
   function noteLineDiag(text, region, tokens) {
     var s = String(text == null ? "" : text);
     var row = { at: Date.now(), text: s, len: s.length, tokens: [] };
-    var sp = [];
-    for (var i = 0; i < s.length; i++) {
-      if (/[ \u3000]/.test(s.charAt(i))) sp.push(i);
+    /*
+     * 这一行有没有"就地改过的读音"（spans）。真机上括号不合并的一种原因是：
+     * 早先改读音时按错位置存了一条，于是括号读音让位给用户那条、括号留在了屏幕上。
+     * 排障时把这个一起带走，一眼就能看出来。
+     */
+    try {
+      var sp = config.furiganaLineSpans && config.furiganaLineSpans[s];
+      if (sp && sp.length) row.spans = sp;
+    } catch (eSp) {
+      /* 没有就算了 */
     }
-    if (sp.length) row.spaces = sp;
+    var sp2 = [];
+    for (var i = 0; i < s.length; i++) {
+      if (/[ \u3000]/.test(s.charAt(i))) sp2.push(i);
+    }
+    if (sp2.length) row.spaces = sp2;
     row.cells = cellsOf(region);
     for (var j = 0; j < (tokens || []).length; j++) {
       var t = tokens[j];
@@ -5132,6 +5171,7 @@
         wrapLines: config.wrapLines,
       },
       tokens: lineDiag.slice(),
+      edits: editDiag.slice(),
       wrap: state.annotator && state.annotator.diagLines ? state.annotator.diagLines() : [],
       retimes: state.annotator && state.annotator.diagRetimes ? state.annotator.diagRetimes() : [],
       dom: dom,

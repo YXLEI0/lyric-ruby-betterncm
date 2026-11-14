@@ -7736,3 +7736,147 @@ test("逐字歌词里双击数字的读音也能改（替身不许把起点算�
     .find((r) => (r.childNodes[0].nodeValue || "").trim() === "123");
   assert.strictEqual(after.querySelector(".wk-rt").textContent, "ひゃくにじゅうさんご", "改完要生效：" + after.innerHTML);
 });
+
+test("逐字歌词：心の（こころん）这种括号读音也要合并（整段并进头一格）", async () => {
+  /*
+   * 真机：`心の（こころん）レシピは`。括号里是作者标的读法（心 = こころん），
+   * 以前括号一直露在歌词里。这里用逐字层的真实结构（每格一个 span + 替身）。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => {
+        const t = c + (i < all.length - 1 ? " " : "");
+        return (
+          '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '">' +
+          "<span>" + t + "</span>" +
+          '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+        );
+      })
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("心の（こころん）レシピは")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 心: "ココロ", レシピ: "レシピ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  // 本体和替身各有一份，去重后只该有一种
+  const hidden = Array.from(new Set(Array.from(root.querySelectorAll(".wk-hide")).map((h) => h.textContent)));
+  assert.deepStrictEqual(hidden, ["（こころん）"], "括号那一段要整段藏起来：" + root.innerHTML);
+  const pairs = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.ok(
+    pairs.some((x) => /こころん/.test(x[1])),
+    "心 按括号里的读法：" + JSON.stringify(pairs) + " / " + root.innerHTML
+  );
+});
+
+test("逐字歌词：用真的网站缓存（ベノム）时，心の（こころん）的括号也要合并", async () => {
+  /*
+   * 真机数据：这首歌 UtaTen 的行是 `心のレシピは かまちょ味 寂ジャンキー`（**没有括号**），
+   * 客户端逐字层那行是 `心の（こころん）レシピは` —— 两边文字对不上。
+   * 这里直接把真机上那份缓存搬进临时目录来跑，走的是完全一样的路径。
+   */
+  const dir = tempCacheDir();
+  const real = pathNode.join("C:\\betterncm\\lyrics\\jp-furigana", "1935704601.json");
+  if (!fsNode.existsSync(real)) {
+    // 没有真机缓存就跳过（换一台机器跑测试时别红）
+    return;
+  }
+  const rec = JSON.parse(fsNode.readFileSync(real, "utf8"));
+  writeCacheFile(dir, "1935704601", rec);
+
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => {
+        const t = c + (i < all.length - 1 ? " " : "");
+        return (
+          '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '">' +
+          "<span>" + t + "</span>" +
+          '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+        );
+      })
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">ベノム</a></span>
+  <span class="by"><a href="#">かいりきベア feat. v flower</a></span>
+</div></div>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("心の（こころん）レシピは")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, {
+    fs: diskFs(),
+    config: {
+      online: false,
+      llmEnabled: false,
+      externalUtaten: true,
+      externalConsent: true,
+      externalProvider: "utaten",
+      externalCacheDir: dir,
+    },
+  });
+  env.window.__WK_TRACK__ = { id: "1935704601", title: "ベノム", artists: ["かいりきベア feat. v flower"] };
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 心: "ココロ", レシピ: "レシピ" }));
+  await env.runLoad();
+  await sleep(1200);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const hidden = Array.from(new Set(Array.from(root.querySelectorAll(".wk-hide")).map((h) => h.textContent)));
+  assert.deepStrictEqual(hidden, ["（こころん）"], "括号那一段要整段藏起来：" + root.innerHTML);
+});
+
+test("逐字歌词：合并成一组的词（带括号读音）双击也能改读音", async () => {
+  /*
+   * 逐字层里一个词跨好几格时，整段字（含括号读音那段）只放在**头一格**上，
+   * 其余格清空。这时双击那个注音：
+   *   - 点到的往往是替身（绝对定位叠在上面）
+   *   - 行内起点要按"整行原文"算，而原文里括号那几格也算长度
+   * 以前这两个都会把起点算歪，改完不生效（真机：逐字模式下改不动读音）。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => {
+        const t = c + (i < all.length - 1 ? " " : "");
+        return (
+          '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '">' +
+          "<span>" + t + "</span>" +
+          '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+        );
+      })
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("怒れる人(ラングラー)を")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { dev: true, config: { online: false, llmEnabled: false, externalUtaten: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 怒: "イカ", 人: "ヒト", を: "ヲ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const first = root.querySelector(".rnp-karaoke-word .wk-ruby");
+  assert.ok(first, "头一格要有注音：" + root.innerHTML);
+  assert.strictEqual(first.childNodes[0].nodeValue, "怒れる人", "整段字挂在头一格：" + first.outerHTML);
+
+  // 真机上双击几乎总落在替身那份上
+  const mirror = root.querySelector(".rnp-karaoke-word-filler .wk-ruby");
+  (mirror || first).dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击要能弹出输入框");
+  box.value = "いかり";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(700);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config") || "{}");
+  assert.deepStrictEqual(
+    saved.furiganaLineSpans,
+    { "怒れる人(ラングラー)を": [[0, "怒れる人", "いかり"]] },
+    "按整行起点存：" + JSON.stringify(saved.furiganaLineSpans)
+  );
+  const after = env.document.querySelector(".rnp-lyrics-line-karaoke .wk-ruby");
+  assert.strictEqual(after.querySelector(".wk-rt").textContent, "いかり", "改完要生效：" + after.outerHTML);
+});
