@@ -2622,15 +2622,48 @@ function buildRuby(base, gloss, provisional, source, flat) {
      * 和 RNP 按下标取的动画目标都不受影响，只是并进来的那几个字跟着头一个字一起亮。
      */
     function groupHosts(hosts, segs) {
-      // 落在注音词内部的位置 = 不能从这里切开
+      /*
+       * 落在"一段词"内部的位置 = 不能从这里切开。
+       *
+       * 一段词 = 带注音的那一段 **+ 紧跟在它后面的隐藏段**（作词者写的括号读音
+       * `怒れる人(ラングラー)`：括号那六个字没有读音、要藏起来，但它们是同一个词
+       * 唱出来的 —— 不并进这一组的话，整组的时间就不含括号那几拍，
+       * 高亮还没唱完括号就已经跑完了（真机：怒れる人 跳太快）。
+       */
       var unsafe = [];
       var p = 0;
       var i;
+      var runs = []; // 每一段"词"：带注音的那一段 + 紧跟的括号读音
+      var run = null;
       for (i = 0; i < segs.length; i++) {
         var start = p;
         p += segs[i].text.length;
-        if (!segs[i].rt) continue;
-        for (var q = start + 1; q < p; q++) unsafe[q] = true;
+        if (segs[i].rt) {
+          run = { from: start, until: p };
+          runs.push(run);
+          continue;
+        }
+        // 括号读音紧跟在带注音的那一段后面 → 算同一个词，继续延伸
+        if (run && segs[i].hidden && run.until === start) {
+          run.until = p;
+          continue;
+        }
+        run = null;
+      }
+      for (i = 0; i < runs.length; i++) {
+        for (var q = runs[i].from + 1; q < runs[i].until; q++) unsafe[q] = true;
+      }
+      /*
+       * hiddenBefore[q] = 第 q 个字符之前有几个"隐藏字"（括号读音）。
+       * 必须逐字符算：一段隐藏可能是好几个字（`(ラングラー)`），
+       * 只在段边界上记的话，段内部那些位置会当成 0 —— 合并上限就白算了。
+       */
+      var hiddenBefore = [0];
+      var hPos = 0;
+      for (i = 0; i < segs.length; i++) {
+        var hn = segs[i].text.length;
+        for (var hk = 0; hk < hn; hk++) hiddenBefore[hPos + hk + 1] = hiddenBefore[hPos + hk] + (segs[i].hidden ? 1 : 0);
+        hPos += hn;
       }
       var groups = [];
       var cur = null;
@@ -2640,7 +2673,12 @@ function buildRuby(base, gloss, provisional, source, flat) {
         cur.hosts.push(hosts[i]);
         pos += hosts[i].to - hosts[i].from;
         cur.to = pos;
-        var straddles = unsafe[pos] === true && cur.to - cur.from < WRAP_MAX_MERGE;
+        /*
+         * 上限只管"真的带注音的字"：括号读音那几个字不占额度 ——
+         * `怒れる人(ラングラー)` 整段是一个词，只并到 8 个字会把括号那几拍丢掉。
+         */
+        var used = cur.to - cur.from - ((hiddenBefore[cur.to] || 0) - (hiddenBefore[cur.from] || 0));
+        var straddles = unsafe[pos] === true && used < WRAP_MAX_MERGE;
         if (straddles && i < hosts.length - 1) continue; // 切在词中间，把下一个也并进来
         groups.push(cur);
         cur = null;
@@ -2827,6 +2865,21 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return host;
     }
 
+    /*
+     * 最近几次"整组重记时长"的记账（排障用，见 diagRetimes）。
+     *
+     * 逐字高亮跳太快的毛病只有播到那一行时才看得出来，而那一刻的读数下一帧就没了
+     * （换行之后 RNP 把时长写回 0ms）。所以把每次真的算出来的 r0 / rN / dN / total
+     * 记一圈，导出诊断时连"我们写了多少"一起带走 —— 不用现场盯着看。
+     */
+    var retimeRing = [];
+    var RETIME_KEEP = 16;
+
+    function noteRetime(row) {
+      retimeRing.push(row);
+      while (retimeRing.length > RETIME_KEEP) retimeRing.shift();
+    }
+
     function retimeGroup(grp) {
       var hosts = grp && grp.hosts;
       if (!hosts || hosts.length < 2) return;
@@ -2846,6 +2899,27 @@ function buildRuby(base, gloss, provisional, source, flat) {
       // 只动替身：遮罩扫光跑在它身上（CSS 的 transition-property 第一个就是 mask-position-x）
       var filler = fillerOf(first);
       if (!filler || !filler.style) return;
+      /*
+       * 每一格读到的时间也记下来（排障用）：跳太快有时是"中间某一格的时长本来就短"，
+       * 只看头尾两格看不出来。
+       */
+      var perCell = [];
+      for (var ci = 0; ci < hosts.length && ci < 12; ci++) {
+        var tc = timingElOf(hosts[ci]);
+        perCell.push([readMs(tc.style.transitionDelay), readMs(tc.style.transitionDuration)]);
+      }
+      noteRetime({
+        at: clock(),
+        line: String(grp.line || "").slice(0, 40),
+        cells: hosts.length,
+        r0: r0,
+        rN: rN,
+        dN: dN,
+        total: total,
+        cellS: perCell,
+        prev: filler.style.transitionDuration,
+        offset: first.parentNode && first.parentNode.parentNode ? first.parentNode.parentNode.getAttribute("offset") : null,
+      });
       retimeFiller(filler, total);
     }
 
@@ -2943,6 +3017,11 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return out;
     }
 
+    /** 最近几次"整组重记时长"的记账（排障用：逐字高亮跳太快时看这个） */
+    function diagRetimes() {
+      return retimeRing.slice();
+    }
+
     /** 整行重写一条（建 DOM + 记账） */
     function wrapLineNow(region, slots, segs) {
       var rec = {
@@ -2997,7 +3076,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
             if (!karaokeWordOf(hEl, region)) continue; // 不在词格里就没有逐字动画
             hs.push(hEl);
           }
-          if (hs.length > 1) rec.groups.push({ hosts: hs });
+          if (hs.length > 1) rec.groups.push({ hosts: hs, line: rec.text });
         }
       }
       noteDiag(rec);
@@ -3775,6 +3854,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
       },
       /** 最近改写过的几行的排障数据（见 diagLines） */
       diagLines: diagLines,
+      /** 最近几次"整组重记时长"的记账（见 diagRetimes） */
+      diagRetimes: diagRetimes,
       restoreAll: restoreAll,
       relabel: relabel,
       rescanRegions: rescanRegions,

@@ -5133,6 +5133,7 @@
       },
       tokens: lineDiag.slice(),
       wrap: state.annotator && state.annotator.diagLines ? state.annotator.diagLines() : [],
+      retimes: state.annotator && state.annotator.diagRetimes ? state.annotator.diagRetimes() : [],
       dom: dom,
     };
   }

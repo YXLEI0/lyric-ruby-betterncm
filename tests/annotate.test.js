@@ -821,3 +821,59 @@ test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再�
   ann.retimeLines();
   assert.match(filler.style.transitionDuration, /^400ms/, "补回整组时长：" + filler.getAttribute("style"));
 });
+
+/*
+ * 括号读音那一格的时间也算进这个词里。
+ *
+ * 真机：`怒れる人(ラングラー)` —— 括号六个字没有读音、被藏起来，但它们是同一个词
+ * 唱出来的（网站 / 作者标的读法）。以前分组到这里就断了，整组的时间只剩 怒れる人
+ * 那四拍，高亮还没唱完括号就跳到下一个词了（用户报的「怒れる人 跳太快」）。
+ */
+test("跨格的词：紧跟的括号读音那几格也算进同一组的时长", () => {
+  const line = "怒れる人(ラングラー)を";
+  let i = 0;
+  const cells = Array.from(line)
+    .map((c, idx) => {
+      const r = idx * 100;
+      i = idx;
+      return (
+        `<div class="rnp-karaoke-word is-cjk" style="transition-duration: 100ms, 80ms; transition-delay: ${r}ms">` +
+        `<span>${c}</span>` +
+        `<span class="rnp-karaoke-word-filler" style="transition-duration: 100ms, 80ms, 0.5s; transition-delay: ${r}ms, ${r + 50}ms, 0ms">${c}</span></div>`
+      );
+    })
+    .join("");
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cells}</div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  makeAnnotator(ctx, {
+    annotator: {
+      lineTokens: () => [
+        { start: 0, end: 4, kana: "ラングラー" },
+        { start: 4, end: 11, hide: true },
+        { start: 11, end: 12, kana: "を" },
+      ],
+    },
+  }).pass();
+
+  const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
+  const head = words[0].querySelector(".rnp-karaoke-word-filler");
+  assert.match(
+    head.style.transitionDuration,
+    /^1100ms/,
+    "头一格要按 0→1100ms 亮（11 个格子，含括号那 7 个）：" + head.getAttribute("style")
+  );
+  // 括号那一段仍然是藏着的：整段并进头一格，一个 wk-hide 壳装着 (ラングラー)
+  const hides = Array.from(words).filter((w) => w.querySelector(".wk-hide"));
+  assert.strictEqual(hides.length, 1, "括号那段要藏起来：" + ctx.document.querySelector(".rnp-lyrics-line-karaoke").innerHTML);
+  assert.strictEqual(
+    hides[0].querySelector(".wk-hide").textContent,
+    "(ラングラー)",
+    "藏的就是括号那一段：" + hides[0].innerHTML
+  );
+  // 括号后面那个 を 另算一组，不许被改
+  const tailFiller = words[words.length - 1].querySelector(".rnp-karaoke-word-filler");
+  assert.match(tailFiller.style.transitionDuration, /^100ms/, "别组不动：" + tailFiller.getAttribute("style"));
+  assert.strictEqual(i, line.length - 1, "夹具格子数要和行文本一致");
+});

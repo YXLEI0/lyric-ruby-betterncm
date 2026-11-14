@@ -6355,10 +6355,12 @@ test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟
   await sleep(600);
 
   const lines = Array.from(env.document.querySelectorAll(".rnp-lyrics-line-karaoke"));
+  // 括号那一段整段藏起来，而且现在和 舞台 并成同一组（整组一起亮），
+  // 所以一个 wk-hide 壳装着 (セカイ)，不是一格一个字
   const hidden = Array.from(lines[0].querySelectorAll(".rnp-karaoke-word"))
     .filter((w) => w.querySelector(".wk-hide"))
-    .map((w) => w.textContent.trim());
-  assert.deepStrictEqual(hidden, ["(", "セ", "カ", "イ", ")"], "括号那几个字都要藏起来：" + lines[0].innerHTML);
+    .map((w) => w.querySelector(".wk-hide").textContent);
+  assert.deepStrictEqual(hidden, ["(セカイ)"], "括号那一段要整段藏起来：" + lines[0].innerHTML);
 
   const pairs = Array.from(lines[1].querySelectorAll(".wk-ruby")).map((r) => [
     (r.childNodes[0].nodeValue || "").trim(),
@@ -6403,11 +6405,12 @@ test("逐字歌词（RNP karaoke）：一个词跨好几个字时，整段读音
   const absorbed = Array.from(root.querySelectorAll(".rnp-karaoke-word"))
     .map((w) => (w.textContent || "").trim())
     .filter((t) => t === "");
-  assert.strictEqual(absorbed.length, 1, "被并进来的那一格要清空：" + root.innerHTML);
+  // 狂狂(くるくる) 整段是一个词：括号那几格也并进同一组（时间一起算、跟着头一个字亮）
+  assert.strictEqual(absorbed.length, 7, "并进来的那几格要清空：" + root.innerHTML);
   const hidden = Array.from(root.querySelectorAll(".rnp-karaoke-word"))
     .filter((w) => w.querySelector(".wk-hide"))
-    .map((w) => w.textContent.trim());
-  assert.deepStrictEqual(hidden, ["(", "く", "る", "く", "る", ")"], "括号那一段也要整个藏掉：" + root.innerHTML);
+    .map((w) => w.querySelector(".wk-hide").textContent);
+  assert.deepStrictEqual(hidden, ["(くるくる)"], "括号那一段要整段藏掉（并进头一格）：" + root.innerHTML);
 });
 
 test("西文底字的括号读音：作者写的（マイココロ）压过网站的 こころ，括号合并掉", async () => {
