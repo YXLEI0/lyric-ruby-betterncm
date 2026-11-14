@@ -4886,6 +4886,87 @@
    * 把 原文 + 罗马音 + 中文翻译 塞进同一个元素，拿 context 去判会读到同一块里的中文翻译，
    * 于是日文原文被当成中文、逐字注上普通话读音（真机现象：`妄想感傷代償連盟` 上面是 ワンシャン…）。
    */
+  /**
+   * 一行里有汉字没被任何词盖住时，用**本地词典**单字补读音。
+   *
+   * 真机现象：`無いの？ もっと愛 哀 哀` 里两个「哀」没有注音 —— 分词、网站读音、
+   * 括号读音几路合并之后偶尔会漏掉一两个字。这里按行扫一遍：没被 token 盖住的
+   * 汉字逐个单字查一遍本地词典（kuromoji + 汉字表，全程离线），查到就补上。
+   *
+   * 只补汉字：假名 / 标点 / 罗马音不动；括号读音那几格本来就有 hide token 盖着，
+   * 不会被补成读音。查不到就跳过 —— 宁可不注，也不瞎注。
+   */
+  function fillGapReadings(line, tokens) {
+    var s = String(line == null ? "" : line);
+    if (!s || typeof WKFurigana === "undefined") return tokens;
+    var covered = {};
+    var list = tokens || [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t || !(t.end > t.start)) continue;
+      // 有读音的词、括号读音（hide）算"已经处理过"；没读音的词留给下面补
+      if (!t.kana && !t.hide) continue;
+      for (var p = t.start; p < t.end; p++) covered[p] = 1;
+    }
+    var out = null;
+    for (i = 0; i < s.length; i++) {
+      if (covered[i]) continue;
+      var ch = s.charAt(i);
+      // 只有汉字值得补；假名、标点、数字、拉丁都不管
+      if (!/[\u3400-\u4DBF\u4E00-\u9FFF]/.test(ch)) continue;
+      var kana = singleCharReading(ch);
+      if (!kana) continue;
+      if (!out) out = list.slice();
+      out.push({ text: ch, start: i, end: i + 1, kana: kana, source: "dict" });
+    }
+    if (!out) return tokens;
+    out.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return out;
+  }
+
+  /** 单字查本地词典（汉字表 → kuromoji 单字，不联网） */
+  function singleCharReading(ch) {
+    var kana = null;
+    try {
+      if (typeof WKDict !== "undefined" && WKDict.words && WKDict.words[ch]) {
+        var v = WKDict.words[ch];
+        kana = typeof v === "string" ? v : v && v.kana;
+      }
+    } catch (e0) {
+      kana = null;
+    }
+    if (!kana && typeof WKKanjiReadings !== "undefined" && WKKanjiReadings.table) {
+      try {
+        var kun = WKKanjiReadings.kunOf(ch) || [];
+        var on = WKKanjiReadings.onOf(ch) || [];
+        kana = kun[0] || on[0] || null;
+      } catch (e1) {
+        kana = null;
+      }
+    }
+    if (!kana) {
+      try {
+        var got = WKFurigana.tokens(ch, {
+          kana: config.furiganaKana === "katakana" ? "katakana" : "hiragana",
+        });
+        if (got && got.length && got[0] && got[0].text === ch && got[0].kana) kana = got[0].kana;
+      } catch (e2) {
+        kana = null;
+      }
+    }
+    if (!kana) return null;
+    // 训读可能带送假名标记（た.べる），只取点前面那段
+    kana = String(kana).split(".")[0];
+    if (!kana) return null;
+    var hira = kana.replace(/[\u30A1-\u30F6]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0x60);
+    });
+    return config.furiganaKana === "katakana" ? kanaByConfig(hira) : hira;
+  }
+
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
@@ -7127,7 +7208,22 @@
          * 那是卡顿的主因），这里切的是整行原文 —— 一行一次。
          */
         lineTokens: function (text, region) {
-          return extraTokens(text, text, lineTokenHost(region), undefined, text);
+          /*
+           * 整行切完再把漏掉的汉字用本地词典补上（见 fillGapReadings）。
+           *
+           * 只在**逐字歌词**上补：普通歌词行的分词本来就一行一次，漏字的情况
+           * 几乎都出在逐字层（一格一个字，词被拆开之后容易被丢掉）；普通行补了
+           * 反而会把"故意留白"的地方注上（真机：好几行末尾的 良 被补成 よ）。
+           */
+          var toks = extraTokens(text, text, lineTokenHost(region), undefined, text);
+          var karaoke = false;
+          try {
+            var cn = region && typeof region.className === "string" ? region.className : "";
+            karaoke = /karaoke/i.test(cn) || !!(region && region.querySelector && region.querySelector(".rnp-karaoke-word"));
+          } catch (eK) {
+            karaoke = false;
+          }
+          return karaoke ? fillGapReadings(text, toks) : toks;
         },
         wrapLines: config.wrapLines !== false,
         annotateAll: config.annotateAll !== false,

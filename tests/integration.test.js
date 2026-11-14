@@ -7573,3 +7573,37 @@ test("何時 / 何処 双击给 なんじ / いずこ 这些读法", async () =>
   await sleep(60);
   assert.deepStrictEqual(chips(), ["どこ", "いずこ"], "何処 的候选：" + chips().join("/"));
 });
+
+test("逐字行里漏掉的汉字用本地词典兜底（哀 没读音 → 单字查）", async () => {
+  /*
+   * 真机：`無いの？ もっと愛 哀 哀` 里两个「哀」没有注音 —— 分词 / 网站读音 /
+   * 括号读音几路合并之后漏掉了。现在按行再扫一遍，没被词盖住的汉字单字查本地词典。
+   */
+  const cells = Array.from("愛哀")
+    .map(
+      (c, i) =>
+        '<div class="rnp-karaoke-word is-cjk' +
+        (i === 0 ? " end-with-space" : "") +
+        '"><span>' + c + (i === 0 ? " " : "") + "</span>" +
+        '<span class="rnp-karaoke-word-filler">' + c + (i === 0 ? " " : "") + "</span></div>"
+    )
+    .join("");
+  const HTML =
+    '<!doctype html><html><head></head><body><div class="m-lyric"><div class="rnp-lyrics-line">' +
+    '<div class="rnp-lyrics-line-karaoke">' + cells + "</div></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  // 只给 愛 读音：哀 留给"没读音"那条路
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 愛: "アイ" }));
+  await env.runLoad();
+  await sleep(800);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const pairs = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.ok(
+    pairs.some((x) => x[0] === "哀" && x[1]),
+    "哀 要用本地词典补上读音：" + JSON.stringify(pairs) + " / " + root.innerHTML
+  );
+});
