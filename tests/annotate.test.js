@@ -700,10 +700,13 @@ test("逐字词格：逐字层改回 block（和普通行一样按基线排、�
  * 不在词格 div 上（写到 div 上等于没写，真机上高亮照旧只跑头一格）。
  */
 test("跨格的词：逐字时长 = 整组的时间跨度（写在格内 span 和它的替身上）", () => {
-  // 每一格：起点 r、时长 n（RNP 按 yrc 的逐字时间写进 span 的 inline style）
+  /*
+   * 每一格：起点 r、时长 n。结构照 RNP 真机来 —— w(t)（时长 / 推迟）在**词格 div** 上，
+   * x(t)（遮罩时长）在**替身**上，中间装原文的 span 一个内联样式都没有。
+   */
   const cell = (c, r, n) =>
-    '<div class="rnp-karaoke-word is-cjk">' +
-    `<span style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">${c}</span>` +
+    `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms; transform: translateY(-1px)">` +
+    `<span>${c}</span>` +
     `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s; ` +
     `transition-delay: ${r}ms, ${r + Math.round(n * 0.5)}ms, 0ms">${c}</span></div>`;
   const ctx = newCtx(`<!doctype html><html><body>
@@ -741,7 +744,8 @@ test("跨格的词：逐字时长 = 整组的时间跨度（写在格内 span �
  */
 test("跨格的词：行开始时（offset 变化后的下一轮）重新累加时长", () => {
   const cell0 = (c) =>
-    '<div class="rnp-karaoke-word is-cjk"><span style="transition-duration: 0ms, 0ms; transition-delay: 0ms">' + c + "</span>" +
+    '<div class="rnp-karaoke-word is-cjk" style="transition-duration: 0ms, 0ms, 0.5s; transition-delay: 0ms; transform: translateY(0px)">' +
+    "<span>" + c + "</span>" +
     '<span class="rnp-karaoke-word-filler" style="transition-duration: 0ms, 0ms, 0.5s; transition-delay: 0ms, 0ms, 0ms">' + c + "</span></div>";
   const ctx = newCtx(`<!doctype html><html><body>
 <div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="3"><div class="rnp-lyrics-line-karaoke">${cell0("体")}${cell0("温")}${cell0("が")}</div></div></div>
@@ -767,7 +771,10 @@ test("跨格的词：行开始时（offset 变化后的下一轮）重新累加�
   // 这一行开始唱了：RNP 把 offset 改成 0、把每格的真实时长写进 span
   line.setAttribute("offset", "0");
   const paint = (w, r, n) => {
-    w.children[0].setAttribute("style", `transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms`);
+    w.setAttribute(
+      "style",
+      `transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms; transform: translateY(-1px)`
+    );
     w.children[1].setAttribute(
       "style",
       `transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s; transition-delay: ${r}ms, ${r + Math.round(n * 0.5)}ms, 0ms`
@@ -792,8 +799,8 @@ test("跨格的词：行开始时（offset 变化后的下一轮）重新累加�
  */
 test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再撤掉）", () => {
   const cell = (c, r, n) =>
-    '<div class="rnp-karaoke-word is-cjk">' +
-    `<span style="transition-duration: ${n}ms; transition-delay: ${r}ms">${c}</span>` +
+    `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">` +
+    `<span>${c}</span>` +
     `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s">${c}</span></div>`;
   const ctx = newCtx(`<!doctype html><html><body>
 <div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", 0, 200)}${cell("温", 200, 200)}</div></div></div>

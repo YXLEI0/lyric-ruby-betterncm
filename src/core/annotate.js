@@ -2133,6 +2133,10 @@ function buildRuby(base, gloss, provisional, source, flat) {
     /**
      * 某条记录对应的「可见原文」——把所有注音（<rt> / 各家的 .xx-rt）都排除掉，
      * 只看底字。用来判断注音是否仍然有效。
+     *
+     * 逐字层那份**替身**（`.rnp-karaoke-word-filler`）也要整层排除：里面挂着我们
+     * 补的同一份 ruby，算进来的话整行每个字都会数两遍（`ねえ123123で`）——
+     * 就地改读音存的键、判语种都对不上（真机：逐字模式下改不动数字的读音）。
      */
     function visibleText(el) {
       var out = "";
@@ -2140,6 +2144,9 @@ function buildRuby(base, gloss, provisional, source, flat) {
         acceptNode: function (node) {
           for (var p = node.parentNode; p && p !== el; p = p.parentNode) {
             if (isAnnotationNode(p)) return NodeFilter.FILTER_REJECT;
+            if (RE_FILLER_CLASS.test(typeof p.className === "string" ? p.className : "")) {
+              return NodeFilter.FILTER_REJECT;
+            }
           }
           return NodeFilter.FILTER_ACCEPT;
         },
@@ -2802,15 +2809,36 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return null;
     }
 
+    /**
+     * 这一格的「时间写在哪」。
+     *
+     * RNP 的逐字格是
+     *   div.rnp-karaoke-word[style=w(t)] > span(原文) + span.rnp-karaoke-word-filler[style=x(t)]
+     * —— `w(t)`（时长 / 起始推迟 / transform）在**词格 div** 上，
+     * `x(t)`（遮罩位置 / 时长）在**替身**上，中间那个装原文的 span 一个内联样式都没有。
+     * 从 span 往上找一格才是能读时间的地方（真机诊断里 r0/rN/dN 全是 null 就是这个原因）。
+     */
+    function timingElOf(host) {
+      var p = host && host.parentNode;
+      if (p && p.nodeType === 1) {
+        var cn = typeof p.className === "string" ? p.className : "";
+        if (RE_KARAOKE_WORD.test(cn)) return p;
+      }
+      return host;
+    }
+
     function retimeGroup(grp) {
       var hosts = grp && grp.hosts;
       if (!hosts || hosts.length < 2) return;
       var first = hosts[0];
       var last = hosts[hosts.length - 1];
-      if (!first || !first.style || !last || !last.style) return;
-      var r0 = readMs(first.style.transitionDelay);
-      var rN = readMs(last.style.transitionDelay);
-      var dN = readMs(last.style.transitionDuration);
+      if (!first || !last) return;
+      var t0 = timingElOf(first);
+      var tN = timingElOf(last);
+      if (!t0.style || !tN.style) return;
+      var r0 = readMs(t0.style.transitionDelay);
+      var rN = readMs(tN.style.transitionDelay);
+      var dN = readMs(tN.style.transitionDuration);
       if (r0 == null || rN == null || dN == null) return;
       // 还没轮到这一行时 RNP 写的是 0ms：别把 0 当成"算过了"
       var total = rN + dN - r0;
@@ -2886,10 +2914,12 @@ function buildRuby(base, gloss, provisional, source, flat) {
         var row = { cells: hosts.length };
         var first = hosts[0];
         var last = hosts[hosts.length - 1];
-        if (first && first.style) row.r0 = readMs(first.style.transitionDelay);
-        if (last && last.style) {
-          row.rN = readMs(last.style.transitionDelay);
-          row.dN = readMs(last.style.transitionDuration);
+        var t0d = timingElOf(first);
+        var tNd = timingElOf(last);
+        if (t0d && t0d.style) row.r0 = readMs(t0d.style.transitionDelay);
+        if (tNd && tNd.style) {
+          row.rN = readMs(tNd.style.transitionDelay);
+          row.dN = readMs(tNd.style.transitionDuration);
         }
         var f = first ? fillerOf(first) : null;
         if (f && f.style) row.fillerDur = f.style.transitionDuration;

@@ -7670,3 +7670,66 @@ test("逐字歌词：面板「导出诊断」把格子原文 / token（含括号
   assert.ok(line.hide >= 1, "行里现在有几个 .wk-hide 也要记：" + JSON.stringify(line));
   assert.ok(line.ruby >= 1, "注了几处也要记：" + JSON.stringify(line));
 });
+
+test("逐字歌词里双击数字的读音也能改（替身不许把起点算错）", async () => {
+  /*
+   * 真机：ザムザ「ねえ 123 で飛んで」。逐字模式下双击 123 上的读音，改不动。
+   *
+   * 逐字格是 `div.rnp-karaoke-word > span(原文) + span.rnp-karaoke-word-filler(替身)`，
+   * 替身绝对定位叠在原文上，连 opacity:0 都照样吃点击 —— 双击几乎总落在替身上。
+   * 替身里的 ruby 结构和原文那份一样，但按替身算出来的行内起点会多出这一格自己的
+   * 长度，存的修正对不上任何一段，于是"改不动"。
+   */
+  // 结构照 RNP 真机：每格是 原文 span + 绝对定位叠在上面的替身 span
+  const cell = (c, last) => {
+    const t = c + (last ? "" : " ");
+    return (
+      '<div class="rnp-karaoke-word is-cjk' + (last ? "" : " end-with-space") + '">' +
+      "<span>" + t + "</span>" +
+      '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+    );
+  };
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => cell(c, i === all.length - 1))
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("ねえ123で")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { dev: true, config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ ねえ: "ネエ", で: "デ" })
+  );
+  await env.runLoad();
+  await sleep(600);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  // 行文本不能把替身那份数两遍（否则就地改读音存的键和注音时对不上）
+  const lineText = env.window.WK.state.annotator.textOf(env.document.querySelector(".rnp-lyrics-line"));
+  assert.strictEqual(lineText.trim(), "ねえ123で", "行文本不许数两遍替身：" + lineText);
+  const rubies = Array.from(root.querySelectorAll(".wk-ruby"));
+  const num = rubies.find((r) => (r.childNodes[0].nodeValue || "").trim() === "123");
+  assert.ok(num, "123 上要有注音：" + root.innerHTML);
+  assert.ok(/ひゃくにじゅうさん/.test(num.querySelector(".wk-rt").textContent), "读数是 ひゃくにじゅうさん：" + num.innerHTML);
+
+  // 双击（真机上落到的是替身那份，这里直接点替身里的那个 ruby —— 和真机一致）
+  const fillerRuby = root.querySelector(".rnp-karaoke-word-filler .wk-ruby");
+  const target = fillerRuby || num;
+  target.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const box = env.document.querySelector("input.wk-edit");
+  assert.ok(box, "双击后要弹出输入框：" + env.document.body.innerHTML.slice(-300));
+  box.value = "ひゃくにじゅうさんご";
+  box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(600);
+
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config") || "{}");
+  assert.deepStrictEqual(
+    saved.furiganaLineSpans,
+    { "ねえ123で": [[2, "123", "ひゃくにじゅうさんご"]] },
+    "起点要按整行算（123 从第 3 个字开始，下标 2）：" + JSON.stringify(saved.furiganaLineSpans)
+  );
+  const after = Array.from(env.document.querySelectorAll(".rnp-lyrics-line-karaoke .wk-ruby"))
+    .find((r) => (r.childNodes[0].nodeValue || "").trim() === "123");
+  assert.strictEqual(after.querySelector(".wk-rt").textContent, "ひゃくにじゅうさんご", "改完要生效：" + after.innerHTML);
+});

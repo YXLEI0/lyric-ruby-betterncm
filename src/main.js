@@ -2696,7 +2696,44 @@
     return dedupe(withOnbin(word, withKanjiReadings(word, out)));
   }
 
+  /**
+   * 双击落在逐字层**替身**里时，把目标换成本体那一份。
+   *
+   * 逐字格是 `div.rnp-karaoke-word > span(原文) + span.rnp-karaoke-word-filler(替身)`，
+   * 替身绝对定位叠在原文上，连 opacity:0 都照样吃点击 —— 双击几乎总落在替身上。
+   * 两份的结构一模一样，按序号换过去就行。不换的话：算行内起点时会先数到本体那一份，
+   * 起点多出这一格自己的长度，存的修正对不上任何一段（真机：逐字模式下数字的读音改不动）。
+   */
+  function canonicalRuby(el) {
+    var filler = null;
+    for (var up = el; up && up !== document.body; up = up.parentNode) {
+      if (up.nodeType !== 1) continue;
+      var cn = typeof up.className === "string" ? up.className : "";
+      if (RE_FILLER_TWIN.test(cn)) {
+        filler = up;
+        break;
+      }
+    }
+    if (!filler) return el;
+    var word = filler.parentNode;
+    var kids = word && word.children ? word.children : [];
+    var real = null;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      if (k === filler) continue;
+      if (RE_FILLER_TWIN.test(String(k.className || ""))) continue;
+      real = k;
+      break;
+    }
+    if (!real) return el;
+    var idx = Array.prototype.indexOf.call(filler.querySelectorAll(".wk-ruby, .wk-blank"), el);
+    if (idx < 0) return el;
+    var mine = real.querySelectorAll(".wk-ruby, .wk-blank");
+    return mine[idx] || el;
+  }
+
   function openEditor(rubyEl) {
+    rubyEl = canonicalRuby(rubyEl);
     if (!rubyEl || !rubyEl.parentNode) return;
     var parts = rubyParts(rubyEl);
     var word = parts.word;
@@ -5321,7 +5358,21 @@
       while ((node = walker.nextNode())) {
         var p = node.parentNode;
         var skipped = false;
-        for (var q = p; q && q !== region.parentNode; q = q.parentNode) {
+        /*
+         * 先整条向上看一眼：这段文字在不在逐字层的**替身**里
+         * （`span.rnp-karaoke-word-filler`，里面挂着我们补的同一份 ruby）。
+         * 必须在下面的"到了自己的 ruby 就停"之前判 —— 那个 break 是为了别让
+         * ruby 的来源 class（wk-src-romaji）被 fontSkipped 误判，但它会让替身
+         * 也被算进原文：整行变成 `ねえ123123で`，就地改读音存的键对不上，
+         * 改完不生效（用户报的「逐字模式下改不动数字的读音」）。
+         */
+        for (var f = p; f && f !== region.parentNode && f.nodeType === 1; f = f.parentNode) {
+          if (RE_FILLER_TWIN.test(typeof f.className === "string" ? f.className : "")) {
+            skipped = true;
+            break;
+          }
+        }
+        for (var q = skipped ? null : p; q && q !== region.parentNode; q = q.parentNode) {
           if (!q || q.nodeType !== 1) continue;
           if (q.tagName === "RT" || q.tagName === "RP") {
             skipped = true;
@@ -5339,8 +5390,18 @@
            * `wk-src-romaji`，而那个判据里有 romaji 字样，整块底字就被当成音译层跳过了
            * （真机现象：`(aha) 唸る 808` 的行文本变成 `() 唸る 808`，就地改读音对不上）。
            */
+          /*
+           * 逐字层那个替身（`span.rnp-karaoke-word-filler`）里也挂着我们注的 ruby ——
+           * 它和本体一字不差，算进行文本的话整行会变成 `ねえ123123で`（就地改读音存的键
+           * 和注音时对不上，改完不生效：用户报的「逐字模式下改不动数字的读音」）。
+           * 所以这一条要**排在自己的 ruby 之前**：先认出替身，整层跳过。
+           */
+          if (RE_FILLER_TWIN.test(cn)) {
+            skipped = true;
+            break;
+          }
           if (/(^|\s)(wk-ruby|kt-ruby|fg-ruby)(\s|$)/.test(cn)) break;
-          if (q !== region && (fontSkipped(q) || RE_FILLER_TWIN.test(cn))) {
+          if (q !== region && fontSkipped(q)) {
             skipped = true;
             break;
           }
