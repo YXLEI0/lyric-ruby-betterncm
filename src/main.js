@@ -4967,6 +4967,139 @@
     return config.furiganaKana === "katakana" ? kanaByConfig(hira) : hira;
   }
 
+  /*
+   * 逐字歌词的排障记录（面板「操作 → 导出诊断」用）。
+   *
+   * 「高亮只跑头一格」「括号读音没合并」这类毛病只有真机上才出得来，
+   * 真机又开不了开发者工具 —— 所以在插件里留一圈最近的逐字行：
+   * 行文本（含空格位置）、每个格子的原文、切出来的 token（hide / 括号读音都在里面）、
+   * 以及整行改写那边的记账。点一下导出成 JSON 文件，不用现场抄。
+   */
+  var lineDiag = [];
+  var LINE_DIAG_KEEP = 12;
+
+  function isKaraokeRegion(region) {
+    try {
+      var cn = region && typeof region.className === "string" ? region.className : "";
+      if (/karaoke/i.test(cn)) return true;
+      return !!(region && region.querySelector && region.querySelector(".rnp-karaoke-word"));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 一行里各逐字格的原文（导出时要能看清"格子里的空格"和"括号落在哪一格"） */
+  function cellsOf(region) {
+    var out = [];
+    try {
+      var words = region.querySelectorAll(".rnp-karaoke-word");
+      for (var i = 0; i < words.length && i < 80; i++) {
+        var w = words[i];
+        var span = w.children && w.children[0];
+        var raw = span ? String(span.textContent || "") : "";
+        var row = { cls: String(w.className || ""), text: raw };
+        var sp = [];
+        for (var k = 0; k < raw.length; k++) {
+          if (/[ \u3000]/.test(raw.charAt(k))) sp.push(k);
+        }
+        if (sp.length) row.spaces = sp;
+        out.push(row);
+      }
+    } catch (e) {
+      /* 结构不认识就少导一点 */
+    }
+    return out;
+  }
+
+  function noteLineDiag(text, region, tokens) {
+    var s = String(text == null ? "" : text);
+    var row = { at: Date.now(), text: s, len: s.length, tokens: [] };
+    var sp = [];
+    for (var i = 0; i < s.length; i++) {
+      if (/[ \u3000]/.test(s.charAt(i))) sp.push(i);
+    }
+    if (sp.length) row.spaces = sp;
+    row.cells = cellsOf(region);
+    for (var j = 0; j < (tokens || []).length; j++) {
+      var t = tokens[j];
+      if (!t) continue;
+      row.tokens.push({
+        s: t.start,
+        e: t.end,
+        t: t.text,
+        kana: t.kana || "",
+        kind: t.kind || "",
+        hide: t.hide ? 1 : 0,
+      });
+    }
+    lineDiag.push(row);
+    while (lineDiag.length > LINE_DIAG_KEEP) lineDiag.shift();
+  }
+
+  function diagFilePath() {
+    return dataRoot() + "/lyrics/lyric-ruby-diag.json";
+  }
+
+  function pluginVersion() {
+    try {
+      if (typeof plugin !== "undefined" && plugin && plugin.manifest && plugin.manifest.version) {
+        return String(plugin.manifest.version);
+      }
+    } catch (e) {
+      /* 没有就算空 */
+    }
+    return "";
+  }
+
+  /** 收集一份排障快照（面板「导出诊断」和 WK.diag() 共用） */
+  function collectDiag() {
+    var info = {};
+    try {
+      info = externalIdentity() || {};
+    } catch (e) {
+      info = {};
+    }
+    var dom = [];
+    try {
+      var lines = document.querySelectorAll(".rnp-lyrics-line");
+      for (var i = 0; i < lines.length && i < 40; i++) {
+        var el = lines[i];
+        var t = "";
+        try {
+          t = state.annotator ? state.annotator.textOf(el) : el.textContent;
+        } catch (e2) {
+          t = "";
+        }
+        dom.push({
+          offset: el.getAttribute("offset"),
+          karaoke: !!el.querySelector(".rnp-karaoke-word"),
+          text: t,
+          cells: cellsOf(el),
+          hide: el.querySelectorAll(".wk-hide").length,
+          ruby: el.querySelectorAll(".wk-ruby").length,
+          rt: el.querySelectorAll(".wk-rt").length,
+        });
+      }
+    } catch (e3) {
+      /* 歌词层还没渲染出来 */
+    }
+    return {
+      at: new Date().toISOString(),
+      plugin: pluginVersion(),
+      song: { id: (info && info.id) || "", title: (info && info.title) || "", artist: (info && info.artist) || "" },
+      config: {
+        furigana: config.furigana,
+        kana: config.furiganaKana,
+        external: config.externalUtaten,
+        annotateLatin: config.annotateLatin,
+        wrapLines: config.wrapLines,
+      },
+      tokens: lineDiag.slice(),
+      wrap: state.annotator && state.annotator.diagLines ? state.annotator.diagLines() : [],
+      dom: dom,
+    };
+  }
+
   function extraTokens(text, context, host, offset, lineText) {
     var s = String(text == null ? "" : text);
     if (!s) return null;
@@ -6119,8 +6252,10 @@
       '<button data-a="resetSong">重置本首读音</button> ' +
       '<button data-a="retry">重试没结果的词</button> ' +
       '<button data-a="exportWords">导出词库素材</button> ' +
+      '<button data-a="diag">导出诊断</button> ' +
       '<button data-a="clearCache">清除校正缓存</button>' +
       "</div>" +
+      '<div class="wk-row"><span data-v="diag"></span></div>' +
       '<div class="wk-row"><span data-v="learned"></span> ' +
       '<button data-a="learnClear">清空已学会的词</button></div>' +
       "</details>";
@@ -6810,6 +6945,38 @@
             setTimeout(function () {
               b.textContent = "导出词库素材";
             }, 2500);
+          } else if (what === "diag") {
+            /*
+             * 把最近几行逐字歌词的排障快照写成文件（面板里拿不到开发者工具，
+             * 但 betterncm.fs 能写盘）。写不了就退到剪贴板 / 控制台。
+             */
+            var diagJson = "";
+            var outEl = root.querySelector('[data-v="diag"]');
+            try {
+              diagJson = JSON.stringify(collectDiag(), null, 1);
+            } catch (eDiag) {
+              diagJson = "";
+              if (outEl) outEl.textContent = "导出失败：" + ((eDiag && eDiag.message) || eDiag);
+            }
+            if (diagJson) {
+              var diagPath = diagFilePath();
+              var noteOk = function (msg) {
+                if (outEl) outEl.textContent = msg;
+              };
+              fsWriteText(diagPath, diagJson).then(
+                function () {
+                  noteOk("已写到 " + diagPath);
+                },
+                function (eW) {
+                  try {
+                    console.log("[lyric-ruby] 诊断：", diagJson);
+                  } catch (eL2) {
+                    /* ignore */
+                  }
+                  noteOk("写文件失败（" + ((eW && eW.message) || eW) + "），已打印到控制台");
+                }
+              );
+            }
           } else if (what === "clearCache") {
             if (state.corrector) state.corrector.clearCache();
             if (state.llm) state.llm.clearCache();
@@ -7216,14 +7383,16 @@
            * 反而会把"故意留白"的地方注上（真机：好几行末尾的 良 被补成 よ）。
            */
           var toks = extraTokens(text, text, lineTokenHost(region), undefined, text);
-          var karaoke = false;
-          try {
-            var cn = region && typeof region.className === "string" ? region.className : "";
-            karaoke = /karaoke/i.test(cn) || !!(region && region.querySelector && region.querySelector(".rnp-karaoke-word"));
-          } catch (eK) {
-            karaoke = false;
+          var karaoke = isKaraokeRegion(region);
+          var final = karaoke ? fillGapReadings(text, toks) : toks;
+          if (karaoke) {
+            try {
+              noteLineDiag(text, region, final);
+            } catch (eD) {
+              /* 排障记录失败不影响注音 */
+            }
           }
-          return karaoke ? fillGapReadings(text, toks) : toks;
+          return final;
         },
         wrapLines: config.wrapLines !== false,
         annotateAll: config.annotateAll !== false,
@@ -7457,6 +7626,13 @@
       },
       exportWordsJson: function () {
         return JSON.stringify(collectWordExport(), null, 2);
+      },
+      /** 逐字歌词的排障快照（面板「操作 → 导出诊断」用的是同一份，见 collectDiag） */
+      diag: function () {
+        return collectDiag();
+      },
+      diagJson: function () {
+        return JSON.stringify(collectDiag(), null, 1);
       },
       learn: {
         list: function () {

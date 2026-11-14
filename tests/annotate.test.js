@@ -693,16 +693,21 @@ test("逐字词格：逐字层改回 block（和普通行一样按基线排、�
 
 /*
  * 一个词跨好几格时，整段字只放在头一格（其余格清空），逐字高亮原本只跑
- * 头一格那点时间。现在把同一组各格的时长加起来写回头一格 ——
- * 整段字按整个词的时间亮完。
+ * 头一格那点时间。现在把整组的时间跨度写到**头一格的替身**上 ——
+ * 整段字按整个词的时间亮完（括号读音那几格也算进去）。
+ *
+ * 结构照 RNP 真机来：时长 / 起始推迟写在格子里那个 span 上，
+ * 不在词格 div 上（写到 div 上等于没写，真机上高亮照旧只跑头一格）。
  */
-test("跨格的词：逐字时长 = 各格时长之和（含括号读音那几格）", () => {
-  const style = ' style="transition-duration: 200ms, 160ms, 0.5s; transition-delay: 0ms, 100ms, 0ms"';
-  const cell = (c) =>
-    '<div class="rnp-karaoke-word is-cjk"' + style + '><span>' + c + "</span>" +
-    '<span class="rnp-karaoke-word-filler"' + style + ">" + c + "</span></div>";
+test("跨格的词：逐字时长 = 整组的时间跨度（写在格内 span 和它的替身上）", () => {
+  // 每一格：起点 r、时长 n（RNP 按 yrc 的逐字时间写进 span 的 inline style）
+  const cell = (c, r, n) =>
+    '<div class="rnp-karaoke-word is-cjk">' +
+    `<span style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">${c}</span>` +
+    `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s; ` +
+    `transition-delay: ${r}ms, ${r + Math.round(n * 0.5)}ms, 0ms">${c}</span></div>`;
   const ctx = newCtx(`<!doctype html><html><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${cell("体")}${cell("温")}${cell("が")}</div></div></div>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", 0, 200)}${cell("温", 200, 200)}${cell("が", 400, 150)}</div></div></div>
 </body></html>`);
   forceRubyLayout(ctx, true);
   makeAnnotator(ctx, {
@@ -718,27 +723,28 @@ test("跨格的词：逐字时长 = 各格时长之和（含括号读音那几�
   const firstRuby = words[0].querySelector(".wk-ruby");
   assert.strictEqual(firstRuby.childNodes[0].nodeValue, "体温", "整段字挂在头一格：" + words[0].outerHTML);
   assert.strictEqual(words[1].textContent.trim(), "", "第二格清空");
-  assert.match(
-    words[0].style.transitionDuration,
-    /^400ms/,
-    "头一格的时长要是 200+200：" + words[0].getAttribute("style")
-  );
   const filler = words[0].querySelector(".rnp-karaoke-word-filler");
-  assert.match(filler.style.transitionDuration, /^400ms/, "替身也要跟着改：" + filler.getAttribute("style"));
+  assert.match(
+    filler.style.transitionDuration,
+    /^400ms/,
+    "头一格的替身要按整组（0→400ms）亮：" + filler.getAttribute("style")
+  );
+  // 第二格（不属于同一个词的组）不许被改
+  const filler2 = words[2].querySelector(".rnp-karaoke-word-filler");
+  assert.match(filler2.style.transitionDuration, /^150ms/, "别组不动：" + filler2.getAttribute("style"));
 });
 
 /*
  * 行还没轮到的时候 RNP 给的是 0ms；真正开始唱时它才把每格的时长写进
- * inline style（并且只改 offset 属性）—— 那一轮必须重新加起来，
+ * inline style（并且只改 offset 属性）—— 那一轮必须重新算一遍，
  * 否则高亮还是只跑头一格的时间（真机现象）。
  */
 test("跨格的词：行开始时（offset 变化后的下一轮）重新累加时长", () => {
-  const style0 = ' style="transition-duration: 0ms, 0ms, 0.5s; transition-delay: 0ms, 0ms, 0ms"';
-  const cell = (c) =>
-    '<div class="rnp-karaoke-word is-cjk"' + style0 + '><span>' + c + "</span>" +
-    '<span class="rnp-karaoke-word-filler"' + style0 + ">" + c + "</span></div>";
+  const cell0 = (c) =>
+    '<div class="rnp-karaoke-word is-cjk"><span style="transition-duration: 0ms, 0ms; transition-delay: 0ms">' + c + "</span>" +
+    '<span class="rnp-karaoke-word-filler" style="transition-duration: 0ms, 0ms, 0.5s; transition-delay: 0ms, 0ms, 0ms">' + c + "</span></div>";
   const ctx = newCtx(`<!doctype html><html><body>
-<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="3"><div class="rnp-lyrics-line-karaoke">${cell("体")}${cell("温")}${cell("が")}</div></div></div>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="3"><div class="rnp-lyrics-line-karaoke">${cell0("体")}${cell0("温")}${cell0("が")}</div></div></div>
 </body></html>`);
   forceRubyLayout(ctx, true);
   const ann = makeAnnotator(ctx, {
@@ -750,22 +756,61 @@ test("跨格的词：行开始时（offset 变化后的下一轮）重新累加�
     },
   });
   ann.pass();
-
-  // 这一行开始唱了：RNP 把 offset 改成 0、把每格的真实时长写进 style
   const line = ctx.document.querySelector(".rnp-lyrics-line");
-  line.setAttribute("offset", "0");
   const words = line.querySelectorAll(".rnp-karaoke-word");
-  for (let i = 0; i < words.length; i++) {
-    words[i].setAttribute(
+  assert.match(
+    words[0].querySelector(".rnp-karaoke-word-filler").style.transitionDuration,
+    /^0ms/,
+    "还没轮到这一行（全是 0ms）时不动"
+  );
+
+  // 这一行开始唱了：RNP 把 offset 改成 0、把每格的真实时长写进 span
+  line.setAttribute("offset", "0");
+  const paint = (w, r, n) => {
+    w.children[0].setAttribute("style", `transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms`);
+    w.children[1].setAttribute(
       "style",
-      "transition-duration: 200ms, 160ms, 0.5s; transition-delay: 0ms, 100ms, 0ms"
+      `transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s; transition-delay: ${r}ms, ${r + Math.round(n * 0.5)}ms, 0ms`
     );
-  }
+  };
+  paint(words[0], 0, 200);
+  paint(words[1], 200, 200);
+  paint(words[2], 400, 150);
   ann.pass();
 
   assert.match(
-    words[0].style.transitionDuration,
+    words[0].querySelector(".rnp-karaoke-word-filler").style.transitionDuration,
     /^400ms/,
-    "开始唱之后头一格要是 200+200：" + words[0].getAttribute("style")
+    "开始唱之后头一格要按 0→400ms 亮：" + words[0].getAttribute("style")
   );
+});
+
+/*
+ * 已经在跑的 transition 改不了时长（CSS Transitions 规定 transition-* 的改动
+ * 不影响运行中的过渡），所以把时长换成整组之后要把那一下扫光重启：
+ * 遮罩位置钉回 100%（未唱）再撤掉，让它按整组时长重跑一遍。
+ */
+test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再撤掉）", () => {
+  const cell = (c, r, n) =>
+    '<div class="rnp-karaoke-word is-cjk">' +
+    `<span style="transition-duration: ${n}ms; transition-delay: ${r}ms">${c}</span>` +
+    `<span class="rnp-karaoke-word-filler" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms, 0.5s">${c}</span></div>`;
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体", 0, 200)}${cell("温", 200, 200)}</div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  const ann = makeAnnotator(ctx, {
+    annotator: { lineTokens: () => [{ start: 0, end: 2, kana: "たいおん" }] },
+  });
+  ann.pass();
+  const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
+  const filler = words[0].querySelector(".rnp-karaoke-word-filler");
+  assert.match(filler.style.transitionDuration, /^400ms/, "按整组时长亮");
+  assert.strictEqual(filler.__wkGrp, 400, "标记里记着整组时长（排障导出用）");
+  assert.strictEqual(filler.style.getPropertyValue("-webkit-mask-position-x"), "", "重启完内联位置要撤掉");
+
+  // RNP 重绘：把替身的时长写回它自己的那一格，再补一次
+  filler.style.transitionDuration = "200ms, 160ms, 0.5s";
+  ann.retimeLines();
+  assert.match(filler.style.transitionDuration, /^400ms/, "补回整组时长：" + filler.getAttribute("style"));
 });

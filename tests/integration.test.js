@@ -7607,3 +7607,66 @@ test("逐字行里漏掉的汉字用本地词典兜底（哀 没读音 → 单�
     "哀 要用本地词典补上读音：" + JSON.stringify(pairs) + " / " + root.innerHTML
   );
 });
+
+test("逐字歌词：面板「导出诊断」把格子原文 / token（含括号读音）/ 整行记账写成 JSON 文件", async () => {
+  /*
+   * 逐字歌词的毛病（高亮只跑头一格、括号读音露出来）只有真机上才出得来，
+   * 而真机上开不了开发者工具 —— 所以面板里留了一个「导出诊断」：
+   * 把最近几行的行文本、每格原文（含排版空格的位置）、切出来的 token、
+   * 以及整行改写那边的记账（哪几格被并成一组、读到多少时长）写成文件。
+   */
+  const writes = [];
+  const fsStub = {
+    writeFileText: function (p, t) {
+      writes.push({ path: String(p), text: String(t) });
+      return Promise.resolve(true);
+    },
+  };
+  const karaoke = (line) =>
+    Array.from(line)
+      .map(
+        (c, i, all) =>
+          '<div class="rnp-karaoke-word is-cjk' +
+          (i < all.length - 1 ? " end-with-space" : "") +
+          '"><span>' +
+          c +
+          (i < all.length - 1 ? " " : "") +
+          "</span></div>"
+      )
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("舞台(セカイ)に響く")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { fs: fsStub, config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 舞台: "ブタイ", 響: "ヒビ", に: "ニ", く: "ク" }));
+  await env.runLoad();
+  await sleep(600);
+
+  const root = env.listeners.config[0]();
+  const btn = Array.from(root.querySelectorAll("[data-a]")).find((b) => b.dataset.a === "diag");
+  assert.ok(btn, "操作里要有「导出诊断」按钮");
+  btn.dispatchEvent(new env.window.Event("click"));
+  await sleep(80);
+
+  assert.strictEqual(writes.length, 1, "点一下要写一个文件");
+  assert.match(writes[0].path, /lyric-ruby-diag\.json$/, "写到数据目录下：" + writes[0].path);
+  const dump = JSON.parse(writes[0].text);
+
+  const row = (dump.tokens || []).find((x) => x && x.text && x.text.indexOf("セカイ") > 0);
+  assert.ok(row, "要记下这一行的原文：" + JSON.stringify(dump.tokens && dump.tokens.map((x) => x && x.text)));
+  assert.ok(row.cells && row.cells.length >= 8, "要记下每一格的原文：" + JSON.stringify(row.cells));
+  const paren = (row.tokens || []).filter((t) => t.hide);
+  assert.ok(paren.length >= 1, "括号读音那一段要标成 hide：" + JSON.stringify(row.tokens));
+
+  const wrap = (dump.wrap || []).find((w) => w && w.text && w.text.indexOf("セカイ") > 0);
+  assert.ok(wrap, "整行改写那边的记账也要有：" + JSON.stringify(dump.wrap && dump.wrap.map((w) => w.text)));
+  assert.ok(
+    (wrap.segs || []).some((sg) => sg.hidden),
+    "记账里要能看出哪几段是括号读音：" + JSON.stringify(wrap.segs)
+  );
+
+  const line = (dump.dom || []).find((d) => d && d.karaoke);
+  assert.ok(line, "当前页面的逐字行也要抓一份");
+  assert.ok(line.hide >= 1, "行里现在有几个 .wk-hide 也要记：" + JSON.stringify(line));
+  assert.ok(line.ruby >= 1, "注了几处也要记：" + JSON.stringify(line));
+});

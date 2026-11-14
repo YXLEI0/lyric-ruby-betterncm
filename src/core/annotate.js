@@ -2761,11 +2761,24 @@ function buildRuby(base, gloss, provisional, source, flat) {
     /**
      * 一个词跨好几格时，整段文字只放在头一格上，其余格清空（见 groupHosts）。
      * 但 RNP 给每一格的逐字时间是各自的：高亮只跑到头一格那点时间就停了，
-     * 后面的时间白扔。这里把同一组各格的时长加起来写回头一格 ——
+     * 后面的时间白扔。这里把整组的时间跨度写到**头一格的替身**上 ——
      * 整段字按整个词的时间亮完（括号读音那几格也算进去）。
      *
-     * 只动第一格（和它的替身）的 transition-duration / delay，别的属性不碰；
-     * 不是 RNP 那种 "时长, 时长, 时长" 的形状就整个跳过，宁可不改。
+     * 两个坑（都是真机上撞出来的）：
+     *
+     *   1. RNP 的逐字时长 / 起始推迟写在**格子里那个 span** 上
+     *      （`div.rnp-karaoke-word > span[style] + span.rnp-karaoke-word-filler`），
+     *      不在词格 div 上 —— 写到 div 上等于没写，高亮照旧只跑头一格。
+     *   2. 头一格的时长被我们改过之后就不能再拿来累加（会越加越多）。
+     *      所以总长一律用「最后一格"起点 + 时长"，减去第一格的起点」算 ——
+     *      这两个数只有 RNP 会写，我们一个都不碰。
+     *
+     * 还有第三个坑，是这一版才弄明白的：**已经在跑的 transition 改不了时长**
+     * （CSS Transitions 规定 transition-* 的改动不影响运行中的过渡）。行开始唱时
+     * RNP 用"头一格那点时间"把扫光起了个头，我们在下一帧写整组时长是白写。
+     * 所以改完要把那一下扫光**重启**一次：先把替身的遮罩位置钉回 100%（未唱），
+     * 再把时长换上，最后撤掉内联位置 —— 于是 100% → 0% 这一段按整组时长重跑。
+     * 重启只在这一格"从别人的时长换成我们的时长"时发生，一行一次。
      */
     function readMs(v) {
       var m = /^\s*([0-9.]+)(ms|s)\b/.exec(String(v || ""));
@@ -2775,40 +2788,129 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return m[2] === "s" ? Math.round(n * 1000) : Math.round(n);
     }
 
+    /** 这一格的逐字替身（RNP slide 动画那份"亮起来"的副本），没有就返回 null */
+    function fillerOf(el) {
+      var p = el && el.parentNode;
+      if (!p || p.nodeType !== 1) return null;
+      var kids = p.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        if (k === el) continue;
+        if (!RE_FILLER_CLASS.test(typeof k.className === "string" ? k.className : "")) continue;
+        return k;
+      }
+      return null;
+    }
+
     function retimeGroup(grp) {
-      var words = grp.words;
-      var first = grp.first;
-      if (!first || !first.style || words.length < 2) return;
-      var total = 0;
-      for (var i = 0; i < words.length; i++) {
-        var w = words[i];
-        var d = w && w.style ? readMs(w.style.transitionDuration) : null;
-        if (d == null) return;
-        total += d;
-      }
+      var hosts = grp && grp.hosts;
+      if (!hosts || hosts.length < 2) return;
+      var first = hosts[0];
+      var last = hosts[hosts.length - 1];
+      if (!first || !first.style || !last || !last.style) return;
+      var r0 = readMs(first.style.transitionDelay);
+      var rN = readMs(last.style.transitionDelay);
+      var dN = readMs(last.style.transitionDuration);
+      if (r0 == null || rN == null || dN == null) return;
       // 还没轮到这一行时 RNP 写的是 0ms：别把 0 当成"算过了"
+      var total = rN + dN - r0;
       if (!(total > 0)) return;
+      // 只动替身：遮罩扫光跑在它身上（CSS 的 transition-property 第一个就是 mask-position-x）
+      var filler = fillerOf(first);
+      if (!filler || !filler.style) return;
+      retimeFiller(filler, total);
+    }
+
+    /** 把替身的扫光时长改成整组时长，并把已经开始的那一次重启（见上面的注释 3） */
+    function retimeFiller(el, total) {
       var dur = total + "ms, " + Math.round(total * 0.8) + "ms, 0.5s";
-      if (first.style.transitionDuration === dur) return;
-      var delay0 = readMs(first.style.transitionDelay);
-      first.style.transitionDuration = dur;
-      if (delay0 != null) {
-        first.style.transitionDelay =
-          delay0 + "ms, " + Math.round(delay0 + total * 0.5) + "ms, 0ms";
-      }
-      var kids = first.children || [];
-      for (var j = 0; j < kids.length; j++) {
-        var f = kids[j];
-        if (!f || f === first) continue;
-        if (!RE_FILLER_CLASS.test(typeof f.className === "string" ? f.className : "")) continue;
-        f.style.transitionDuration = dur;
-        if (delay0 != null) f.style.transitionDelay = first.style.transitionDelay;
-      }
+      if (el.style.transitionDuration === dur) return;
+      el.__wkGrp = total;
+      /*
+       * 重启三步，顺序不能反：
+       *   1. 时长归零 + 遮罩位置钉到 100%（未唱）—— 时长归零它才瞬间到位
+       *   2. 读一次 offsetWidth 把样式刷下去（读到 0 也没关系，要的是这次刷新）
+       *   3. 先把时长换成整组，再撤掉内联位置 —— 这时才起新过渡
+       */
+      el.style.transitionDuration = "0s";
+      el.style.setProperty("-webkit-mask-position-x", "100%");
+      if (el.offsetWidth !== undefined) el.offsetWidth; // 强制刷新样式
+      el.style.transitionDuration = dur;
+      el.style.removeProperty("-webkit-mask-position-x");
     }
 
     function retimeGroups(rec) {
       if (!rec || !rec.groups || !rec.groups.length) return;
       for (var i = 0; i < rec.groups.length; i++) retimeGroup(rec.groups[i]);
+    }
+
+    /*
+     * 最近几行整行改写的结果（排障导出用，见 diagLines）。
+     *
+     * 逐字歌词的毛病（高亮只跑头一格、括号读音露出来）只有真机上才出得来，
+     * 而真机上开不了开发者工具 —— 所以在插件里留一圈记录，面板上点一下就能
+     * 把「这行是什么字、切出哪些段、哪几段是括号读音、每格的时长读到多少」
+     * 导出成文件，不用现场抄。
+     */
+    var diagRing = [];
+    var DIAG_KEEP = 12;
+
+    function noteDiag(rec) {
+      diagRing.push({ rec: rec, at: clock() });
+      while (diagRing.length > DIAG_KEEP) diagRing.shift();
+    }
+
+    function diagEntry(item) {
+      var rec = item.rec;
+      var out = { at: item.at, text: rec ? rec.text : "", stale: !(rec && rec.region && rec.region.isConnected) };
+      if (!rec) return out;
+      var segs = [];
+      for (var i = 0; i < rec.hosts.length && segs.length < 24; i++) {
+        var hs = rec.hosts[i].segs || [];
+        for (var j = 0; j < hs.length && segs.length < 24; j++) {
+          var sg = hs[j];
+          segs.push({
+            t: sg.text,
+            rt: sg.rt || "",
+            hidden: sg.hidden ? 1 : 0,
+            blank: sg.blank ? 1 : 0,
+          });
+        }
+      }
+      out.hosts = rec.hosts.length;
+      out.segs = segs;
+      var groups = [];
+      for (var g = 0; g < (rec.groups || []).length; g++) {
+        var grp = rec.groups[g];
+        var hosts = grp.hosts || [];
+        var row = { cells: hosts.length };
+        var first = hosts[0];
+        var last = hosts[hosts.length - 1];
+        if (first && first.style) row.r0 = readMs(first.style.transitionDelay);
+        if (last && last.style) {
+          row.rN = readMs(last.style.transitionDelay);
+          row.dN = readMs(last.style.transitionDuration);
+        }
+        var f = first ? fillerOf(first) : null;
+        if (f && f.style) row.fillerDur = f.style.transitionDuration;
+        groups.push(row);
+      }
+      out.groups = groups;
+      out.mirrors = rec.mirrors ? rec.mirrors.length : 0;
+      return out;
+    }
+
+    /** 最近改写过的几行（面板「导出诊断」用；纯数据，可直接 JSON.stringify） */
+    function diagLines() {
+      var out = [];
+      for (var i = 0; i < diagRing.length; i++) {
+        try {
+          out.push(diagEntry(diagRing[i]));
+        } catch (e) {
+          out.push({ error: String((e && e.message) || e) });
+        }
+      }
+      return out;
     }
 
     /** 整行重写一条（建 DOM + 记账） */
@@ -2857,16 +2959,18 @@ function buildRuby(base, gloss, provisional, source, flat) {
           if (i === 0) collectRubies(wrap, rec.nodes);
           if (isWord) mirrorToFillers(host.el, segsHere, cls, rec, isFlat);
         }
-        // 这一组跨了好几格：把各格的时间记下来，稍后加到头一格的动画上
+        // 这一组跨了好几格：把各格（RNP 写时长的那层 span）记下来，稍后整组重记时长
         if (group.hosts.length > 1) {
-          var ws = [];
+          var hs = [];
           for (var gh = 0; gh < group.hosts.length; gh++) {
-            var wd = karaokeWordOf(group.hosts[gh].el, region);
-            if (wd) ws.push(wd);
+            var hEl = group.hosts[gh].el;
+            if (!karaokeWordOf(hEl, region)) continue; // 不在词格里就没有逐字动画
+            hs.push(hEl);
           }
-          if (ws.length > 1) rec.groups.push({ first: ws[0], words: ws });
+          if (hs.length > 1) rec.groups.push({ hosts: hs });
         }
       }
+      noteDiag(rec);
       return rec;
     }
 
@@ -3629,6 +3733,18 @@ function buildRuby(base, gloss, provisional, source, flat) {
 
     return {
       pass: pass,
+      /*
+       * 逐字行开始唱之后 RNP 会把每格的时长写回它自己的值 —— 跨格词那组的
+       * 整段时长要在同一帧补回来（见 retimeGroup）。上层在 style 观察里认到
+       * `__wkGrp` 标记就调这个，别为一次 style 变化重扫整行。
+       */
+      retimeLines: function () {
+        records.forEach(function (rec) {
+          if (rec && rec.kind === "wrap") retimeGroups(rec);
+        });
+      },
+      /** 最近改写过的几行的排障数据（见 diagLines） */
+      diagLines: diagLines,
       restoreAll: restoreAll,
       relabel: relabel,
       rescanRegions: rescanRegions,
