@@ -675,3 +675,57 @@ test("署名判据不能靠大小写不敏感的 /i：Music by the lake / Words 
   assert.strictEqual(ps[0].querySelectorAll("ruby.wk-ruby").length, 4, "Music / by / the / lake 都该标：" + ps[0].innerHTML);
   assert.strictEqual(ps[1].querySelectorAll("ruby.wk-ruby").length, 3, "Words / of / love 都该标：" + ps[1].innerHTML);
 });
+
+/*
+ * 逐字歌词（RNP 的 flex + wrap）最怕注音把词格撑宽：
+ * 一格一个 flex 项，注音比底字宽就把整行撑长，行尾的字被挤到下一行
+ * （真机：`否 笑い合ってさよなら` 的「なら」掉到第二行）。
+ * 所以词格里的注音必须**不占宽度**，而且 wrap 得是 inline-block
+ * （inline 上 padding 不生效，让位高度就白算了）。
+ */
+test("逐字词格：wrap 是 inline-block，注音是绝对定位（不撑宽格子）", () => {
+  const ctx = newCtx();
+  ctx.WKAnnotate.applyStyles(ctx.document, {});
+  const css = ctx.document.getElementById("lyric-ruby-style").textContent;
+  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \{[^}]*display:\s*inline-block/);
+  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \.wk-rt \{[^}]*position:\s*absolute/);
+  assert.match(css, /\.rnp-karaoke-word \.wk-line\.wk-word \.wk-rt \{[^}]*left:\s*50%/);
+});
+
+/*
+ * 让位高度改了行高，RNP 却只在 recalc 时重量 —— 不通知它，行距就是旧数字。
+ * jp-furigana 也是发这个事件通知它的。
+ */
+test("逐字行改过之后通知 RNP 重量行高（recalc-lyrics）", async () => {
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke"><div class="rnp-karaoke-word is-cjk end-with-space"><span>否 </span><span class="rnp-karaoke-word-filler">否 </span></div><div class="rnp-karaoke-word is-cjk"><span>笑 </span><span class="rnp-karaoke-word-filler">笑 </span></div><div class="rnp-karaoke-word is-cjk"><span>合 </span><span class="rnp-karaoke-word-filler">合 </span></div><div class="rnp-karaoke-word is-cjk"><span>う </span><span class="rnp-karaoke-word-filler">う </span></div></div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  let fired = 0;
+  ctx.window.addEventListener("recalc-lyrics", () => {
+    fired++;
+  });
+  makeAnnotator(ctx, {
+    annotator: {
+      lineTokens: () => [
+        { start: 0, end: 1, kana: "いな" },
+        { start: 1, end: 2, kana: "わら" },
+        { start: 2, end: 3, kana: "あ" },
+        { start: 3, end: 4, kana: "う" },
+      ],
+    },
+  }).pass();
+  // 事件是 setTimeout(0) 发的，等一拍
+  await new Promise((r) => setTimeout(r, 30));
+  assert.strictEqual(fired, 1, "改过逐字行之后要发一次 recalc-lyrics");
+
+  // 没有逐字歌词的页面不该发（原生歌词页没有这个事件，发了也是白发）
+  const plain = newCtx();
+  let plainFired = 0;
+  plain.window.addEventListener("recalc-lyrics", () => {
+    plainFired++;
+  });
+  makeAnnotator(plain).pass();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.strictEqual(plainFired, 0);
+});

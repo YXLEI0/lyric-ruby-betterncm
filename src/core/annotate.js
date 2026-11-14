@@ -3035,6 +3035,8 @@ function buildRuby(base, gloss, provisional, source) {
     var calTries = 0;
     var calOffset = null; // em；null = 还没量过，用样式表里那个估算值
     var calSample = null;
+    /** 这一轮量出来、改写了 --wk-word-offset（行高跟着变，要通知 RNP） */
+    var wordVarsTouched = false;
 
     function setWordVars(offsetEm) {
       try {
@@ -3043,6 +3045,7 @@ function buildRuby(base, gloss, provisional, source) {
         var v = offsetEm.toFixed(3);
         root.setProperty("--wk-word-offset", v + "em");
         root.setProperty("--wk-word-tail", "-" + v + "em");
+        wordVarsTouched = true;
       } catch (e) {
         /* 没有 documentElement 就算了 */
       }
@@ -3050,6 +3053,46 @@ function buildRuby(base, gloss, provisional, source) {
 
     function clampEm(v) {
       return Math.max(-2, Math.min(2, Math.round(v * 1000) / 1000));
+    }
+
+    /*
+     * 让 RNP 重量一次行高。
+     *
+     * RNP 把每行的位置算成"前面各行 clientHeight 之和"，而这个和只在它自己
+     * recalc 的时候重量（换字号 / 开歌词页 / 窗口 resize）。我们给逐字词格加
+     * 让位高度之后，它手里那份还是旧数字 —— 行距就对不上（真机上表现为
+     * 行与行之间忽大忽小，或者注音压到上一行）。它自己留了 `recalc-lyrics`
+     * 这个 window 事件用来强制重量，jp-furigana 也是这么通知它的。
+     *
+     * 只在真的改过行的时候发，而且 400ms 内只发一次：换歌时连续几轮重建，
+     * 每轮都发就等于让 RNP 一直重排。
+     */
+    var recalcTimer = null;
+    var lastRecalcAt = 0;
+
+    function requestRecalc() {
+      var win = doc && doc.defaultView;
+      if (!win || !win.setTimeout || !win.dispatchEvent) return;
+      var now = Date.now();
+      if (now - lastRecalcAt < 400) return;
+      var karaoke = false;
+      try {
+        karaoke = !!doc.querySelector(".rnp-lyrics-line, .rnp-karaoke-word, .lyric-bar-inner");
+      } catch (eQ) {
+        karaoke = false;
+      }
+      if (!karaoke) return; // 没有逐字歌词插件就没人听
+      lastRecalcAt = now;
+      if (recalcTimer) return;
+      // 放到本轮之后发：它同步改的 DOM 会被这一轮的收尾逻辑当成"行被重建了"
+      recalcTimer = win.setTimeout(function () {
+        recalcTimer = null;
+        try {
+          win.dispatchEvent(new win.Event("recalc-lyrics"));
+        } catch (eD) {
+          /* 没有这个事件就算了 */
+        }
+      }, 0);
     }
 
     /**
@@ -3135,6 +3178,7 @@ function buildRuby(base, gloss, provisional, source) {
      */
     function pass(regions) {
       if (!doc || !doc.body) return { scanned: 0, changed: 0, restored: 0 };
+      wordVarsTouched = false;
 
       // 只清掉宿主已经脱离文档的记录（那块 DOM 已经没了）
       var restored = dropDetached();
@@ -3540,6 +3584,11 @@ function buildRuby(base, gloss, provisional, source) {
         noteRetry(calibrateWordOffset());
       }
       /*
+       * 改过行（或者刚量完让位高度）就通知逐字歌词插件重量行高：
+       * 它按 clientHeight 排行距，不重量就会拿着旧高度排行。
+       */
+      if (wrapOn && (wrapChanged || restored || wordVarsTouched)) requestRecalc();
+      /*
        * 把这一轮真正处理过的区域也交回去：上层（统一行距）要按"原文行"逐个写内联样式，
        * 自己再调一次 findRegions("lyrics") 就等于每轮多查一遍 DOM
        * （11 个选择器 + 逐元素可见性判断），真机上那点开销够让歌词滚起来发涩。
@@ -3730,24 +3779,59 @@ function buildRuby(base, gloss, provisional, source) {
       "  pointer-events: none;",
       "}",
       /*
-       * 底端对齐（照 jp-furigana 的 `.fg-line.fg-word` 抄的机制）。
+       * 逐字词格（RNP 的 `div.rnp-karaoke-word > span`）：整行改写后 wrap 是
+       * `span.wk-line.wk-word`。这里管两件事，都是 jp-furigana 踩过的：
        *
-       * 逐字歌词里每个字是一个独立的 inline-block：注音的高度**撑不到外面那层行盒**
-       * （行盒高度不变），而 RNP 正是按 clientHeight 排行距的。于是：
-       *   ① 注音顶到上一行头上；
-       *   ② 只有"带注音的那个字"被注音撑高，它的字就比左右邻居低一截 ——
-       *      看着就是「整行居中、唱到哪就歪到哪」。
-       * 解法：给**每个**词格都让出同样的高度（padding-top），再用负的 margin-bottom
-       * 把这截还给行距。不分有没有注音 —— 只给带注音的那个加，它反而更矮。
+       * ① 让位。词格是独立的 inline-block，注音撑不到外面那层行盒，而 RNP 正是按
+       *    clientHeight 排行距的。于是：注音顶到上一行头上；或者只有带注音的那个字
+       *    被撑高、比左右邻居低一截。解法照 jp-furigana 的 `.fg-line.fg-word`：
+       *    **每个**词格都让出同样的高度（padding-top），再用负 margin 还给行距。
+       *    不分有没有注音 —— 只给带注音的那个加，它反而更矮。
+       *    padding 只在 inline-block 上作用于垂直方向，所以 wrap 必须显式
+       *    inline-block（jp-furigana 那条规则的 display 就是干这个的，少一行
+       *    整个让位就不生效）。
+       *
+       * ② 宽度。逐字行是 `display:flex; flex-wrap:wrap`，每个词格是一个 flex 项；
+       *    原生 ruby 的宽度是 max(底字, 注音)，一个字配两拍读音就变成 1.2em。
+       *    整行被注音撑长之后，行尾的字会被挤到下一行 —— 真机现象就是
+       *    `否 笑い合ってさよなら` 的「なら」掉到第二行，看着像错位。
+       *    所以词格里的注音**不占宽度**：rt 绝对定位挂在底字正上方，格子宽度
+       *    永远等于底字，逐字行的断行和没装插件时一模一样。
+       *    这套就是 jp-furigana 在没有 ruby 排版的内核里用的做法
+       *    （`.fg-ruby > .fg-rt` 绝对定位），只是我们在逐字行里始终这么用。
        *
        * 让多少：样式表里先按注音字号估一个（var 的默认值），运行时再由
        * annotate.js 的 calibrateWordOffset() 量出实际差距改这两个变量。
        * 估的那个数总有一边不对（换字号 / 字体 / 内核都会变），量出来才收敛。
        */
-      // 整行改写的词格：wrap 是 `span.wk-line.wk-word`
-      ".rnp-lyrics-line .wk-line.wk-word {",
+      ".rnp-karaoke-word .wk-line.wk-word {",
+      "  display: inline-block;",
       "  padding-top: var(--wk-word-offset, " + padEm + "em);",
       "  margin-bottom: var(--wk-word-tail, -" + padEm + "em);",
+      "}",
+      ".rnp-karaoke-word .wk-line.wk-word ruby.wk-ruby {",
+      "  position: relative;",
+      "  display: inline-block;",
+      // 词格的 line-height 是 1.5（RNP 给的），ruby 盒子的半行距会把注音顶高一截；
+      // 这里收成 1，注音就贴在底字上方
+      "  line-height: 1;",
+      "}",
+      ".rnp-karaoke-word .wk-line.wk-word .wk-rt {",
+      "  position: absolute;",
+      "  left: 50%;",
+      "  bottom: 100%;",
+      "  transform: translateX(-50%);",
+      "  -webkit-transform: translateX(-50%);",
+      "  display: block;",
+      // 绝对定位的 rt 要有自己的高度，calibrate 才量得到"注音上边"；
+      // 普通 ruby 那条 line-height:0 是为了不撑行高，这里不适用
+      "  line-height: 1.1;",
+      "  pointer-events: none;",
+      "}",
+      // 词格里的 wrap 别再吃一层 opacity：RNP 的 `.rnp-karaoke-word span` 会给
+      // 每一层 span 都写 0.4，嵌套相乘之后底字只剩 0.16，注音淡到看不见
+      ".rnp-karaoke-word .wk-line {",
+      "  opacity: 1 !important;",
       "}",
       // 老路径（逐节点打补丁）的词格：wrap 只可能是词格自己的 span
       ".rnp-lyrics-line .rnp-karaoke-word > span:not(.wk-line) {",
