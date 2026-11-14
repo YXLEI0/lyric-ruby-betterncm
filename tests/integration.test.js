@@ -6410,10 +6410,13 @@ test("逐字歌词（RNP karaoke）：一个词跨好几个字时，整段读音
   assert.deepStrictEqual(hidden, ["(", "く", "る", "く", "る", ")"], "括号那一段也要整个藏掉：" + root.innerHTML);
 });
 
-test("外部网站的读音压过括号读音（MY HEART(マイココロ) → こころ）", async () => {
+test("西文底字的括号读音：作者写的（マイココロ）压过网站的 こころ，括号合并掉", async () => {
   /*
-   * 作者在括号里写的是整句的读法（マイココロ），网站标的是 HEART = こころ —— 以网站为准
-   * （用户明确要求）。这也顺带证明"客户端那行带括号读音"不会再让对齐失败。
+   * 真机：`ギコギコ MY HEART(マイココロ)`。作者在括号里写的是整句的读法，
+   * 网站只把 HEART 标成 こころ —— 作者的括号更权威（和汉字底字同一条规矩：
+   * inline 压过 external），括号整段藏起来。
+   *
+   * 这一条以前是反的（网站优先、括号露在歌词里），用户拿着截图报过。
    */
   const SEARCH = `<!doctype html><html><body><table><tr>
     <td class="searchResult__title"><a href="/lyric/abc/"><span class="songlist-title">ギコギコ</span></a></td>
@@ -6444,12 +6447,9 @@ test("外部网站的读音压过括号读音（MY HEART(マイココロ) → �
   const p = env.document.querySelector("ul.lyric li p");
   const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const heart = pairs.filter((x) => x[0] === "HEART")[0];
-  assert.deepStrictEqual(heart, ["HEART", "こころ"], "网站标的读音要压过括号读音：" + p.innerHTML);
-  /*
-   * 西文底字的括号**不当读音**（见 furigana.js 的 kanji 判据：`More More（フップー）`
-   * 那种括号是唱出来的喊话，藏掉就少一句歌词），所以这里不再有 wk-hide。
-   */
-  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 0, "西文底字的括号不该被藏起来：" + p.innerHTML);
+  assert.deepStrictEqual(heart, ["HEART", "マイココロ"], "作者括号里的读音压过网站：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号整段藏起来：" + p.innerHTML);
+  assert.strictEqual(p.querySelector(".wk-hide").textContent, "(マイココロ)", "藏的就是括号那一段：" + p.innerHTML);
 });
 
 test("网站把括号读音那一段整段重新切一遍时，括号读音不让（斜界(しゃかい)）", async () => {

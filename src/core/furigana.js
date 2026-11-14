@@ -299,7 +299,9 @@
      */
     /*
      * 底字不该以助词收尾（`心の（こころん）` 的读音只管 心）—— 先把尾巴上的助词去掉。
+     * 但原样要留一份：拍数不够时还能整段念（心の = こころん）。
      */
+    var runFull = run;
     while (run.length > 1 && PAREN_PARTICLES.indexOf(run.charAt(run.length - 1)) >= 0) {
       run = run.slice(0, run.length - 1);
     }
@@ -348,8 +350,16 @@
        * （`もう一回（もういいかい）` 是跟着唱的问句，`一回` 顶多 5 拍）。
        * 先看整段能不能装下（`夜を越えて(よるをこえて)` 这种整段念的），装不下就不认，
        * 括号原样留在歌词里。
+       *
+       * 放宽一个假名：底字尾巴上的助词被削掉之后，整段往往还装得下
+       * （`心の（こころん）` —— 心 只有 2 拍，心の 有 3 拍，加一个字的余量正好 4 拍）。
+       * 但这个余量只给"整段念"的那两种情形用（助词切过 / 尾巴助词削过）；
+       * 一次都没切过的是"跟着唱的问句"（`もう一回（もういいかい）`），照旧不认。
        */
-      if (cut > 0 && kana.length <= capacity(run)) return { base: run, start: runStart };
+      var widened = cut > 0 || runFull !== run;
+      if (widened && kana.length <= capacity(runFull) + (runFull !== run ? 1 : 0)) {
+        return { base: runFull, start: runStart };
+      }
       return null;
     }
     return { base: base, start: start };
@@ -393,6 +403,13 @@
       // 括号前面可能有个空格（`舞台 (セカイ)`）：先跳过去，再往左收底字
       var q = pStart;
       while (q > 0 && /[ \t\u3000]/.test(s.charAt(q - 1))) q--;
+      // 藏的范围从"括号（含前面那个空格）"开始 —— 底字往前收的时候不许把它带进去
+      var hideFrom = q;
+      /*
+       * 括号前面还挡着一个收尾引号 / 书名号时（`「ド」(カラ)`），底字在引号左边。
+       * 引号本身不进底字，也不藏（它是歌词的一部分）。
+       */
+      while (q > 0 && /[\u300D\u300F\u3011\u3015\u300B\u3009\u201D\u2019]/.test(s.charAt(q - 1))) q--;
       var baseStop = q;
       while (q > 0 && RE_PAREN_BASE_CHAR.test(s.charAt(q - 1))) q--;
       if (q >= baseStop) continue;
@@ -409,15 +426,28 @@
        * "对括号读音的判断保守一点"）。
        */
       if (isRepeatedSyllables(kana)) continue;
+      var hasKanji = /[\u4E00-\u9FFF\u3400-\u4DBF\u3005\u3006\u3007]/.test(base);
       /*
-       * **底字里没有汉字就不是括号读音**（照 jp-furigana 的 `RE_INLINE_RUBY`：
-       * 它要求括号前是 `[汉字]+`）。
+       * 底字不是汉字时，得多问一句"括号里这是读音吗"（以前一律不认，于是
+       * `HEART(マイココロ)`、`ド(カラ)` 的括号一直露在歌词里 —— 用户报的）。
        *
        * 真机反例：`More More（フップー）, More More（yahoo!）` —— 括号里是唱出来的
-       * 拟声 / 喊话（フップー、yahoo!），不是写法说明。当读音处理的话会把它整段藏掉，
-       * 屏幕上就少了歌词。西文底字（`HEART(ココロ)`）也走网站那条路，不在这里猜。
+       * 拟声 / 喊话，不是写法说明，整段藏掉屏幕上就少了歌词。所以非汉字底字
+       * 再加一道保守判据（见下）；拿不准就不藏。
+       *   - 括号里带 ッ 的当喊话（フップー 那种就长这样）
+       *   - 假名底字：只有括号里是片假名才当读音（假名读假名很常见）
+       *   - 括号里的拉丁串（`口吻（kiss）`）本来就被 RE_PAREN_READING 挡住了
        */
-      if (!/[\u4E00-\u9FFF\u3400-\u4DBF\u3005\u3006\u3007]/.test(base)) continue;
+      if (!hasKanji) {
+        /*
+         * 括号里带 ッ 的多半是"喊出来的"（`More More（フップー）` 那种拟声），
+         * 不是写法说明 —— 宁可留着不藏（藏错了屏幕上就少一句歌词）。
+         */
+        if (/[\u30C3]/.test(kana)) continue;
+        var latinBase = /[A-Za-z\u00C0-\u024F\uFF21-\uFF3A\uFF41-\uFF5A0-9]/.test(base);
+        // 假名底字：只有括号里是片假名才当读音（`ド(カラ)`；假名读假名很常见）
+        if (!latinBase && !/^[\u30A1-\u30FA\u30FC]+$/.test(kana)) continue;
+      }
       /*
        * 纯汉字 / 符号的底字再按拍数收窄一次：`一度嘲笑(わら)` 只该注 嘲笑
        * （vendor 会把 一度嘲笑 整串都注成 わら）。带假名 / 西文的底字不动 ——
@@ -430,7 +460,7 @@
           base = base.slice(base.length - narrow);
         }
       }
-      list.push({ start: unitStart, end: baseStop, base: base, kana: kana, hideStart: baseStop, hideEnd: pEnd });
+      list.push({ start: unitStart, end: baseStop, base: base, kana: kana, hideStart: hideFrom, hideEnd: pEnd });
     }
     return list;
   }

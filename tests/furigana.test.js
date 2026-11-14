@@ -634,12 +634,42 @@ test("括号读音的底字按网站的范围取（假名 / 西文 / 符号都�
     "含送假名的底字整段算：" + JSON.stringify(pairs("怒れる人(ラングラー)"))
   );
   /*
-   * 西文 / 纯假名底字**不算**括号读音（照 jp-furigana 的 RE_INLINE_RUBY：要求括号前是汉字）。
-   * 真机反例：`More More（フップー）` 的括号是唱出来的喊话，不是写法说明 ——
-   * 当读音处理会把这段歌词整段藏掉。西文词的读音交给网站 / 词典那条路。
+   * 西文底字的括号：纯假名的当读音（`HEART(ココロ)`、`HEART(マイココロ)`），
+   * 带 ッ 的当喊话（`More More（フップー）`）—— 后者真机上是唱出来的拟声，
+   * 整段藏掉屏幕上就少了歌词。这条判据是用户拿着截图要的第二版：
+   * 以前西文底字一律不认，于是 `HEART(マイココロ)` 的括号一直露在歌词里。
    */
-  assert.deepStrictEqual(pairs("HEART(ココロ)"), [], "西文底字不认括号读音");
-  assert.deepStrictEqual(pairs("More More（フップー）"), [], "括号里的喊话不当读音");
+  assert.deepStrictEqual(
+    pairs("HEART(ココロ)"),
+    [["HEART", "ココロ"], ["(ココロ)", "HIDE"]],
+    "西文底字 + 纯假名括号 = 读音：" + JSON.stringify(pairs("HEART(ココロ)"))
+  );
+  assert.deepStrictEqual(
+    pairs("MY HEART(マイココロ)"),
+    [["HEART", "マイココロ"], ["(マイココロ)", "HIDE"]],
+    "带空格的西文词只圈最后一个词：" + JSON.stringify(pairs("MY HEART(マイココロ)"))
+  );
+  assert.deepStrictEqual(
+    pairs("My Heart(マイハート)"),
+    [["Heart", "マイハート"], ["(マイハート)", "HIDE"]],
+    "括号里有长音也是读音：" + JSON.stringify(pairs("My Heart(マイハート)"))
+  );
+  assert.deepStrictEqual(pairs("More More（フップー）"), [], "括号里的喊话（ッ）不当读音");
+  /*
+   * 假名底字：括号里是片假名就是读音（`ド(カラ)`）；括号前挡着收尾引号时，
+   * 底字从引号左边取（`「ド」(カラ)`），引号本身既不当底字也不藏。
+   */
+  assert.deepStrictEqual(
+    pairs("ド(カラ)"),
+    [["ド", "カラ"], ["(カラ)", "HIDE"]],
+    "假名底字 + 片假名括号 = 读音：" + JSON.stringify(pairs("ド(カラ)"))
+  );
+  assert.deepStrictEqual(
+    pairs("「ド」(カラ)"),
+    [["ド", "カラ"], ["(カラ)", "HIDE"]],
+    "括号前有引号时底字在引号左边：" + JSON.stringify(pairs("「ド」(カラ)"))
+  );
+  assert.deepStrictEqual(pairs("ド(から)"), [], "假名底字的平假名括号不当读音");
   /*
    * 括号里是拉丁串的也不是读音（真机：翻译行里的 `（Hz）` 被当成 良い 的读音，
    * 注出个 "Hz" 来）。网站提供的拉丁读音（UtaTen 的 `口吻 = kiss`）走 external 那条路。
@@ -691,6 +721,22 @@ test("括号读音的底字只取最后一个词（助词切一刀），整句�
     pairs("夜を越えて(よるをこえて)"),
     [["夜を越えて", "よるをこえて"], ["(よるをこえて)", "HIDE"]],
     "拍数比底字长太多就整段：" + JSON.stringify(pairs("夜を越えて(よるをこえて)"))
+  );
+  /*
+   * 真机：`心の（こころん）レシピは`。尾巴上的助词被削掉之后 心 只有 2 拍，
+   * こころん 是 4 拍 —— 以前直接不认，括号一直露着（用户报的）。
+   * 放宽一个字的余量、并且允许整段念（心の = こころん）。
+   */
+  assert.deepStrictEqual(
+    pairs("心の（こころん）レシピは"),
+    [["心", "こころん"], ["（こころん）", "HIDE"]],
+    "单个汉字不按拍数卡（谺(こだま) 同理），括号要合并：" + JSON.stringify(pairs("心の（こころん）レシピは"))
+  );
+  // 但"跟着唱的问句"仍然不许当读音（拍数差得太多，括号原样留着）
+  assert.strictEqual(
+    pairs("もう一回（もういいかい）").some((x) => x[1] === "HIDE"),
+    false,
+    "跟着唱的问句不许藏：" + JSON.stringify(pairs("もう一回（もういいかい）"))
   );
 });
 
