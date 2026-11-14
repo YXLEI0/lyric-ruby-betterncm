@@ -224,6 +224,15 @@
     load(onReady);
   }
 
+  /** 把"人名标注"集合拼成缓存键的一部分（稳定的字典序） */
+  function tagsKey(tagSet) {
+    if (!tagSet) return "";
+    var keys = [];
+    for (var k in tagSet) if (Object.prototype.hasOwnProperty.call(tagSet, k) && tagSet[k]) keys.push(k);
+    keys.sort();
+    return keys.join(",");
+  }
+
   function cacheKey(text, kana) {
     return kana + "\u0000" + text;
   }
@@ -392,7 +401,7 @@
    *
    * 只看括号自己 —— 括号里写的读法对左边的哪一段起作用，按上面的收窄规则定。
    */
-  function parenReadings(s) {
+  function parenReadings(s, tagSet) {
     var list = [];
     if (!s || (s.indexOf("(") < 0 && s.indexOf("（") < 0)) return list;
     RE_PAREN_READING.lastIndex = 0;
@@ -416,6 +425,12 @@
       var run = s.slice(q, baseStop);
       var kana = m[1].replace(/[・\s]/g, "");
       if (!kana) continue;
+      /*
+       * 已经认出来"这不是读音，是唱歌人的名字"的括号，直接跳过（见 main.js 的
+       * learnParenTags：真机 `Jump!! 限界超え(みのり)`，括号里是这一句谁唱的，
+       * 不是 限界超え 的读法）。
+       */
+      if (tagSet && tagSet[toHira(kana)]) continue;
       var unit = parenBaseOf(run, q, kana);
       if (!unit || !unit.base) continue;
       var base = unit.base;
@@ -485,7 +500,8 @@
     // 全角数字（１２３）同样算 —— 歌词里经常是全角的
     // 只有会唱的符号 / 叠字符的行也要进来：`〆` しめ、`∞` むげん、`×` 音译兜底
     // 括号读音也算：`HEART(ココロ)` 里一个汉字都没有，可括号里写着读音（以前整行丢掉）
-    var inlineUnits = parenReadings(s);
+    var tagSet = (opts && opts.tags) || null;
+    var inlineUnits = parenReadings(s, tagSet);
     if (
       !inlineUnits.length &&
       !d.core.hasKanji(s) &&
@@ -502,7 +518,10 @@
       spansKey(opts && opts.spans) +
       // 音译行也会改结果（见下面的"音译兜底"），必须进键 —— 否则关了音译还读到旧的
       "\u0003" +
-      String((opts && opts.romaji) || "");
+      String((opts && opts.romaji) || "") +
+      // 被判成"人名标注"的括号也影响结果，必须进键
+      "\u0004" +
+      tagsKey(tagSet);
     var hit = cache.get(key);
     if (hit) return hit.length ? hit : null;
     /*
@@ -743,7 +762,7 @@
      * 读音**照原样显示**（用户要求）：括号里写的是片假名就出片假名，不跟着面板的
      * 平假名 / 片假名设置走 —— 那是作词者标的读法，改写法等于改人家的东西。
      */
-    var inlineUnits = parenReadings(s);
+    var inlineUnits = parenReadings(s, tagSet);
     /*
      * 括号**不是**读音的那些（`もう一回（もういいかい）`：括号里是跟着唱的问句）：
      * vendor 那条 `[汉字]+(かな)` 正则已经把它当成读音藏起来了，这里要把那几条撤掉，

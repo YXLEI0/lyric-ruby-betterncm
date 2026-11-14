@@ -823,3 +823,35 @@ test("音译兜底：会被唱出来的符号（×）也注上", () => {
     "× 要从音译里拿到 ば：" + JSON.stringify(pairs("イナイイナイ×点", "i na i i na i ba te n"))
   );
 });
+
+test("括号里是唱歌人的名字时不当读音（Jump!! 限界超え(みのり)）", () => {
+  /*
+   * 真机：`Jump!! 限界超え(みのり)` —— 括号是"这句谁唱的"（实乃里），
+   * 不是 限界超え 的读法。以前注出个 みのり 盖在 限界超え 上。
+   *
+   * 判据在主进程里学（同一个人名挂到不同底字上 / 带 さん 之类的称呼后缀），
+   * 学到之后通过 `tags` 交给这里：这些括号整个不当读音，括号原样留着。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ 限界: "ゲンカイ", 超: "コ", 完全無欠: "カンゼンムケツ", 目指: "メザ" }));
+  const pairs = (s2, opts) => Array.from(W.WKFurigana.tokens(s2, opts) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+
+  const withTag = pairs("限界超え(みのり)", { tags: { "みのり": 1 } });
+  assert.deepStrictEqual(
+    withTag,
+    [["限界", "げんかい"], ["超", "こ"]],
+    "判成人名标注后，括号不当读音也不藏（括号原样留在歌词里）：" + JSON.stringify(withTag)
+  );
+
+  const withoutTag = pairs("限界超え(みのり)");
+  assert.deepStrictEqual(
+    withoutTag,
+    [["限界超え", "みのり"], ["(みのり)", "HIDE"]],
+    "没判成人名时还是照旧当括号读音：" + JSON.stringify(withoutTag)
+  );
+
+  // 换成 さん 收尾的称呼也一样（(ミクさん) 那种）
+  const mikusan = pairs("限界超え(ミクさん)", { tags: { "みくさん": 1 } });
+  assert.deepStrictEqual(mikusan, [["限界", "げんかい"], ["超", "こ"]], "称呼后缀的也一样：" + JSON.stringify(mikusan));
+});

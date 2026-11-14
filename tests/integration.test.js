@@ -3418,12 +3418,11 @@ test("中文歌词：开了「汉字标普通话读音」才注音，默认不�
   assert.strictEqual(clone.textContent, "我爱上给我勇气的 Rainie Love");
 });
 
-test("中文歌里的纯数字 / 单位行不许用日语数词读（120km）", async () => {
+test("中文歌里的数字按普通话逐位读（120km）", async () => {
   /*
-   * 中文歌里偶尔有一整行就是数字 / 单位（`120km`）。这一行一个汉字都没有，
-   * "日语读不读得出"那个循环一次都不进 —— 以前直接算 true，整行被当日语行，
-   * 120 被注成 ひゃくにじゅう（用户报的「数字和物理单位都标上读音」）。
-   * 现在没有汉字的行不算日语可读，数字留空，单位仍然按西文读。
+   * 中文歌里偶尔有一整行就是数字 / 单位（`120km`）。
+   * 以前这种行被当成日语行，120 注成了 ひゃくにじゅう；后来改成"数字留空" ——
+   * 用户现在要的是「中文歌里的数字标中文读音」：逐位按普通话注（全角 / 半角都认）。
    */
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
@@ -3442,7 +3441,12 @@ test("中文歌里的纯数字 / 单位行不许用日语数词读（120km）", 
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
-  assert.deepStrictEqual(pairs, [["km", "キロ"]], "数字不许注成 ひゃくにじゅう：" + ps[2].innerHTML);
+  assert.deepStrictEqual(
+    pairs,
+    [["120", "イーアールリン"], ["km", "キロ"]],
+    "中文歌里的数字按普通话逐位注：" + ps[2].innerHTML
+  );
+  assert.doesNotMatch(ps[2].innerHTML, /ひゃく/, "不许用日语数词读：" + ps[2].innerHTML);
 });
 
 test("日语歌里的汉字不标普通话读音（开了开关也不标）", async () => {
@@ -7879,4 +7883,66 @@ test("逐字歌词：合并成一组的词（带括号读音）双击也能改�
   );
   const after = env.document.querySelector(".rnp-lyrics-line-karaoke .wk-ruby");
   assert.strictEqual(after.querySelector(".wk-rt").textContent, "いかり", "改完要生效：" + after.outerHTML);
+});
+
+test("中文歌：正文全是繁体汉字、一句假名都没有时，靠曲名判成中文（注片假名）", async () => {
+  /*
+   * 真机：`吹梦到西洲`（恋恋故人难 / 黄诗扶）。
+   * 正文是 `秋 毫濡沫欲綢繆 搦管相留` 这种繁体古风句子，一个"简体特有字"都没有，
+   * 一句假名也没有 —— 以前整首被当成日语歌，注出一堆平假名（しゅう ごう あわよく…）。
+   * 现在曲名 / 歌手名（吹梦到西洲 的 梦、黄诗扶 的 诗 都是简体特有字）能把它拉回中文。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">吹梦到西洲</a></span>
+  <span class="by"><a href="#">恋恋故人难 / 黄诗扶 / 王敬轩</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>秋 毫濡沫欲綢繆 搦管相留</p></li>
+  <li class="line"><p>留骨攢峰 留容映水秀</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  await env.runLoad();
+  await sleep(500);
+
+  const rts = Array.from(env.document.querySelectorAll("ul.lyric li p .wk-rt")).map((x) => x.textContent);
+  assert.ok(rts.length > 0, "这两行应该有注音：" + env.document.querySelector("ul.lyric").innerHTML);
+  const hira = rts.filter((t) => /[\u3041-\u3096]/.test(t));
+  assert.deepStrictEqual(hira, [], "中文歌不许注平假名（日语读音）：" + JSON.stringify(rts));
+  const kata = rts.filter((t) => /[\u30A1-\u30FA]/.test(t));
+  assert.ok(kata.length > 0, "要用片假名（中文读音）：" + JSON.stringify(rts));
+});
+
+test("中文歌：数字按普通话逐位注（4 -> スー，半角 / 全角都认）", async () => {
+  /*
+   * 真机：`【4人合 唱+空雨\十四和】` 的 4 被按日语注成了 よん / し（レン / シ 那种）。
+   * 中文行里的数字应该按普通话读：4 → スー、233 → アールサンサン。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">它扑翅 想要飞往</a></span>
+  <span class="by"><a href="#">纱琉璃Shelley / 空雨233</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>4人合唱</p></li>
+  <li class="line"><p>２３３次</p></li>
+</ul></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  await env.runLoad();
+  await sleep(500);
+
+  const pairs = Array.from(env.document.querySelectorAll("ul.lyric li p .wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    pairs.filter((x) => x[0] === "4"),
+    [["4", "スー"]],
+    "4 要按普通话注：" + JSON.stringify(pairs)
+  );
+  assert.deepStrictEqual(
+    pairs.filter((x) => x[0] === "２３３"),
+    [["２３３", "アールサンサン"]],
+    "全角数字也认：" + JSON.stringify(pairs)
+  );
 });

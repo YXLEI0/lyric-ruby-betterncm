@@ -2175,6 +2175,25 @@
   function saveInlineFix(lineText, at, word, kana) {
     if (!lineText || !word) return;
     /*
+     * 起点对不上就就近找一次。
+     *
+     * 逐字层每换一行 / 每重绘一次，行内起点都可能和用户点的那一刻差一点
+     * （RNP 重排、空格口径、我们自己的分组变化）。差一点时以前照样存下去，
+     * 结果是一条**永远匹配不到**的修正 —— 屏幕上就是"这个词改不动"
+     * （用户报的「有些词逐字模式下还是改不动读音」）。
+     * 这里按底字就近对齐：存下去的键一定能命中，改了就一定生效。
+     */
+    if (String(lineText).substr(at, word.length) !== word) {
+      var best = -1;
+      var p = String(lineText).indexOf(word);
+      while (p >= 0) {
+        if (best < 0 || Math.abs(p - at) < Math.abs(best - at)) best = p;
+        p = String(lineText).indexOf(word, p + 1);
+      }
+      if (best >= 0) at = best;
+      else return; // 这一行里根本找不到这个底字：宁可不存，也不留一条脏数据
+    }
+    /*
      * 记一笔"就地改读音"的细节（排障导出用）。真机上「改不动读音」有两种可能：
      * 保存的键（行文本）和注音那一轮用的不一致，或者起点算歪了 ——
      * 把这几项一起带走，一眼能看出来是哪一种。
@@ -3084,6 +3103,29 @@
     return songKindValue;
   }
 
+  /**
+   * 曲名 / 歌手名看着像中文吗（只用来给"整首一句假名都没有"的歌词定性）。
+   *
+   * 判据直接用 core/cn-line.js 那套"简体特有字 / 中文标点"：日文歌的曲名基本不会是
+   * 简体写法，中文歌的曲名几乎必然带一两个（`吹梦到西洲`、`黄诗扶`）。
+   */
+  function trackLooksChinese() {
+    var t = "";
+    try {
+      var id = externalIdentity();
+      if (id) t = String(id.title || "") + " " + (id.artists || []).join(" ");
+    } catch (e) {
+      t = "";
+    }
+    if (!t || RE_KANA_ANY.test(t)) return false;
+    if (typeof WKCnLine === "undefined" || !WKCnLine.isChineseLine) return false;
+    try {
+      return !!WKCnLine.isChineseLine(t);
+    } catch (e2) {
+      return false;
+    }
+  }
+
   function computeSongKind() {
     if (!state.annotator || !state.annotator.findRegions) return "unknown";
     var regions = [];
@@ -3114,6 +3156,14 @@
     }
     if (kana === 0) {
       if (cn > 0) return "zh"; // 一句假名都没有、还能认出中文行 = 中文歌
+      /*
+       * 一句假名都没有、正文又全是繁体汉字时（中文古风歌词就是这样：
+       * `秋 毫濡沫欲綢繆 搦管相留`），正文里一个"简体特有字"都找不到。
+       * 这时看**曲名 / 歌手**：中文歌的名字几乎必然带简体字（`吹梦到西洲` 的 梦、
+       * `黄诗扶` 的 诗），拿来当判据。真机现象：整首被当成日语，注了一堆平假名
+       * （用户报的「中文歌不是全用的片假名注音」）。
+       */
+      if (cjk > 0 && trackLooksChinese()) return "zh";
       if (cjk > 0) return "ja"; // 纯汉字没有假名（`東京` 这种）按日文处理
       return "unknown"; // 只有拉丁字母：交给逐行的西文逻辑
     }
@@ -4775,6 +4825,7 @@
         fixes: fixes,
         spans: spans,
         romaji: romajiLine,
+        tags: parenTags,
       });
       whole = mergeExternalTokens(line, whole || []);
       if (!whole.length) return null;
@@ -4864,6 +4915,7 @@
       fixes: fixes,
       spans: spans,
       romaji: romajiLine,
+      tags: parenTags,
     });
     out = mergeExternalTokens(s, out || []);
     return out.length ? out : null;
@@ -4877,6 +4929,56 @@
    *   2. 整首是日语歌 -> 同理，歌里夹的纯汉字行也不碰。
    * 非日语歌整首跳过那一档（annotateNonJapanese = false）在 pass() 里就返回了，到不了这里。
    */
+  /*
+   * 中文歌里的数字按普通话读（唱出来是 スー / イー / アール…），不按日语读。
+   *
+   * 以前数字走的是日语那条（core/numbers.js：4 → よん / し），中文歌里注出来
+   * 就是日本人念法（真机：`【4人合唱+空雨\十四和】` 的 4 注成了 レン/シ）。
+   * 这里只处理"这一段是中文行"的情况，逐位注音 —— 歌词里的数字基本都是
+   * 一位一位唱出来的（233 → アールサンサン）。
+   */
+  var CN_DIGIT_KANA = {
+    "0": "リン",
+    "1": "イー",
+    "2": "アール",
+    "3": "サン",
+    "4": "スー",
+    "5": "ウー",
+    "6": "リョウ",
+    "7": "チー",
+    "8": "パー",
+    "9": "ジウ",
+  };
+
+  function cnDigitTokens(s) {
+    var out = [];
+    var i = 0;
+    while (i < s.length) {
+      var c = s.charAt(i);
+      var d = null;
+      if (c >= "0" && c <= "9") d = c;
+      else if (/[\uFF10-\uFF19]/.test(c)) d = String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+      if (d == null) {
+        i++;
+        continue;
+      }
+      var j = i;
+      var kana = "";
+      while (j < s.length) {
+        var c2 = s.charAt(j);
+        var d2 = null;
+        if (c2 >= "0" && c2 <= "9") d2 = c2;
+        else if (/[\uFF10-\uFF19]/.test(c2)) d2 = String.fromCharCode(c2.charCodeAt(0) - 0xFEE0);
+        if (d2 == null) break;
+        kana += CN_DIGIT_KANA[d2] || "";
+        j++;
+      }
+      if (kana) out.push({ text: s.slice(i, j), start: i, end: j, kana: kana, kind: "num", source: "cjk" });
+      i = j > i ? j : i + 1;
+    }
+    return out;
+  }
+
   function cjkTokens(text, context) {
     var han = config.annotateHanzi === true;
     var hangul = config.annotateHangul === true;
@@ -4886,13 +4988,27 @@
     if (!s) return null;
     var hasHan = han && WKCJK.hasHan(s);
     var hasHangul = hangul && WKCJK.hasHangul(s);
-    if (!hasHan && !hasHangul) return null;
+    // 只有数字的行也要进来（中文歌里的 \ 按普通话注）
+    var hasNum = /[0-9\uFF10-\uFF19]/.test(s);
+    if (!hasHan && !hasHangul && !hasNum) return null;
     if (RE_KANA_ANY.test(s)) return null;
     /*
      * 这里不再按"整首是不是日语歌"拦：分流已经在 extraTokens 里按行做完了
      * （日语歌里夹的中文行要能走到这里，按普通话读音注）。
      */
     var out = WKCJK.scan(s, { han: hasHan, hangul: hasHangul });
+    /*
+     * 数字：中文行里的数字按普通话逐位注（`4` → スー）。注音层不管数字，
+     * 不给的话中文歌里的 4 / 233 要么没读音、要么被日语那条读成 よん。
+     */
+    var nums = cnDigitTokens(s);
+    if (nums.length) {
+      if (!out) out = [];
+      for (var ni = 0; ni < nums.length; ni++) out.push(nums[ni]);
+      out.sort(function (a, b) {
+        return a.start - b.start;
+      });
+    }
     if (!out || !out.length) return null;
     /*
      * 多音字：离线表只给"最常见的那一档"，所以再问一次大模型，由它按这一句挑候选读音。
@@ -4953,7 +5069,7 @@
       var t = list[i];
       if (!t || !(t.end > t.start)) continue;
       // 有读音的词、括号读音（hide）算"已经处理过"；没读音的词留给下面补
-      if (!t.kana && !t.hide) continue;
+      if (!t.kana && !t.hide && !t.blank) continue;
       for (var p = t.start; p < t.end; p++) covered[p] = 1;
     }
     var out = null;
@@ -4963,15 +5079,52 @@
       // 只有汉字值得补；假名、标点、数字、拉丁都不管
       if (!/[\u3400-\u4DBF\u4E00-\u9FFF]/.test(ch)) continue;
       var kana = singleCharReading(ch);
+      var src = "dict";
+      if (!kana) {
+        /*
+         * 本地读不出来 -> 问大模型（表外字 / 人名用字，比如 爱莉 的 莉）。
+         * 问过一次之后答案在缓存里，下一轮（onAnswer 会重扫这一行）就补上了。
+         */
+        kana = kanjiFromLLM(ch, s);
+        src = "llm";
+      }
       if (!kana) continue;
       if (!out) out = list.slice();
-      out.push({ text: ch, start: i, end: i + 1, kana: kana, source: "dict" });
+      out.push({ text: ch, start: i, end: i + 1, kana: kana, source: src });
     }
     if (!out) return tokens;
     out.sort(function (a, b) {
       return a.start - b.start;
     });
     return out;
+  }
+
+  /*
+   * 大模型兜底（日语汉字）：本地词典 / 汉字表 / kuromoji 都读不出来的单字
+   * （表外字、人名用字，比如 `愛莉` 的 莉），问一句"这个词在这句里怎么读"。
+   *
+   * 模型那边 `kind: "ja"` 就是干这个的：只看这一句的词，只答平假名。
+   * 第一次问返回 null（排队），答回来之后 onAnswer 会让这一行重扫，
+   * 那时 lookup 就命中缓存、读音自己就上屏了。
+   */
+  var JA_LLM_EXTRA = { kind: "ja" };
+
+  function kanjiFromLLM(ch, line) {
+    if (!state.llm || !llmAvailable()) return null;
+    var got = null;
+    try {
+      got = state.llm.lookup(ch, line, null, JA_LLM_EXTRA);
+      if (!got) {
+        state.llm.want(ch, line, null, JA_LLM_EXTRA);
+        return null;
+      }
+    } catch (e) {
+      return null;
+    }
+    if (typeof got !== "string") return null;
+    // 只收纯假名（模型偶尔会答汉字 / 罗马字）
+    if (!/^[\u3041-\u3096\u30A1-\u30FA\u30FC]+$/.test(got)) return null;
+    return got;
   }
 
   /** 单字查本地词典（汉字表 → kuromoji 单字，不联网） */
@@ -5176,6 +5329,73 @@
       retimes: state.annotator && state.annotator.diagRetimes ? state.annotator.diagRetimes() : [],
       dom: dom,
     };
+  }
+
+  /*
+   * 括号里是**唱歌人的名字**时，那不是这一句的读音 ——
+   * 真机：`Jump!! 限界超え(みのり)`，括号是"这句谁唱的"（实乃里），
+   * 以前被当成 限界超え 的读法，注出个 みのり 来。
+   *
+   * 两条判据（都只看数据，不猜语义）：
+   *   1. 括号里以 さん / ちゃん / くん / 君 / さま 收尾 —— 那是称呼，不是读音
+   *   2. 同一个括号内容在这首歌里挂到过**不同的底字**上（`(みのり)` 出现在很多行）
+   * 判出来就记进 tagSet，注音层见到这些括号直接不当读音（括号原样留着）。
+   */
+  var parenSeen = Object.create(null); // 括号内容（平假名）→ 第一次挂的底字
+  var parenTags = Object.create(null); // 括号内容 → 1（判成唱歌人的名字）
+  var parenSongKey = null;
+
+  function isNameTagKana(kana) {
+    return /(?:\u3055\u3093|\u3061\u3083\u3093|\u304f\u3093|\u541b|\u3055\u307e)$/.test(kana);
+  }
+
+  /** 学一遍这一行的括号读音，返回"有没有学到新的标注"（学到了要重扫一次） */
+  function learnParenTags(tokens) {
+    var key = null;
+    try {
+      key = externalKeyOf(externalIdentity());
+    } catch (e) {
+      key = null;
+    }
+    if (key !== parenSongKey) {
+      parenSongKey = key;
+      parenSeen = Object.create(null);
+      parenTags = Object.create(null);
+    }
+    var learned = false;
+    for (var i = 0; i < (tokens || []).length; i++) {
+      var t = tokens[i];
+      if (!t || t.kind !== "inline" || !t.kana) continue;
+      var kana = hiraOnly(String(t.kana));
+      var base = String(t.text || "");
+      if (!kana || !base) continue;
+      if (isNameTagKana(kana)) {
+        if (!parenTags[kana]) {
+          parenTags[kana] = 1;
+          learned = true;
+        }
+        continue;
+      }
+      if (parenSeen[kana] && parenSeen[kana] !== base) {
+        if (!parenTags[kana]) {
+          parenTags[kana] = 1;
+          learned = true;
+        }
+        continue;
+      }
+      parenSeen[kana] = base;
+    }
+    return learned;
+  }
+
+  var parenRescanTimer = null;
+  function scheduleParenRescan() {
+    if (parenRescanTimer) return;
+    parenRescanTimer = setTimeout(function () {
+      parenRescanTimer = null;
+      if (typeof WKFurigana !== "undefined" && WKFurigana.clearCache) WKFurigana.clearCache();
+      rescan();
+    }, 60);
   }
 
   function extraTokens(text, context, host, offset, lineText) {
@@ -7487,6 +7707,15 @@
           var toks = extraTokens(text, text, lineTokenHost(region), undefined, text);
           var karaoke = isKaraokeRegion(region);
           var final = karaoke ? fillGapReadings(text, toks) : toks;
+          /*
+           * 学一下这里的括号读音是不是"唱歌人的名字"（见 learnParenTags）。
+           * 学到了要重扫一次：前面已经注过的行要按新判据重新切。
+           */
+          try {
+            if (learnParenTags(final)) scheduleParenRescan();
+          } catch (eLearn) {
+            /* 学不到就算了，不影响这一行 */
+          }
           if (karaoke) {
             try {
               noteLineDiag(text, region, final);
