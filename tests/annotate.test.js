@@ -680,8 +680,8 @@ test("署名判据不能靠大小写不敏感的 /i：Music by the lake / Words 
  * 逐字歌词（RNP 的 flex + wrap）最怕注音把词格撑宽：
  * 一格一个 flex 项，注音比底字宽就把整行撑长，行尾的字被挤到下一行
  * （真机：`否 笑い合ってさよなら` 的「なら」掉到第二行）。
- * 所以词格里的注音必须**不占宽度**，而且 wrap 得是 inline-block
- * （inline 上 padding 不生效，让位高度就白算了）。
+ * 所以词格里的注音必须**不占宽度**，而且不能改行高（padding 一加，带注音的行
+ * 就比别的行高一截，RNP 排出来的行距全乱）。
  */
 test("逐字词格：wrap 是 inline-block，注音是绝对定位（不撑宽格子）", () => {
   const ctx = newCtx();
@@ -728,4 +728,40 @@ test("逐字行改过之后通知 RNP 重量行高（recalc-lyrics）", async ()
   makeAnnotator(plain).pass();
   await new Promise((r) => setTimeout(r, 30));
   assert.strictEqual(plainFired, 0);
+});
+
+/*
+ * 一个词跨好几格时，整段字只放在头一格（其余格清空），逐字高亮原本只跑
+ * 头一格那点时间。现在把同一组各格的时长加起来写回头一格 ——
+ * 整段字按整个词的时间亮完。
+ */
+test("跨格的词：逐字时长 = 各格时长之和（含括号读音那几格）", () => {
+  const style = ' style="transition-duration: 200ms, 160ms, 0.5s; transition-delay: 0ms, 100ms, 0ms"';
+  const cell = (c) =>
+    '<div class="rnp-karaoke-word is-cjk"' + style + '><span>' + c + "</span>" +
+    '<span class="rnp-karaoke-word-filler"' + style + ">" + c + "</span></div>";
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">${cell("体")}${cell("温")}${cell("が")}</div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  makeAnnotator(ctx, {
+    annotator: {
+      lineTokens: () => [
+        { start: 0, end: 2, kana: "たいおん" },
+        { start: 2, end: 3, kana: "が" },
+      ],
+    },
+  }).pass();
+
+  const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
+  const firstRuby = words[0].querySelector(".wk-ruby");
+  assert.strictEqual(firstRuby.childNodes[0].nodeValue, "体温", "整段字挂在头一格：" + words[0].outerHTML);
+  assert.strictEqual(words[1].textContent.trim(), "", "第二格清空");
+  assert.match(
+    words[0].style.transitionDuration,
+    /^400ms/,
+    "头一格的时长要是 200+200：" + words[0].getAttribute("style")
+  );
+  const filler = words[0].querySelector(".rnp-karaoke-word-filler");
+  assert.match(filler.style.transitionDuration, /^400ms/, "替身也要跟着改：" + filler.getAttribute("style"));
 });

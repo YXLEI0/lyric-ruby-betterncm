@@ -1733,6 +1733,22 @@ function buildRuby(base, gloss, provisional, source, flat) {
       var ruby = doc.createElement(flat ? "span" : "ruby");
       ruby.className = "wk-ruby" + (provisional ? " wk-pending" : "") + (source ? " wk-src-" + source : "");
       ruby.appendChild(doc.createTextNode(base));
+      /*
+       * 逐字词格里的注音要缩到不超出底字宽度：RNP 的高亮副本（filler）带遮罩，
+       * 遮罩只覆盖副本自己的盒子，超出格子的注音会被裁掉两头。
+       * 把「底字数 / 读音数」写成变量，样式表里 font-size 取
+       * min(面板字号, 这个值) —— 刚好缩到底字那么宽。
+       */
+      if (flat && base && gloss) {
+        var fit = Math.round((String(base).length / String(gloss).length) * 100);
+        if (fit > 0 && fit < 400) {
+          try {
+            ruby.style.setProperty("--wk-rt-fit", fit + "%");
+          } catch (eFit) {
+            /* 不支持变量就算了，退回面板字号 */
+          }
+        }
+      }
       if (!flat && hasRubyLayout(doc)) {
         var rt = doc.createElement("rt");
         rt.className = "wk-rt";
@@ -2382,7 +2398,9 @@ function buildRuby(base, gloss, provisional, source, flat) {
      *      整行改写每行只切一次，切完按格子长度分发。
      *   2. 老路径把 ruby 插在文本节点旁边、把节点切短，每一处都要单独算偏移对齐。
      *      整行改写是「整行重建 + 一个 wrap 包住」，位置由浏览器排版决定。
-     *   3. 逐字词格让出的高度从写死的数改成量出来的（见 calibrateWordOffset）。
+     *   3. 逐字词格的注音改成「不占宽度、也不改行高」（见下面 styles() 那段）。
+     *      以前按 jp-furigana 的 padding 让位来做，结果一行的注音会让这一行比
+     *      别的行高一截，RNP 排出来的行距就乱了。
      *
      * 接管的边界很保守：
      *   - 只管歌词行（isLyricRegion）；播放栏标题、面板预览还是老路径
@@ -2756,8 +2774,62 @@ function buildRuby(base, gloss, provisional, source, flat) {
       return null;
     }
 
+    /**
+     * 一个词跨好几格时，整段文字只放在头一格上，其余格清空（见 groupHosts）。
+     * 但 RNP 给每一格的逐字时间是各自的：高亮只跑到头一格那点时间就停了，
+     * 后面的时间白扔。这里把同一组各格的时长加起来写回头一格 ——
+     * 整段字按整个词的时间亮完（括号读音那几格也算进去）。
+     *
+     * 只动第一格（和它的替身）的 transition-duration / delay，别的属性不碰；
+     * 不是 RNP 那种 "时长, 时长, 时长" 的形状就整个跳过，宁可不改。
+     */
+    function readMs(v) {
+      var m = /^\s*([0-9.]+)(ms|s)\b/.exec(String(v || ""));
+      if (!m) return null;
+      var n = parseFloat(m[1]);
+      if (!isFinite(n)) return null;
+      return m[2] === "s" ? Math.round(n * 1000) : Math.round(n);
+    }
+
+    function retimeGroup(grp) {
+      var words = grp.words;
+      var first = grp.first;
+      if (!first || !first.style || words.length < 2) return;
+      var total = 0;
+      for (var i = 0; i < words.length; i++) {
+        var w = words[i];
+        var d = w && w.style ? readMs(w.style.transitionDuration) : null;
+        if (d == null) return;
+        total += d;
+      }
+      // 还没轮到这一行时 RNP 写的是 0ms：别把 0 当成"算过了"
+      if (!(total > 0)) return;
+      var dur = total + "ms, " + Math.round(total * 0.8) + "ms, 0.5s";
+      if (first.style.transitionDuration === dur) return;
+      var delay0 = readMs(first.style.transitionDelay);
+      first.style.transitionDuration = dur;
+      if (delay0 != null) {
+        first.style.transitionDelay =
+          delay0 + "ms, " + Math.round(delay0 + total * 0.5) + "ms, 0ms";
+      }
+      var kids = first.children || [];
+      for (var j = 0; j < kids.length; j++) {
+        var f = kids[j];
+        if (!f || f === first) continue;
+        if (!RE_FILLER_CLASS.test(typeof f.className === "string" ? f.className : "")) continue;
+        f.style.transitionDuration = dur;
+        if (delay0 != null) f.style.transitionDelay = first.style.transitionDelay;
+      }
+    }
+
+    function retimeGroups(rec) {
+      if (!rec || !rec.groups || !rec.groups.length) return;
+      for (var i = 0; i < rec.groups.length; i++) retimeGroup(rec.groups[i]);
+    }
+
     /** 整行重写一条（建 DOM + 记账） */
-    function wrapLineNow(region, slots, segs) {      var rec = {
+    function wrapLineNow(region, slots, segs) {
+      var rec = {
         kind: "wrap",
         region: region,
         // relabel / contextOf 要按"宿主"取语境：整行的宿主就是区域自己
@@ -2766,8 +2838,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
         hosts: [],
         mirrors: [],
         nodes: [],
-        // 打过 data-wk-word 的词格（还原时要摘掉）
-        words: [],
+        // 跨了好几格的词：每组的词格，用来把逐字时间加起来（见 retimeGroup）
+        groups: [],
         at: clock(),
       };
       var groups = groupHosts(slots.hosts, segs);
@@ -2786,15 +2858,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
            * 普通歌词里的 span）仍然用真 ruby。
            */
           var flat = isWord ? karaokeWordOf(host.el, region) : null;
-          if (flat && flat.setAttribute) {
-            /*
-             * 标上「这一格注过音」：RNP 给每个词格挂的 -0.15em 上下负 margin
-             * 会让折行时第二行压到第一行上（注音让位又把字往下压了一截）。
-             * 样式表里对 [data-wk-word] 收掉这两条 margin —— 放行高，不放字。
-             */
-            flat.setAttribute("data-wk-word", "1");
-            rec.words.push(flat);
-          }
           var isFlat = !!flat;
           var cls = isWord ? "wk-line wk-word" : "wk-line";
           var keep = [];
@@ -2810,54 +2873,17 @@ function buildRuby(base, gloss, provisional, source, flat) {
           if (i === 0) collectRubies(wrap, rec.nodes);
           if (isWord) mirrorToFillers(host.el, segsHere, cls, rec, isFlat);
         }
+        // 这一组跨了好几格：把各格的时间记下来，稍后加到头一格的动画上
+        if (group.hosts.length > 1) {
+          var ws = [];
+          for (var gh = 0; gh < group.hosts.length; gh++) {
+            var wd = karaokeWordOf(group.hosts[gh].el, region);
+            if (wd) ws.push(wd);
+          }
+          if (ws.length > 1) rec.groups.push({ first: ws[0], words: ws });
+        }
       }
       return rec;
-    }
-
-    /**
-     * 标出"这一行折行了"的逐字歌词行。
-     *
-     * RNP 给每个词格挂了 -0.15em 的上下负 margin（它想让行距紧一点），注音让位
-     * 又把字往下压了一截 —— 一行只有一行时看不出来，一旦折成两行，第二行就压到
-     * 第一行的字上（真机：`チープでキッチュな小惑星` 的「小惑星」叠在「チープ」下面）。
-     *
-     * 判据：同一个 karaoke 容器里的词格出现了两个不同的 offsetTop（= 两行）。
-     * 折了行的容器标上 data-wk-wrap，样式表里把那两条负 margin 和让位的负尾巴
-     * 收掉，行距按满的算；没折行的行一切照旧（不留空）。
-     */
-    function markWrappedLines() {
-      var cells;
-      try {
-        cells = doc.querySelectorAll("[data-wk-word]");
-      } catch (e) {
-        return;
-      }
-      var seen = [];
-      for (var i = 0; i < cells.length; i++) {
-        var cell = cells[i];
-        var box = cell.parentNode;
-        if (!box || box.nodeType !== 1) continue;
-        if (seen.indexOf(box) >= 0) continue;
-        seen.push(box);
-        var kids = box.children || [];
-        var top = null;
-        var wrapped = false;
-        for (var j = 0; j < kids.length; j++) {
-          var k = kids[j];
-          if (!k || k.nodeType !== 1) continue;
-          if (typeof k.offsetTop !== "number") continue;
-          if (top === null) top = k.offsetTop;
-          else if (Math.abs(k.offsetTop - top) > 2) {
-            wrapped = true;
-            break;
-          }
-        }
-        if (wrapped) {
-          if (box.getAttribute("data-wk-wrap") !== "1") box.setAttribute("data-wk-wrap", "1");
-        } else if (box.getAttribute("data-wk-wrap")) {
-          box.removeAttribute("data-wk-wrap");
-        }
-      }
     }
 
     /** 替身被 RNP 重建过就补一遍（只动替身，不动本体） */
@@ -2884,27 +2910,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
     /** 整行还原成框架的原样（wrap 摘掉，原文本节点按原值放回） */
     function unwrapRec(rec) {
       var i;
-      var boxes = [];
-      for (i = 0; i < rec.words.length; i++) {
-        var w = rec.words[i];
-        if (!w) continue;
-        if (w.removeAttribute) w.removeAttribute("data-wk-word");
-        var box = w.parentNode;
-        if (box && box.nodeType === 1 && boxes.indexOf(box) < 0) boxes.push(box);
-      }
-      // 这一格里已经没有我们的词格了：折行标记也一起摘掉，行距回到 RNP 原样
-      for (i = 0; i < boxes.length; i++) {
-        var b = boxes[i];
-        var left = false;
-        try {
-          left = !!b.querySelector("[data-wk-word]");
-        } catch (eQ) {
-          left = false;
-        }
-        if (!left && b.getAttribute && b.getAttribute("data-wk-wrap")) {
-          b.removeAttribute("data-wk-wrap");
-        }
-      }
       for (i = 0; i < rec.hosts.length; i++) {
         var h = rec.hosts[i];
         var el = h.el;
@@ -3010,6 +3015,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       if (rec && rec.kind === "wrap") {
         if (wrapClean(rec)) {
           ensureMirrors(rec);
+          retimeGroups(rec);
           stat.took = true;
           return 1;
         }
@@ -3106,6 +3112,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       restoreRecordsIn(region);
       var made = wrapLineNow(region, slots, segs);
       records.set(region, made);
+      retimeGroups(made);
       /*
        * 标上「这一行我们注过音」。就地改读音（main.js 的 lineElementOf /
        * lineTextOf / rubyOffset）靠这个属性找"整行原文"，没有它就只能用
@@ -3126,40 +3133,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
       stat.took = true;
       stat.changed = true;
       return 2;
-    }
-
-    /*
-     * 逐字词格给注音让出多少高度 —— 量出来的，不是写死的（照 jp-furigana 的 calibrate）。
-     *
-     * 注音的高度撑不到外面那层行盒（RNP 按 clientHeight 排行距），所以两个坏结果：
-     * 注音顶到上一行头上；或者只有带注音的那个字被撑高、比左右邻居低一截。
-     * 解法是在每个词格的 wrap 上加 padding-top，再用负 margin 把这截还给行距。
-     * 让多少按注音字号估一个数总有一边不对（换字号/字体/内核就变），所以量：
-     * 注音上边离 wrap 上边的距离 gap，目标贴着顶留 1px，差多少就往
-     * --wk-word-offset 上补多少（1:1，一两轮就收敛）。
-     */
-    var CAL_MAX = 8;
-    var calTries = 0;
-    var calOffset = null; // em；null = 还没量过，用样式表里那个估算值
-    var calSample = null;
-    /** 这一轮量出来、改写了 --wk-word-offset（行高跟着变，要通知 RNP） */
-    var wordVarsTouched = false;
-
-    function setWordVars(offsetEm) {
-      try {
-        var root = doc.documentElement && doc.documentElement.style;
-        if (!root) return;
-        var v = offsetEm.toFixed(3);
-        root.setProperty("--wk-word-offset", v + "em");
-        root.setProperty("--wk-word-tail", "-" + v + "em");
-        wordVarsTouched = true;
-      } catch (e) {
-        /* 没有 documentElement 就算了 */
-      }
-    }
-
-    function clampEm(v) {
-      return Math.max(-2, Math.min(2, Math.round(v * 1000) / 1000));
     }
 
     /*
@@ -3202,74 +3175,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
       }, 0);
     }
 
-    /**
-     * @returns {number} 还要不要再量一轮（>0 = 多少毫秒后再来）
-     */
-    function calibrateWordOffset() {
-      if (!wrapOn) return 0;
-      if (calTries >= CAL_MAX) return 0;
-      var words;
-      try {
-        words = doc.querySelectorAll(".rnp-lyrics-line .wk-line.wk-word");
-      } catch (e0) {
-        return 0;
-      }
-      var word = null;
-      for (var i = 0; i < words.length && i < 40; i++) {
-        if (words[i].querySelector("rt.wk-rt, .wk-rt")) {
-          word = words[i];
-          break;
-        }
-      }
-      if (!word) return 0;
-      if (word !== calSample) {
-        // 换了一行 / 换歌：重新量（上一行的结论未必适用于这一行）
-        calSample = word;
-        calTries = 0;
-      }
-      var rt = word.querySelector("rt.wk-rt, .wk-rt");
-      var lb;
-      var tb;
-      var fs = 0;
-      var h = 0;
-      try {
-        lb = word.getBoundingClientRect();
-        tb = rt.getBoundingClientRect();
-        fs = parseFloat(getComputedStyle(word).fontSize) || 0;
-        h = word.offsetHeight;
-      } catch (e1) {
-        return 0;
-      }
-      // jsdom / 还没排版：量不到就按样式表里的估算值来，别乱调
-      if (!lb || !tb || !lb.height || !tb.height || !fs || !h) return 0;
-      var scale = lb.height / h;
-      if (!(scale > 0.01)) scale = 1;
-      var gap = (tb.top - lb.top) / scale;
-      var dTop = gap - 1;
-      if (Math.abs(dTop) <= 1.5) {
-        calTries = CAL_MAX; // 对上了
-        return 0;
-      }
-      var cur = calOffset;
-      if (cur == null) {
-        try {
-          cur = (parseFloat(getComputedStyle(word).paddingTop) || 0) / fs;
-        } catch (e2) {
-          cur = 0.57;
-        }
-        if (!(cur > 0)) cur = 0.57;
-      }
-      calTries++;
-      calOffset = clampEm(cur - dTop / fs);
-      setWordVars(calOffset);
-      if (options.log) {
-        options.log(
-          "校准逐字让位 gap=" + Math.round(gap) + "px → --wk-word-offset: " + calOffset + "em"
-        );
-      }
-      return 60;
-    }
-
     /** 记一条"过一会儿再试"（取最短的那个） */
     function noteCtxRetry(ctx, ms) {
       if (!(ms > 0)) return -1;
@@ -3285,7 +3190,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
      */
     function pass(regions) {
       if (!doc || !doc.body) return { scanned: 0, changed: 0, restored: 0 };
-      wordVarsTouched = false;
 
       // 只清掉宿主已经脱离文档的记录（那块 DOM 已经没了）
       var restored = dropDetached();
@@ -3349,7 +3253,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
       // retry 用 -1 当"还没定"：0 在 Math.min 里会把"要重试"吃掉
       var wrapCtx = { creditCache: creditBlockCache, stat: {}, retry: -1 };
       var wrapChanged = 0;
-      var wrapLines = 0;
       var wi;
       if (wrapOn) {
         for (wi = 0; wi < list.length; wi++) {
@@ -3391,7 +3294,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
           if (wrapCtx.stat.restored) restored++;
           if (wrapCtx.stat.skipped) unstable++;
           if (took) {
-            wrapLines++;
             if (wrapCtx.stat.changed) wrapChanged++;
           } else {
             rest.push(wreg);
@@ -3679,23 +3581,10 @@ function buildRuby(base, gloss, provisional, source, flat) {
       var notes = skipNotes;
       skipNotes = [];
       /*
-       * 整行改写这条路的收尾：让位高度量一轮（jp-furigana 的 calibrate）。
-       * 量不到（jsdom / 还没排版）就什么都不做，样式表里的估算值照旧生效。
-       *
-       * 刻意**不**在"这一轮改过行"时重置计数：逐字歌词页上 RNP 一直在重建行，
-       * 每轮都重置就等于每个 60ms 都重排一次去量它 —— 白烧 CPU。
-       * 真正需要重新量的时机（换了一行 / 换歌）由 calibrateWordOffset 自己判：
-       * 量到的样本元素变了就把计数清零。
+       * 改过行就通知逐字歌词插件重量行高：它按 clientHeight 排行距，
+       * 不重量就会拿着旧高度排行（换歌/换行时整块歌词会跳一下）。
        */
-      if (wrapLines) {
-        noteRetry(calibrateWordOffset());
-        markWrappedLines();
-      }
-      /*
-       * 改过行（或者刚量完让位高度）就通知逐字歌词插件重量行高：
-       * 它按 clientHeight 排行距，不重量就会拿着旧高度排行。
-       */
-      if (wrapOn && (wrapChanged || restored || wordVarsTouched)) requestRecalc();
+      if (wrapOn && (wrapChanged || restored)) requestRecalc();
       /*
        * 把这一轮真正处理过的区域也交回去：上层（统一行距）要按"原文行"逐个写内联样式，
        * 自己再调一次 findRegions("lyrics") 就等于每轮多查一遍 DOM
@@ -3835,8 +3724,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
     var size = opts.rtSize == null ? 60 : opts.rtSize;
     var opacity = (opts.rtOpacity == null ? 80 : opts.rtOpacity) / 100;
     var colorBySource = !!opts.colorBySource;
-    // 逐字词格要让出的高度（见下面 .rnp-karaoke-word > span 那条）：注音字号换算成 em
-    var padEm = Math.round((size / 100) * 0.95 * 1000) / 1000;
     return [
       "ruby.wk-ruby, .wk-ruby {",
       "  ruby-position: over;",
@@ -3852,7 +3739,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "  white-space: nowrap;",
       "}",
       "rt.wk-rt, .wk-rt {",
-      "  font-size: " + size + "%;",
+      // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
+      "  font-size: min(var(--wk-rt-size, " + size + "%), var(--wk-rt-fit, 400%));",
       "  opacity: " + opacity + ";",
       "  font-weight: normal;",
       "  font-style: normal;",
@@ -3888,37 +3776,32 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "}",
       /*
        * 逐字词格（RNP 的 `div.rnp-karaoke-word > span`）：整行改写后 wrap 是
-       * `span.wk-line.wk-word`。这里管两件事，都是 jp-furigana 踩过的：
+       * `span.wk-line.wk-word`。
        *
-       * ① 让位。词格是独立的 inline-block，注音撑不到外面那层行盒，而 RNP 正是按
-       *    clientHeight 排行距的。于是：注音顶到上一行头上；或者只有带注音的那个字
-       *    被撑高、比左右邻居低一截。解法照 jp-furigana 的 `.fg-line.fg-word`：
-       *    **每个**词格都让出同样的高度（padding-top），再用负 margin 还给行距。
-       *    不分有没有注音 —— 只给带注音的那个加，它反而更矮。
-       *    padding 只在 inline-block 上作用于垂直方向，所以 wrap 必须显式
-       *    inline-block（jp-furigana 那条规则的 display 就是干这个的，少一行
-       *    整个让位就不生效）。
+       * 这里只做一件事：让注音**不占宽度、也不改行高**。
        *
-       * ② 宽度。逐字行是 `display:flex; flex-wrap:wrap`，每个词格是一个 flex 项；
+       * ① 宽度。逐字行是 `display:flex; flex-wrap:wrap`，每个词格是一个 flex 项；
        *    原生 ruby 的宽度是 max(底字, 注音)，一个字配两拍读音就变成 1.2em。
        *    整行被注音撑长之后，行尾的字会被挤到下一行 —— 真机现象就是
-       *    `否 笑い合ってさよなら` 的「なら」掉到第二行，看着像错位。
-       *    所以词格里的注音**不占宽度**：rt 绝对定位挂在底字正上方，格子宽度
-       *    永远等于底字，逐字行的断行和没装插件时一模一样。
-       *    这套就是 jp-furigana 在没有 ruby 排版的内核里用的做法
-       *    （`.fg-ruby > .fg-rt` 绝对定位），只是我们在逐字行里始终这么用。
+       *    `否 笑い合ってさよなら` 的「なら」掉到第二行。
+       *    所以词格里的注音绝对定位在底字正上方，格子宽度永远等于底字。
        *
-       * 让多少：样式表里先按注音字号估一个（var 的默认值），运行时再由
-       * annotate.js 的 calibrateWordOffset() 量出实际差距改这两个变量。
-       * 估的那个数总有一边不对（换字号 / 字体 / 内核都会变），量出来才收敛。
+       * ② 行高：**一格都不许变**。这一条踩过两次：
+       *    - 给词格加 padding-top 让位 → 带注音的行比不带注音的行高出一截，
+       *      RNP 按 clientHeight 排行距，两种行就排不到一起；
+       *    - 老路径那条 `> span:not(.wk-line)` 的 padding 会打到 RNP 的替身
+       *      （`.rnp-karaoke-word-filler`）上 —— 高亮那份被往下压 0.57em，
+       *      和底字那份错开，看着就是重影。
+       *    所以这里是零 padding、零 margin、line-height 不写（跟着 RNP 走）：
+       *    注音落在字和上一行之间本来就有空隙里。
+       *
+       * 也不用 `<ruby>`：网易云 3.x 的内核是 Chromium 91，给 ruby 做
+       * inline-block / 给 rt 做 absolute，它不按 ruby 排，会把注音当普通行内
+       * 内容丢到字后面（真机：`しょう` 跑到 `小` 的左边还折成两行）。
+       * 普通 span 就没有这个问题（jp-furigana 的降级模式也是这么写的）。
        */
       ".rnp-karaoke-word .wk-line.wk-word {",
       "  display: inline-block;",
-      // 行高统一收成 1：带注音的词格和没注音的词格高度一样，同一行里基线才对得齐
-      // （不统一的话，带注音那格被 ruby 撑高，同一行的字就一高一低）
-      "  line-height: 1;",
-      "  padding-top: var(--wk-word-offset, " + padEm + "em);",
-      "  margin-bottom: var(--wk-word-tail, -" + padEm + "em);",
       "}",
       ".rnp-karaoke-word .wk-line.wk-word .wk-ruby {",
       "  position: relative;",
@@ -3931,32 +3814,23 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "  transform: translateX(-50%);",
       "  -webkit-transform: translateX(-50%);",
       "  display: block;",
-      // 绝对定位的 rt 要有自己的高度，calibrate 才量得到"注音上边"；
-      // 普通 ruby 那条 line-height:0 是为了不撑行高，这里不适用
       "  line-height: 1.1;",
       "  pointer-events: none;",
+      "}",
+      /*
+       * 高亮副本（filler）自带一层遮罩做"从左往右亮过去"，而遮罩默认只覆盖
+       * 副本自己的盒子（mask-clip: border-box）—— 注音在字的上方、超出盒子，
+       * 就会被裁掉。这里把盒子上边撑高 1em，再用负 margin 把内容挪回原位：
+       * 遮罩是横向渐变，纵向多高都不影响扫过的节奏，只是多给了注音一块地方。
+       */
+      ".rnp-karaoke-word .rnp-karaoke-word-filler {",
+      "  padding-top: 1em;",
+      "  margin-top: -1em;",
       "}",
       // 词格里的 wrap 别再吃一层 opacity：RNP 的 `.rnp-karaoke-word span` 会给
       // 每一层 span 都写 0.4，嵌套相乘之后底字只剩 0.16，注音淡到看不见
       ".rnp-karaoke-word .wk-line {",
       "  opacity: 1 !important;",
-      "}",
-      /*
-       * 折了行的逐字行（markWrappedLines 标的）：把 RNP 那两条 -0.15em 负 margin
-       * 和让位的负尾巴收掉，一行按一行算 —— 否则第二行会压到第一行的字上。
-       * 没折行的行不加这个属性，行距保持 RNP 原本的紧度。
-       */
-      "[data-wk-wrap] [data-wk-word] {",
-      "  margin-top: 0 !important;",
-      "  margin-bottom: 0 !important;",
-      "}",
-      "[data-wk-wrap] .wk-line.wk-word {",
-      "  margin-bottom: 0 !important;",
-      "}",
-      // 老路径（逐节点打补丁）的词格：wrap 只可能是词格自己的 span
-      ".rnp-lyrics-line .rnp-karaoke-word > span:not(.wk-line) {",
-      "  padding-top: " + padEm + "em;",
-      "  margin-bottom: -" + padEm + "em;",
       "}",
       // 这几条是为了对抗 RefinedNowPlaying 之类的逐字歌词插件：它会给自己插的
       // 节点打 opacity，嵌套相乘会把注音压得几乎看不见，所以对注音强制不透明。

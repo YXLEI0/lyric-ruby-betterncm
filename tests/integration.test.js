@@ -7552,10 +7552,9 @@ test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async (
 });
 
 
-test("何時 / 何処 双击只有一种读法，不弹别的候选", async () => {
+test("何時 / 何処 双击给 なんじ / いずこ 这些读法", async () => {
   /*
-   * 用户要求：何時 = いつ、何処 = どこ，歌词里没有别的读法，双击时别给
-   * なんじ / いずこ 那一排。
+   * 用户要求：何時 除了 いつ 还要能点 なんじ，何処 除了 どこ 还要能点 いずこ。
    */
   const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>何時も何処かで</p></li></ul></div></div></body></html>";
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
@@ -7569,8 +7568,8 @@ test("何時 / 何処 双击只有一种读法，不弹别的候选", async () =
 
   dbl(byWord("何時"));
   await sleep(60);
-  assert.deepStrictEqual(chips(), [], "何時 不该有别的候选：" + chips().join("/"));
+  assert.deepStrictEqual(chips(), ["いつ", "なんじ"], "何時 的候选：" + chips().join("/"));
   dbl(byWord("何処"));
   await sleep(60);
-  assert.deepStrictEqual(chips(), [], "何処 不该有别的候选：" + chips().join("/"));
+  assert.deepStrictEqual(chips(), ["どこ", "いずこ"], "何処 的候选：" + chips().join("/"));
 });
