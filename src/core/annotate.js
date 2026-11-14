@@ -1694,7 +1694,7 @@
         var m = list[i];
         if (!m || !m.el || !m.el.isConnected) continue;
         if (!m.el.querySelector) continue;
-        if (!m.el.querySelector("ruby.wk-ruby, .wk-hide, .wk-blank")) continue;
+        if (!m.el.querySelector(".wk-ruby, .wk-hide, .wk-blank")) continue;
         m.el.textContent = m.plain;
       }
     }
@@ -1718,11 +1718,22 @@ function makeBlankSpan(d, t) {
   return el;
 }
 
-function buildRuby(base, gloss, provisional, source) {
-      var ruby = doc.createElement("ruby");
+/**
+ * 一段带读音的底字。
+ *
+ * flat=true 用在逐字歌词的词格里：那里注音必须**不占宽度**（rt 绝对定位，
+ * 否则 flex 行会被注音撑长、行尾的字被挤到下一行）。但网易云 3.x 的内核是
+ * Chromium 91 —— 给 `<ruby>` 加 `display:inline-block` / 给 `<rt>` 加
+ * `position:absolute`，它会当成普通行内内容排出字外（真机上「しょう」跑到
+ * 小 的左边、还折成两行）。所以词格里干脆不用 ruby 语义，用一对普通 span
+ * （jp-furigana 的降级模式也是这么写的）。普通歌词行仍然用真 ruby，
+ * 断行、避让交给内核。
+ */
+function buildRuby(base, gloss, provisional, source, flat) {
+      var ruby = doc.createElement(flat ? "span" : "ruby");
       ruby.className = "wk-ruby" + (provisional ? " wk-pending" : "") + (source ? " wk-src-" + source : "");
       ruby.appendChild(doc.createTextNode(base));
-      if (hasRubyLayout(doc)) {
+      if (!flat && hasRubyLayout(doc)) {
         var rt = doc.createElement("rt");
         rt.className = "wk-rt";
         rt.textContent = gloss;
@@ -1847,7 +1858,7 @@ function buildRuby(base, gloss, provisional, source) {
      */
     function hostHasOurRuby(host) {
       if (!host || host.nodeType !== 1 || !host.querySelector) return false;
-      return !!host.querySelector("ruby.wk-ruby");
+      return !!host.querySelector(".wk-ruby");
     }
 
     /**
@@ -1878,10 +1889,10 @@ function buildRuby(base, gloss, provisional, source) {
 
     /** 宿主/区域里已经没有我们的注音了，就把标记摘干净 */
     function untagIfClean(host, region) {
-      if (region && region.isConnected && !region.querySelector("ruby.wk-ruby")) {
+      if (region && region.isConnected && !region.querySelector(".wk-ruby")) {
         untagData(region, "data-wk-region");
       }
-      if (host && host.isConnected && !host.querySelector("ruby.wk-ruby")) {
+      if (host && host.isConnected && !host.querySelector(".wk-ruby")) {
         untagData(host, "data-wk-fallback");
       }
     }
@@ -1908,12 +1919,12 @@ function buildRuby(base, gloss, provisional, source) {
     function cleanup() {
       var regions = doc.querySelectorAll("[data-wk-region]");
       for (var i = 0; i < regions.length; i++) {
-        if (!regions[i].querySelector("ruby.wk-ruby")) untagData(regions[i], "data-wk-region");
+        if (!regions[i].querySelector(".wk-ruby")) untagData(regions[i], "data-wk-region");
       }
       var fallbacks = doc.querySelectorAll("[data-wk-fallback]");
       for (var j = 0; j < fallbacks.length; j++) {
         var el = fallbacks[j];
-        if (!el.querySelector("ruby.wk-ruby")) untagData(el, "data-wk-fallback");
+        if (!el.querySelector(".wk-ruby")) untagData(el, "data-wk-fallback");
       }
     }
 
@@ -2662,7 +2673,7 @@ function buildRuby(base, gloss, provisional, source) {
      * 发现不了「这行换了」。值清空之后它不占位置，下一轮只要发现它又被写了字，
      * 就知道是换歌/换行，立刻整行还原重注。
      */
-    function buildWrapEl(segs, cls, keep) {
+    function buildWrapEl(segs, cls, keep, flat) {
       var wrap = doc.createElement("span");
       wrap.className = cls;
       for (var i = 0; i < segs.length; i++) {
@@ -2670,7 +2681,7 @@ function buildRuby(base, gloss, provisional, source) {
         var child;
         if (seg.hidden) child = makeHideSpan(doc, seg.text);
         else if (seg.blank) child = makeBlankSpan(doc, seg.text);
-        else if (seg.rt) child = buildRuby(seg.text, seg.rt, seg.pending, seg.source);
+        else if (seg.rt) child = buildRuby(seg.text, seg.rt, seg.pending, seg.source, flat);
         else child = doc.createTextNode(seg.text);
         child.__wkOwned = true;
         wrap.appendChild(child);
@@ -2683,7 +2694,7 @@ function buildRuby(base, gloss, provisional, source) {
     function collectRubies(el, out) {
       var list;
       try {
-        list = el.querySelectorAll ? el.querySelectorAll("ruby.wk-ruby") : [];
+        list = el.querySelectorAll ? el.querySelectorAll(".wk-ruby") : [];
       } catch (e) {
         list = [];
       }
@@ -2696,7 +2707,7 @@ function buildRuby(base, gloss, provisional, source) {
      * 副本是 RNP 自己渲染的、内容与本体一字不差，绝对定位叠在本体上做「唱到就亮」。
      * 只注本体 → 亮起来的那份没有注音，两份还有半个注音的高度差，看着就是重影。
      */
-    function mirrorToFillers(hostEl, segs, cls, rec) {
+    function mirrorToFillers(hostEl, segs, cls, rec, flat) {
       var word = hostEl.parentNode;
       if (!word || word.nodeType !== 1 || typeof word.className !== "string") return;
       if (!RE_KARAOKE_WORD.test(word.className)) return;
@@ -2726,16 +2737,27 @@ function buildRuby(base, gloss, provisional, source) {
             tn.nodeValue = "";
           }
         }
-        var clone = buildWrapEl(segs, cls, keep);
+        var clone = buildWrapEl(segs, cls, keep, flat);
         clearKids(twin);
         twin.appendChild(clone);
         rec.mirrors.push({ el: twin, wrap: clone, orig: keep });
       }
     }
 
+    /**
+     * 宿主所在的逐字词格（RNP 的 `div.rnp-karaoke-word`），不在词格里就返回 null。
+     * 只有这层才用"注音不占宽度"的平铺结构。
+     */
+    function karaokeWordOf(el, region) {
+      for (var p = el, d = 0; p && p !== region && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
+        var cn = typeof p.className === "string" ? p.className : "";
+        if (RE_KARAOKE_WORD.test(cn)) return p;
+      }
+      return null;
+    }
+
     /** 整行重写一条（建 DOM + 记账） */
-    function wrapLineNow(region, slots, segs) {
-      var rec = {
+    function wrapLineNow(region, slots, segs) {      var rec = {
         kind: "wrap",
         region: region,
         // relabel / contextOf 要按"宿主"取语境：整行的宿主就是区域自己
@@ -2744,6 +2766,8 @@ function buildRuby(base, gloss, provisional, source) {
         hosts: [],
         mirrors: [],
         nodes: [],
+        // 打过 data-wk-word 的词格（还原时要摘掉）
+        words: [],
         at: clock(),
       };
       var groups = groupHosts(slots.hosts, segs);
@@ -2756,6 +2780,22 @@ function buildRuby(base, gloss, provisional, source) {
           var segsHere = i === 0 ? mine : [];
           var isWord = host.el !== region;
           if (isWord) rec.mirrorable = true;
+          /*
+           * 只有逐字歌词的词格才用"平铺"结构（span + 绝对定位的注音）：
+           * 那里注音不能占宽度。别的宿主（RNP 的 -original 那一层 div、
+           * 普通歌词里的 span）仍然用真 ruby。
+           */
+          var flat = isWord ? karaokeWordOf(host.el, region) : null;
+          if (flat && flat.setAttribute) {
+            /*
+             * 标上「这一格注过音」：RNP 给每个词格挂的 -0.15em 上下负 margin
+             * 会让折行时第二行压到第一行上（注音让位又把字往下压了一截）。
+             * 样式表里对 [data-wk-word] 收掉这两条 margin —— 放行高，不放字。
+             */
+            flat.setAttribute("data-wk-word", "1");
+            rec.words.push(flat);
+          }
+          var isFlat = !!flat;
           var cls = isWord ? "wk-line wk-word" : "wk-line";
           var keep = [];
           for (var j = 0; j < host.parts.length; j++) {
@@ -2763,15 +2803,61 @@ function buildRuby(base, gloss, provisional, source) {
             keep.push({ node: part.node, raw: part.node.nodeValue });
             part.node.nodeValue = "";
           }
-          var wrap = buildWrapEl(segsHere, cls, keep);
+          var wrap = buildWrapEl(segsHere, cls, keep, isFlat);
           clearKids(host.el);
           host.el.appendChild(wrap);
-          rec.hosts.push({ el: host.el, wrap: wrap, orig: keep, segs: segsHere, cls: cls });
+          rec.hosts.push({ el: host.el, wrap: wrap, orig: keep, segs: segsHere, cls: cls, flat: isFlat });
           if (i === 0) collectRubies(wrap, rec.nodes);
-          if (isWord) mirrorToFillers(host.el, segsHere, cls, rec);
+          if (isWord) mirrorToFillers(host.el, segsHere, cls, rec, isFlat);
         }
       }
       return rec;
+    }
+
+    /**
+     * 标出"这一行折行了"的逐字歌词行。
+     *
+     * RNP 给每个词格挂了 -0.15em 的上下负 margin（它想让行距紧一点），注音让位
+     * 又把字往下压了一截 —— 一行只有一行时看不出来，一旦折成两行，第二行就压到
+     * 第一行的字上（真机：`チープでキッチュな小惑星` 的「小惑星」叠在「チープ」下面）。
+     *
+     * 判据：同一个 karaoke 容器里的词格出现了两个不同的 offsetTop（= 两行）。
+     * 折了行的容器标上 data-wk-wrap，样式表里把那两条负 margin 和让位的负尾巴
+     * 收掉，行距按满的算；没折行的行一切照旧（不留空）。
+     */
+    function markWrappedLines() {
+      var cells;
+      try {
+        cells = doc.querySelectorAll("[data-wk-word]");
+      } catch (e) {
+        return;
+      }
+      var seen = [];
+      for (var i = 0; i < cells.length; i++) {
+        var cell = cells[i];
+        var box = cell.parentNode;
+        if (!box || box.nodeType !== 1) continue;
+        if (seen.indexOf(box) >= 0) continue;
+        seen.push(box);
+        var kids = box.children || [];
+        var top = null;
+        var wrapped = false;
+        for (var j = 0; j < kids.length; j++) {
+          var k = kids[j];
+          if (!k || k.nodeType !== 1) continue;
+          if (typeof k.offsetTop !== "number") continue;
+          if (top === null) top = k.offsetTop;
+          else if (Math.abs(k.offsetTop - top) > 2) {
+            wrapped = true;
+            break;
+          }
+        }
+        if (wrapped) {
+          if (box.getAttribute("data-wk-wrap") !== "1") box.setAttribute("data-wk-wrap", "1");
+        } else if (box.getAttribute("data-wk-wrap")) {
+          box.removeAttribute("data-wk-wrap");
+        }
+      }
     }
 
     /** 替身被 RNP 重建过就补一遍（只动替身，不动本体） */
@@ -2791,13 +2877,34 @@ function buildRuby(base, gloss, provisional, source) {
       for (var h = 0; h < rec.hosts.length; h++) {
         var host = rec.hosts[h];
         if (!host.el || !host.el.isConnected) continue;
-        mirrorToFillers(host.el, host.segs || [], host.cls || "wk-line wk-word", rec);
+        mirrorToFillers(host.el, host.segs || [], host.cls || "wk-line wk-word", rec, host.flat);
       }
     }
 
     /** 整行还原成框架的原样（wrap 摘掉，原文本节点按原值放回） */
     function unwrapRec(rec) {
       var i;
+      var boxes = [];
+      for (i = 0; i < rec.words.length; i++) {
+        var w = rec.words[i];
+        if (!w) continue;
+        if (w.removeAttribute) w.removeAttribute("data-wk-word");
+        var box = w.parentNode;
+        if (box && box.nodeType === 1 && boxes.indexOf(box) < 0) boxes.push(box);
+      }
+      // 这一格里已经没有我们的词格了：折行标记也一起摘掉，行距回到 RNP 原样
+      for (i = 0; i < boxes.length; i++) {
+        var b = boxes[i];
+        var left = false;
+        try {
+          left = !!b.querySelector("[data-wk-word]");
+        } catch (eQ) {
+          left = false;
+        }
+        if (!left && b.getAttribute && b.getAttribute("data-wk-wrap")) {
+          b.removeAttribute("data-wk-wrap");
+        }
+      }
       for (i = 0; i < rec.hosts.length; i++) {
         var h = rec.hosts[i];
         var el = h.el;
@@ -3582,6 +3689,7 @@ function buildRuby(base, gloss, provisional, source) {
        */
       if (wrapLines) {
         noteRetry(calibrateWordOffset());
+        markWrappedLines();
       }
       /*
        * 改过行（或者刚量完让位高度）就通知逐字歌词插件重量行高：
@@ -3730,7 +3838,7 @@ function buildRuby(base, gloss, provisional, source) {
     // 逐字词格要让出的高度（见下面 .rnp-karaoke-word > span 那条）：注音字号换算成 em
     var padEm = Math.round((size / 100) * 0.95 * 1000) / 1000;
     return [
-      "ruby.wk-ruby {",
+      "ruby.wk-ruby, .wk-ruby {",
       "  ruby-position: over;",
       "  -webkit-ruby-position: before;",
       "  ruby-align: center;",
@@ -3768,8 +3876,8 @@ function buildRuby(base, gloss, provisional, source) {
       "  border-bottom: 1px dashed rgba(255,255,255,.35);",
       "}",
       '[data-wk-fallback] { position: relative; }',
-      '[data-wk-fallback] ruby.wk-ruby { position: relative; display: inline-block; }',
-      '[data-wk-fallback] ruby.wk-ruby > .wk-rt {',
+      '[data-wk-fallback] .wk-ruby { position: relative; display: inline-block; }',
+      '[data-wk-fallback] .wk-ruby > .wk-rt {',
       "  position: absolute;",
       "  left: 50%;",
       "  bottom: 100%;",
@@ -3806,15 +3914,15 @@ function buildRuby(base, gloss, provisional, source) {
        */
       ".rnp-karaoke-word .wk-line.wk-word {",
       "  display: inline-block;",
+      // 行高统一收成 1：带注音的词格和没注音的词格高度一样，同一行里基线才对得齐
+      // （不统一的话，带注音那格被 ruby 撑高，同一行的字就一高一低）
+      "  line-height: 1;",
       "  padding-top: var(--wk-word-offset, " + padEm + "em);",
       "  margin-bottom: var(--wk-word-tail, -" + padEm + "em);",
       "}",
-      ".rnp-karaoke-word .wk-line.wk-word ruby.wk-ruby {",
+      ".rnp-karaoke-word .wk-line.wk-word .wk-ruby {",
       "  position: relative;",
       "  display: inline-block;",
-      // 词格的 line-height 是 1.5（RNP 给的），ruby 盒子的半行距会把注音顶高一截；
-      // 这里收成 1，注音就贴在底字上方
-      "  line-height: 1;",
       "}",
       ".rnp-karaoke-word .wk-line.wk-word .wk-rt {",
       "  position: absolute;",
@@ -3833,6 +3941,18 @@ function buildRuby(base, gloss, provisional, source) {
       ".rnp-karaoke-word .wk-line {",
       "  opacity: 1 !important;",
       "}",
+      /*
+       * 折了行的逐字行（markWrappedLines 标的）：把 RNP 那两条 -0.15em 负 margin
+       * 和让位的负尾巴收掉，一行按一行算 —— 否则第二行会压到第一行的字上。
+       * 没折行的行不加这个属性，行距保持 RNP 原本的紧度。
+       */
+      "[data-wk-wrap] [data-wk-word] {",
+      "  margin-top: 0 !important;",
+      "  margin-bottom: 0 !important;",
+      "}",
+      "[data-wk-wrap] .wk-line.wk-word {",
+      "  margin-bottom: 0 !important;",
+      "}",
       // 老路径（逐节点打补丁）的词格：wrap 只可能是词格自己的 span
       ".rnp-lyrics-line .rnp-karaoke-word > span:not(.wk-line) {",
       "  padding-top: " + padEm + "em;",
@@ -3847,7 +3967,7 @@ function buildRuby(base, gloss, provisional, source) {
       //     老版本这里写死 `rt.wk-rt { opacity: 1 !important }`，把设置面板里的
       //     「注音不透明度」整个压掉了（拖了没反应，页面上只有"暂定"那 45% 看得见，
       //     于是所有待判定的行都显得特别淡）。
-      "ruby.wk-ruby { opacity: 1 !important; }",
+      ".wk-ruby { opacity: 1 !important; }",
       "rt.wk-rt, .wk-rt { opacity: " + opacity + " !important; }",
       /*
        * 「暂定读音」：在线那层还在问，先用规则结果顶上。

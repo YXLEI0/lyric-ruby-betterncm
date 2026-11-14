@@ -176,7 +176,7 @@ function bootPlugin(html, options) {
 }
 
 function rubyCount(root) {
-  return root.querySelectorAll("ruby.wk-ruby").length;
+  return root.querySelectorAll(".wk-ruby").length;
 }
 
 /** 离线词典里有没有这个词（写测试前提用；直接读 src/core/dict.js） */
@@ -196,7 +196,7 @@ function baseText(el) {
 }
 
 const PAIRS = (p) =>
-  [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
 test("注入全部模块后，插件注册了 onLoad / onConfig 并导出 API", async () => {
   const env = bootPlugin();
@@ -396,7 +396,7 @@ test("大模型层：规则读歪的词，结果回来之后注音会被换上�
 
   // 关键：DOM 里那个词现在必须是大模型给的读音，不是规则拼出来的
   const line = env.document.querySelector("ul.lyric li p");
-  const pairs = [...line.querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+  const pairs = [...line.querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
   assert.ok(pairs.indexOf("カレイドスコープ") >= 0, "注音应该被换成大模型的读音：" + pairs.join(","));
   assert.strictEqual(baseText(line), "きらめく kaleidoscope の light", "底字不许动");
 });
@@ -432,7 +432,7 @@ test("Tell me a story 里的 a 也要注音", async () => {
   await sleep(600);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [
     ["Tell", "テル"],
     ["me", "ミー"],
@@ -469,7 +469,7 @@ test("四类：颜文字不标、ATフィールド エーティー、Ω オー�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   // 颜文字行一个注音都不该有（`^` 之类在 letters.js 里算"装饰符号粘连"）
@@ -481,7 +481,7 @@ test("四类：颜文字不标、ATフィールド エーティー、Ω オー�
   const l2 = pairsOf(ps[2]);
   assert.strictEqual(l2.get("I'm"), "アイム", "I'm 要整体标（含 'm）：" + ps[2].innerHTML);
   assert.strictEqual(l2.get("mine"), "マイン");
-  assert.strictEqual([...ps[2].querySelectorAll("ruby.wk-ruby")].filter((r) => r.childNodes[0].nodeValue === "I").length, 6);
+  assert.strictEqual([...ps[2].querySelectorAll(".wk-ruby")].filter((r) => r.childNodes[0].nodeValue === "I").length, 6);
   // 单个希腊字母：Ω 是大写的电阻单位，小写 ω 才读字母名
   assert.strictEqual(pairsOf(ps[3]).get("Ω"), "オーム", "Ω 该读 オーム：" + ps[3].innerHTML);
   // `（V, W, A）` 整串都是单位，读单位名
@@ -523,7 +523,7 @@ test("英文词不许被罗马音层抢读：daze デイズ / Shone ショーン
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
   const l0 = pairsOf(ps[0]);
   assert.strictEqual(l0.get("daze"), "デイズ", JSON.stringify([...l0]));
@@ -565,7 +565,7 @@ test("全角西文字母也注音（`こんなんじゃ（ＮＯ!）` → ＮＯ
   assert.deepStrictEqual(PAIRS(ps[1]), [["\uFF24\uFF32\uFF25\uFF21\uFF2D", "ドリーム"]], ps[1].innerHTML);
   // 半角和全角读同一个音
   const l2 = new Map(
-    [...ps[2].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[2].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(l2.get("no"), "ノー", JSON.stringify([...l2]));
   assert.strictEqual(l2.get("NO"), "ノー");
@@ -593,7 +593,7 @@ test("ASCII art / 颜文字行不标；数字后面的单位字母要标；打�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
   // 图案行、颜文字行：整行零注音，底字不动
   assert.strictEqual(rubyCount(ps[0]), 0, "图案行不该注音：" + ps[0].innerHTML);
@@ -641,7 +641,7 @@ test("全大写缩写贴着数字是字母名：AM6:00 -> エーエム（英语�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const l0 = pairsOf(ps[0]);
@@ -678,7 +678,7 @@ test("西里尔全大写缩写逐字母读：СССР -> エスエスエスエ�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const l0 = pairsOf(ps[0]);
@@ -714,13 +714,13 @@ test("ツイッター只在 `Xだけの…` 那一句命中；别的 X 照旧字
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   assert.strictEqual(pairsOf(ps[0]).get("X"), "ツイッター", "这一句的 X 要读 ツイッター：" + ps[0].innerHTML);
   assert.strictEqual(pairsOf(ps[1]).get("X"), "ツイッター", "带空格的那句也算：" + ps[1].innerHTML);
   assert.strictEqual(pairsOf(ps[2]).size, 0, "别的行里孤立的 X 不许跟着变 ツイッター：" + ps[2].innerHTML);
-  const l3 = [...ps[3].querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+  const l3 = [...ps[3].querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
   assert.deepStrictEqual(l3, ["エックス", "エックス"], "X線 / X軸 是字母 X：" + ps[3].innerHTML);
   assert.strictEqual(pairsOf(ps[4]).get("X"), "エックス", "成串的 X 读字母名：" + ps[4].innerHTML);
   assert.strictEqual(pairsOf(ps[5]).get("X"), "エックス", "英文句子里的 X 读字母名：" + ps[5].innerHTML);
@@ -747,7 +747,7 @@ test("整首专属读音：`the EmpErroR` 里 the 读 ジ（官方 ジエンペ�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
   const l0 = pairsOf(ps[0]);
   assert.strictEqual(l0.get("the"), "ジ", "这首里 the 是 ジ：" + ps[0].innerHTML);
@@ -773,7 +773,7 @@ test("整首专属读音只在那一首里生效：别的歌里 No 照旧读 ノ
   await env.runLoad();
   await sleep(500);
   const p = env.document.querySelector("ul.lyric li p");
-  const got = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got = [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(got, [["No", "ナンバー"]], "这一首里 No. 是 ナンバー：" + p.innerHTML);
 
   const HTML2 = HTML.replace("Disco No.39", "別の歌");
@@ -781,7 +781,7 @@ test("整首专属读音只在那一首里生效：别的歌里 No 照旧读 ノ
   await env2.runLoad();
   await sleep(500);
   const p2 = env2.document.querySelector("ul.lyric li p");
-  const got2 = [...p2.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got2 = [...p2.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(got2, [["No", "ノー"]], "别的歌里 No 不许跟着变 ナンバー：" + p2.innerHTML);
 });
 
@@ -806,7 +806,7 @@ test("连字符标记长音：`MO-SO` / `KYO-SO` / 换行拆开的 `SO-` + `ZO` 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const l0 = pairsOf(ps[0]);
@@ -841,7 +841,7 @@ test("整首专属读音：歌名里含假名/汉字/符号的也按表读（pot
   await env.runLoad();
   await sleep(500);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const p0 = [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const p0 = [...ps[0].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(p0, [["potato", "ポテト"]], "potato 该按整首表读：" + ps[0].innerHTML);
   // 别的歌名不命中时，bit 照旧走词典/规则（不是这张表的事）
   assert.ok(!/bit/.test(ps[1].innerHTML) || !/wk-src-song/.test(ps[1].innerHTML), "别的歌里 bit 不该吃整首表：" + ps[1].innerHTML);
@@ -870,12 +870,12 @@ test("缩写与单字母：LV レベル / Я ヤー / A A A A A エー / feat. �
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   assert.strictEqual(pairsOf(ps[0]).get("LV"), "レベル", "LV 该读 レベル：" + ps[0].innerHTML);
   assert.strictEqual(pairsOf(ps[1]).get("Я"), "ヤー", "单个西里尔字母按字母名读：" + ps[1].innerHTML);
-  const aa = [...ps[2].querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+  const aa = [...ps[2].querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
   assert.deepStrictEqual(aa, ["エー", "エー", "エー", "エー", "エー"], "重复的 A 是字母名：" + ps[2].innerHTML);
   assert.strictEqual(pairsOf(ps[3]).get("feat"), "フィーチャリング", "feat. 该读 フィーチャリング：" + ps[3].innerHTML);
   // 反面：数字后面的单位字母、以及"几种不同的单位符号排成一串"照旧读单位名
@@ -913,18 +913,18 @@ test("拆行 DOM 里的单字母 / 颜文字里的 b / 点号记法是罗马字�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   assert.strictEqual(pairsOf(ps[0]).get("T"), "ティー", "拆行之后 T 也要注上：" + ps[0].innerHTML);
-  const bs = [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const bs = [...ps[1].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(
     bs,
     [["b", "ボ"], ["b", "ボ"], ["boy", "ボーイ"], ["b", "ボ"], ["b", "ボ"]],
     "颜文字里的 b 要注音（读表情的音 ボ，不带长音）：" + ps[1].innerHTML
   );
   assert.strictEqual(pairsOf(ps[2]).get("K・A・I・S・A・N"), "カイサン", "整串是罗马字单词：" + ps[2].innerHTML);
-  const midi = [...ps[3].querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+  const midi = [...ps[3].querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
   assert.deepStrictEqual(midi, ["エム", "アイ", "ディー", "アイ"], "短的记号照旧逐字母：" + ps[3].innerHTML);
 });
 
@@ -953,7 +953,7 @@ test("混排歌词：字母夹在假名中间读默认音；逐字 / 原文+翻�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (el) =>
     new Map(
-      [...el.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...el.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const first = pairsOf(ps[0]);
@@ -967,7 +967,7 @@ test("混排歌词：字母夹在假名中间读默认音；逐字 / 原文+翻�
   assert.strictEqual(pairsOf(karaoke).get("C"), "チ", "逐字歌词（一个字一个 span）也要注上：" + karaoke.innerHTML);
 
   // 反面：正常的型号写法不能被这条规则吃掉（`タイプRの車` 是 アール）
-  const third = [...env.document.querySelectorAll("ul.lyric li")[2].querySelectorAll("ruby.wk-ruby")].map(
+  const third = [...env.document.querySelectorAll("ul.lyric li")[2].querySelectorAll(".wk-ruby")].map(
     (r) => r.querySelector(".wk-rt").textContent
   );
   assert.deepStrictEqual(third, ["アール", "アール"], "型号 / 单独的 R 仍是字母名：" + ps[3].innerHTML);
@@ -994,7 +994,7 @@ test("连字符串：被切断的重复音（wa- ウェ / ar- ア / ni- ネ）�
   await env.runLoad();
   await sleep(600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const rubies = (p) => [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const rubies = (p) => [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
   assert.deepStrictEqual(
     rubies(ps[0]).slice(-3),
@@ -1045,7 +1045,7 @@ test("缩写展开与掩码词：OMG オーマイゴッド、被涂掉一个字�
   await env.runLoad();
   await sleep(500);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const rubies = (p) => [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const rubies = (p) => [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
   assert.deepStrictEqual(rubies(ps[0]), [["OMG", "オーマイゴッド"]], "OMG 要展开：" + ps[0].innerHTML);
   assert.deepStrictEqual(rubies(ps[1]), [["T○itter", "ツイッター"]], "掩码词整串读：" + ps[1].innerHTML);
@@ -1064,7 +1064,7 @@ test("段标的冒号被拆到下一个节点时，A / B 仍然留白", async ()
   await env.runLoad();
   await sleep(500);
   const p = env.document.querySelector("ul.lyric li p");
-  const got = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got = [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const bases = got.map((g) => g[0]);
   assert.ok(bases.indexOf("A") < 0 && bases.indexOf("B") < 0, "段标 A / B 不该注音：" + JSON.stringify(got));
   assert.ok(bases.indexOf("Vanitatum") >= 0, "同行的词照常标：" + JSON.stringify(got));
@@ -1093,7 +1093,7 @@ test("单个大写字母贴日文/在英文句子里要标；数字后面的单�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
   // 紧贴日文的单字母和英文句子里的单字母
   assert.strictEqual(pairsOf(ps[0]).get("T"), "ティー", "T氏 的 T 该读 ティー：" + ps[0].innerHTML);
@@ -1141,7 +1141,7 @@ test("`AH!!` 读 アー（不是字母名）、`B4` 的 B 读 ビー、`tofu` �
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
   // 感叹词：有元音的 2~3 字母缩写靠"词典里有这个词"挡住（ah / oh / uh）
   assert.strictEqual(pairsOf(ps[0]).get("AH"), "アー", "AH 该读 アー：" + ps[0].innerHTML);
@@ -1186,7 +1186,7 @@ test("D/N/A 逐字母读，不能当成英文冠词读成 ア", async () => {
   ]);
   assert.strictEqual(baseText(p), "だって D/N/Aじゃ 騙れない", "原文一字不改");
   // 来源是字母名那一层（`letters`）：类名一直在，颜色只由开关决定
-  const first = p.querySelector("ruby.wk-ruby");
+  const first = p.querySelector(".wk-ruby");
   assert.ok(/wk-src-letters/.test(first.className), "应该记在 letters 这一类上：" + first.className);
 });
 
@@ -1354,13 +1354,13 @@ test("层序：在线那层还在问时先用暂定读音顶上（不空着）�
 
   const p = env.document.querySelector("ul.lyric li p");
   assert.strictEqual(rubyCount(p), 1, "等待期间也要注上（暂定），不能空着");
-  assert.ok(p.querySelector("ruby.wk-ruby").classList.contains("wk-pending"), "要标成暂定");
+  assert.ok(p.querySelector(".wk-ruby").classList.contains("wk-pending"), "要标成暂定");
   assert.strictEqual(baseText(p), "きらめく kaleidoscope の夜", "底字不动");
 
   // 免费接口的攒批窗口 1.2s + 请求失败 -> 之后转为确定（规则读音），但不能消失
   await sleep(2600);
   assert.strictEqual(rubyCount(p), 1, "接口失败后注音不许消失：" + p.innerHTML);
-  assert.ok(!p.querySelector("ruby.wk-ruby").classList.contains("wk-pending"), "已经有结论了，不再是暂定");
+  assert.ok(!p.querySelector(".wk-ruby").classList.contains("wk-pending"), "已经有结论了，不再是暂定");
 });
 
 test("层序：完全离线设置（关掉联网）时规则立刻生效，不等任何请求", async () => {
@@ -1412,7 +1412,7 @@ test("层序可调：把英文规则提到在线层前面 = 一个请求都不�
   assert.strictEqual(called, 0, "规则排在在线层前面时不许发请求");
   const p = env.document.querySelector("ul.lyric li p");
   assert.strictEqual(rubyCount(p), 1, "规则照样要注上：" + p.innerHTML);
-  assert.ok(!p.querySelector("ruby.wk-ruby").classList.contains("wk-pending"), "轮不到在线层，不存在暂定");
+  assert.ok(!p.querySelector(".wk-ruby").classList.contains("wk-pending"), "轮不到在线层，不存在暂定");
   const s = env.api.stats();
   assert.strictEqual(s.llm.requests, 0, "大模型一次都没问");
 });
@@ -1452,7 +1452,7 @@ test("层序可调：把大模型提到词典前面，词典命中的词也会�
   const words = [].concat.apply([], requests);
   assert.ok(words.indexOf("light") >= 0, "词典命中的 light 也要问（它排在模型下面）：" + words.join(","));
   const p = env.document.querySelector("ul.lyric li p");
-  const got = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got = [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(
     got,
     [
@@ -1683,14 +1683,14 @@ test("全英文的一行：等待在线结果期间先用暂定读音顶上，�
     ["kaleidoscope", "zephyr", "serendipity", "light"],
     "等待期间也不许空着：" + p.innerHTML
   );
-  const zephyrEl = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
+  const zephyrEl = [...p.querySelectorAll(".wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
   assert.ok(zephyrEl.classList.contains("wk-pending"), "词典外的词先标成暂定：" + zephyrEl.className);
-  const lightEl = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "light");
+  const lightEl = [...p.querySelectorAll(".wk-ruby")].find((r) => r.childNodes[0].nodeValue === "light");
   assert.ok(!lightEl.classList.contains("wk-pending"), "词典命中的词不是暂定");
 
   await sleep(600);
   // 结果回来：读音就地改写、暂定标记去掉，ruby 还是原来那个节点对象
-  const zephyrAfter = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
+  const zephyrAfter = [...p.querySelectorAll(".wk-ruby")].find((r) => r.childNodes[0].nodeValue === "zephyr");
   assert.strictEqual(zephyrAfter, zephyrEl, "不许把注音拆掉重建（那样就是一闪）");
   assert.strictEqual(zephyrAfter.querySelector(".wk-rt").textContent, "ゼファー");
   assert.ok(!zephyrAfter.classList.contains("wk-pending"), "有确定结果了就不是暂定");
@@ -1744,7 +1744,7 @@ test("在线答案回来改写（relabel）时，连字符片段 / 打码词 / �
 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const readings = (p, word) => {
-    const el = [...p.querySelectorAll("ruby.wk-ruby")].find((r) => r.childNodes[0].nodeValue === word);
+    const el = [...p.querySelectorAll(".wk-ruby")].find((r) => r.childNodes[0].nodeValue === word);
     return el ? el.querySelector(".wk-rt").textContent : null;
   };
   assert.deepStrictEqual(
@@ -1780,10 +1780,10 @@ test("制作信息行：长尾写法（`Strings Arranged & Conducted by` / `Reco
   await sleep(600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   for (let i = 0; i < 5; i++) {
-    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "署名 / 编号行不该注音：" + ps[i].textContent);
+    assert.strictEqual(ps[i].querySelectorAll(".wk-ruby").length, 0, "署名 / 编号行不该注音：" + ps[i].textContent);
   }
   // 反面：同样的词，后面不是 `by` / `at` / 冒号的就还是歌词，照旧注音
-  assert.ok(ps[5].querySelectorAll("ruby.wk-ruby").length > 0, "不像署名的那行不该被误杀：" + ps[5].innerHTML);
+  assert.ok(ps[5].querySelectorAll(".wk-ruby").length > 0, "不像署名的那行不该被误杀：" + ps[5].innerHTML);
   assert.strictEqual(baseText(ps[5]), "Recorded in the rain", "底字不动");
 });
 
@@ -2031,7 +2031,7 @@ test("注音不透明度真的生效（老版本被一条 !important 压掉了�
   const css = ctx.document.getElementById("lyric-ruby-style").textContent;
   assert.ok(/rt\.wk-rt,\s*\.wk-rt\s*\{\s*opacity:\s*0\.4\s*!important/.test(css), "注音按设置里的 40%：" + css);
   assert.ok(
-    css.indexOf("ruby.wk-ruby { opacity: 1 !important; }") >= 0,
+    css.indexOf(".wk-ruby { opacity: 1 !important; }") >= 0,
     "底字仍要锁死 1（别人的 opacity 不许把它压淡）"
   );
   // 暂定按比例再淡一档（40% * 0.6 = 24%），不是写死的 45%
@@ -2091,14 +2091,14 @@ test("罗马音像英文词时交给大模型仲裁；真罗马音一个请求�
   await env.runLoad();
   await sleep(200); // 趁模型还没回来：本地答案是"暂定"
   const p = env.document.querySelector("ul.lyric li p");
-  const pendingNow = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.childNodes[0].nodeValue);
+  const pendingNow = [...p.querySelectorAll(".wk-ruby")].map((r) => r.childNodes[0].nodeValue);
   assert.ok(pendingNow.indexOf("sake") >= 0, "sake 要先标上（暂定）：" + p.innerHTML);
 
   await sleep(1400);
   const words = [].concat.apply([], asked);
   assert.deepStrictEqual(words, ["sake"], "只该问 sake：词典词和真罗马音都不该浪费请求（实际 " + words.join(",") + "）");
 
-  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...p.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -2112,7 +2112,7 @@ test("罗马音像英文词时交给大模型仲裁；真罗马音一个请求�
     ],
     "sake 要被模型换成 セイク；其它三个保持本地答案：" + JSON.stringify(pairs)
   );
-  const shakeRuby = p.querySelectorAll("ruby.wk-ruby")[3];
+  const shakeRuby = p.querySelectorAll(".wk-ruby")[3];
   assert.ok(shakeRuby.classList.contains("wk-src-dict"), "shake 现在是词典命中：" + shakeRuby.className);
   assert.strictEqual(baseText(p), "sake sekai the shake");
 });
@@ -2178,7 +2178,7 @@ test("换歌且页面不再变动时：被跳过的行会自己补回来（不�
   // 关键：接下来一个 DOM 事件都不发生，只等 —— 注音必须自己出现
   await sleep(3600);
   assert.deepStrictEqual(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.childNodes[0].nodeValue),
+    [...p.querySelectorAll(".wk-ruby")].map((r) => r.childNodes[0].nodeValue),
     ["sky"],
     "窗口过后必须自己补上来（暂停时换歌就是这个场景）：" + p.innerHTML
   );
@@ -2271,7 +2271,7 @@ test("罗马音节行：短音节按罗马音读（PI→ピ / ME→メ），普�
   await sleep(250);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const reading = (p) =>
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ]);
@@ -2321,7 +2321,7 @@ test("词典里的名字不许被罗马音层抢走（Rainie Love：レイニー
   await env.runLoad();
   await sleep(300);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...p.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -2347,7 +2347,7 @@ test("冠词 a 不许被行里别处的「a 贴着汉字」带成 エイ（Tell 
   await sleep(1600);
   // 一个 <li> 里几块文字，注音落在哪一块取决于"哪块像歌词原文"，所以按整行取注音
   const li = env.document.querySelector("ul.lyric li");
-  const pairs = [...li.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...li.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -2381,14 +2381,14 @@ test("全大写西文行：词典里有它的词不许再当罗马字猜（MORE 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const reading = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [
         r.childNodes[0].nodeValue,
         r.querySelector(".wk-rt").textContent,
       ])
     );
 
   // 那一行 5 个词全要注上，MORE 是 モア（不是 モレ），JUMP 不再空着
-  const shot = [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const shot = [...ps[0].querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -2423,7 +2423,7 @@ test("英文行里有 th/ck 这类拼写时，绝不当成罗马字行（`me` �
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const reading = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [
         r.childNodes[0].nodeValue,
         r.querySelector(".wk-rt").textContent,
       ])
@@ -2462,7 +2462,7 @@ test("不发音字母的英文词：直接进词典（没歧义就写进词典�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const reading = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [
         r.childNodes[0].nodeValue,
         r.querySelector(".wk-rt").textContent,
       ])
@@ -2503,7 +2503,7 @@ test("know 一族：know ノウ 本身是对的，同族那几个错读也一起
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const got = new Map();
   for (const p of ps) {
-    for (const [k, v] of [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    for (const [k, v] of [...p.querySelectorAll(".wk-ruby")].map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ])) {
@@ -2546,7 +2546,7 @@ test("notes 一族：复数/变形形的读音（notes→ノーツ，不是单�
   await sleep(250);
   const got = new Map();
   for (const p of env.document.querySelectorAll("ul.lyric li p")) {
-    for (const [k, v] of [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+    for (const [k, v] of [...p.querySelectorAll(".wk-ruby")].map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ])) {
@@ -2585,7 +2585,7 @@ test("音乐术语：`(Lento, presto, andante larghetto)` 离线也要读对", a
   await sleep(250);
   const p = env.document.querySelector("ul.lyric li p");
   const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.get("Lento"), "レント", JSON.stringify([...got]));
   assert.strictEqual(got.get("presto"), "プレスト", JSON.stringify([...got]));
@@ -2639,7 +2639,7 @@ test("`Every night … keeps me awake` 这一行：读音离线也要全对", as
   await sleep(250);
   const p = env.document.querySelector("ul.lyric li p");
   const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   for (const [w, kana] of [
     ["Every", "エブリ"],
@@ -2687,7 +2687,7 @@ test("缩写 / 喊叫 / 署名行：SOS・QTE・AAAAA 读对，署名行的碎�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   assert.strictEqual(pairsOf(ps[1]).get("SOS"), "エスオーエス", "SOS 要逐字母：" + ps[1].innerHTML);
@@ -2748,7 +2748,7 @@ test("`KiLLKiSS judy / jude / juda` 与乐队名 `Ave Mujica`（アベ ムジカ
   await sleep(300);
   const p = env.document.querySelector("ul.lyric li p");
   const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.get("KiLLKiSS"), "キルキス", JSON.stringify([...got]));
   assert.strictEqual(got.get("judy"), "ジュディ");
@@ -2787,7 +2787,7 @@ test("`YY` 标字母名、打码的 `XX` 留白；成串的大写单字母读字
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   // 打码：后面跟日语词尾 -> 留白
@@ -2852,12 +2852,12 @@ ${lines.map((l) => `  <li class="line"><p>${l}</p></li>`).join("\n")}
   }
   // 反向：只是带词头的正常歌词、以及名字出现在歌词里，照标
   const lyric1 = new Map(
-    [...ps[lines.length].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[lines.length].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(lyric1.get("Music"), "ミュージック", "正常歌词不能被误杀：" + ps[lines.length].innerHTML);
   assert.strictEqual(lyric1.get("light"), "ライト");
   const lyric2 = new Map(
-    [...ps[lines.length + 1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[lines.length + 1].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(lyric2.get("love"), "ラブ", "歌词里的词照标：" + ps[lines.length + 1].innerHTML);
   assert.strictEqual(lyric2.get("CC"), "シーシー");
@@ -2877,14 +2877,14 @@ test("波浪号拉长音：`この feel~ing go~od` 读 フィーリング / グ�
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const got = new Map(
-    [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[0].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.get("feel~ing"), "フィーリング", "波浪号要连起来读：" + ps[0].innerHTML);
   assert.strictEqual(got.get("go~od"), "グッド", "go~od 是 good：" + ps[0].innerHTML);
   assert.strictEqual(baseText(ps[0]), "この feel~ing go~od", "底字一字不改");
   // 结尾的波浪号不算连接符：还是 go / love
   const got2 = new Map(
-    [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[1].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got2.get("go"), "ゴー", ps[1].innerHTML);
   assert.strictEqual(got2.get("love"), "ラブ", ps[1].innerHTML);
@@ -2906,7 +2906,7 @@ test("打码的 `****ed`、采样行、以及全大写的 `DIVA`", async () => {
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const got = new Map(
-    [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[0].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.has("ed"), false, "打码碎片 ed 不该注音：" + ps[0].innerHTML);
   assert.strictEqual(got.get("Oh"), "オー", "其它词照标：" + JSON.stringify([...got]));
@@ -2927,13 +2927,13 @@ test("打码的 `****ed`、采样行、以及全大写的 `DIVA`", async () => {
   await sleep(300);
   const noteP = env2.document.querySelector("ul.lyric li p");
   const note = new Map(
-    [...noteP.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...noteP.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(note.get("teto"), "テト", "单个 * 后面的完整词要标：" + noteP.innerHTML);
   assert.strictEqual(note.get("solo"), "ソロ", JSON.stringify([...note]));
 
   assert.strictEqual(
-    new Map([...ps[2].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])).get("DIVA"),
+    new Map([...ps[2].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])).get("DIVA"),
     "ディーヴァ",
     "DIVA 是词，不是字母名：" + ps[2].innerHTML
   );
@@ -2963,7 +2963,7 @@ test("法语歌词：整行用「法语拼读」，常用词走人工词表", as
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (i) =>
     new Map(
-      [...ps[i].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...ps[i].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const l0 = pairsOf(0);
@@ -3053,7 +3053,7 @@ test("法语借词表只作用于法语行（`rose`：法语行 ロゼ / 英文�
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairsOf = (i) =>
     new Map(
-      [...ps[i].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...ps[i].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const fr = pairsOf(0);
@@ -3076,7 +3076,7 @@ test("法语借词表只作用于法语行（`rose`：法语行 ロゼ / 英文�
 /** 把第 i 行的 ruby 收成 Map（底字 -> 注音） */
 function linePairs(ps, i) {
   return new Map(
-    [...ps[i].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...ps[i].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
 }
 
@@ -3243,7 +3243,7 @@ test("斯瓦希里语歌词（用例 3 / 4）：按开音节直读，中文译�
 
   // 中文译文部分一个注音都没有
   for (let i = 0; i < ps.length; i++) {
-    const rubies = [...ps[i].querySelectorAll("ruby.wk-ruby")];
+    const rubies = [...ps[i].querySelectorAll(".wk-ruby")];
     for (const r of rubies) {
       assert.ok(!/[\u4e00-\u9fa5]/.test(r.childNodes[0].nodeValue), "中文不许注音：" + ps[i].innerHTML);
     }
@@ -3335,7 +3335,7 @@ test("说话人段标 `M:` 留白，同一行里 `匿名M` 的 M 照读 エム",
   const ps = env.document.querySelectorAll("ul.lyric li p");
 
   // 第一行：只有 `匿名M` 那个 M 有注音，行首的段标一个字都不许加
-  const rubies0 = [...ps[0].querySelectorAll("ruby.wk-ruby")];
+  const rubies0 = [...ps[0].querySelectorAll(".wk-ruby")];
   assert.deepStrictEqual(
     rubies0.map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]),
     [["M", "エム"]],
@@ -3356,7 +3356,7 @@ test("说话人段标 `M:` 留白，同一行里 `匿名M` 的 M 照读 エム",
    *  行里另一个 M 贴着汉字，于是行首那个也一起读字母名。全行搜索已经在别处踩过：
    *  罗马音行结尾的 `…na ra` 直接接中文翻译时，`a` 会被判成"贴着日文"读成 エイ。）
    */
-  const l1 = [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const l1 = [...ps[1].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(l1, [["M", "エム"]], "名字里的 M 照读 エム，行首孤立的 M 留白：" + ps[1].innerHTML);
 });
 
@@ -3378,16 +3378,16 @@ test("中文歌词：开了「汉字标普通话读音」才注音，默认不�
   await off.runLoad();
   await sleep(300);
   const offPs = off.document.querySelectorAll("ul.lyric li p");
-  const offHan = [...offPs[0].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
+  const offHan = [...offPs[0].querySelectorAll(".wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
   assert.strictEqual(offHan.length, 0, "默认不标汉字：" + offPs[0].innerHTML);
-  assert.ok(offPs[0].querySelectorAll("ruby.wk-ruby").length > 0, "西文照旧要标");
+  assert.ok(offPs[0].querySelectorAll(".wk-ruby").length > 0, "西文照旧要标");
 
   // 打开之后：逐字注音
   const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
   await on.runLoad();
   await sleep(400);
   const ps = on.document.querySelectorAll("ul.lyric li p");
-  const pairs = [...ps[0].querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...ps[0].querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -3403,7 +3403,7 @@ test("中文歌词：开了「汉字标普通话读音」才注音，默认不�
    * 判"整首是不是日语歌"如果读 textContent，第一行注完之后 textContent 里
    * 全是片假名，整首立刻被判成日语歌，后面几行就再也不注音了。
    */
-  const second = [...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const second = [...ps[1].querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -3438,7 +3438,7 @@ test("中文歌里的纯数字 / 单位行不许用日语数词读（120km）", 
   await env.runLoad();
   await sleep(600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const pairs = Array.from(ps[2].querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(ps[2].querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -3458,7 +3458,7 @@ test("日语歌里的汉字不标普通话读音（开了开关也不标）", as
   await env.runLoad();
   await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const han = [...ps[1].querySelectorAll("ruby.wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
+  const han = [...ps[1].querySelectorAll(".wk-ruby")].filter((r) => /[\u4E00-\u9FFF]/.test(r.childNodes[0].nodeValue));
   assert.strictEqual(han.length, 0, "日语歌里的汉字不动：" + ps[1].innerHTML);
 });
 
@@ -3518,7 +3518,7 @@ test("日语歌词：汉字标振假名（平假名），假名和西文各走�
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
   assert.deepStrictEqual(pairs(ps[0]), [["筈", "はず"]], "只有汉字要注：" + ps[0].innerHTML);
   assert.deepStrictEqual(pairs(ps[1]), [["東京", "とうきょう"], ["空", "そら"]], "熟字训按词注：" + ps[1].innerHTML);
@@ -3581,9 +3581,9 @@ test("纯音乐占位行不注音（纯音乐，请欣赏 / 純音楽、請欣�
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   for (let i = 0; i < 3; i++) {
-    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "占位行不许注音：" + ps[i].textContent);
+    assert.strictEqual(ps[i].querySelectorAll(".wk-ruby").length, 0, "占位行不许注音：" + ps[i].textContent);
   }
-  assert.ok(ps[3].querySelectorAll("ruby.wk-ruby").length > 0, "真正的歌词行照旧要注");
+  assert.ok(ps[3].querySelectorAll(".wk-ruby").length > 0, "真正的歌词行照旧要注");
 });
 
 test("数字也要注音（105 ひゃくご / 2020 にせんにじゅう）", async () => {
@@ -3600,7 +3600,7 @@ test("数字也要注音（105 ひゃくご / 2020 にせんにじゅう）", as
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs(ps[0]), [["105", "ひゃくご"], ["君", "きみ"]], "数字要注：" + ps[0].innerHTML);
   assert.deepStrictEqual(pairs(ps[2]), [["39", "さんじゅうきゅう"]], "纯数字行也要注：" + ps[2].innerHTML);
 });
@@ -3652,7 +3652,7 @@ test("卡面里原文 + 中文翻译在同一块：原文读日语，翻译读�
   const jp = env.document.querySelector(".jp");
   const trans = env.document.querySelector(".trans");
   const read = (el) =>
-    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(el.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
   assert.deepStrictEqual(
     read(jp),
@@ -3697,7 +3697,7 @@ test("中文歌整首不做振假名（逐行判会漏掉的那几行）", async
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   for (let i = 0; i < ps.length; i++) {
-    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "中文歌不许出现日语读音：" + ps[i].textContent + " -> " + ps[i].innerHTML);
+    assert.strictEqual(ps[i].querySelectorAll(".wk-ruby").length, 0, "中文歌不许出现日语读音：" + ps[i].textContent + " -> " + ps[i].innerHTML);
   }
 
   // 打开中文注音：整首按普通话读音注，一行都不许是日语读音
@@ -3708,7 +3708,7 @@ test("中文歌整首不做振假名（逐行判会漏掉的那几行）", async
   await on.runLoad();
   await sleep(300);
   const onPs = on.document.querySelectorAll("ul.lyric li p");
-  const pairs = Array.from(onPs[1].querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(onPs[1].querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -3749,7 +3749,7 @@ test("日语歌里夹的中文行：按中文读音注，不按日语读", async
   await sleep(300);
   const ps = on.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
 
   assert.deepStrictEqual(pairs(ps[0]), [["光", "ひかり"], ["中", "なか"]], "日文行走振假名：" + ps[0].innerHTML);
   assert.deepStrictEqual(
@@ -3769,8 +3769,8 @@ test("日语歌里夹的中文行：按中文读音注，不按日语读", async
   await off.runLoad();
   await sleep(300);
   const offPs = off.document.querySelectorAll("ul.lyric li p");
-  assert.strictEqual(offPs[1].querySelectorAll("ruby.wk-ruby").length, 0, "没开中文注音就不注：" + offPs[1].innerHTML);
-  assert.ok(offPs[0].querySelectorAll("ruby.wk-ruby").length > 0, "日文行照旧要注");
+  assert.strictEqual(offPs[1].querySelectorAll(".wk-ruby").length, 0, "没开中文注音就不注：" + offPs[1].innerHTML);
+  assert.ok(offPs[0].querySelectorAll(".wk-ruby").length > 0, "日文行照旧要注");
 });
 
 test("日文字体：重置按钮恢复默认，脏字体串会被洗干净", async () => {
@@ -3906,7 +3906,7 @@ test("逐字歌词：每个字一个文本节点时也要注音（不只空格�
   await env.runLoad();
   await sleep(300);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.deepStrictEqual(pairs, ["帷", "帳", "奥"], "逐字节点要逐个注上：" + p.innerHTML);
 });
 
@@ -3923,12 +3923,12 @@ test("全角数字要注音、信息行不许注音", async () => {
   await env.runLoad();
   await sleep(300);
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const nums = Array.from(ps[0].querySelectorAll("ruby.wk-ruby")).filter(
+  const nums = Array.from(ps[0].querySelectorAll(".wk-ruby")).filter(
     (r) => (r.childNodes[0].nodeValue || "").indexOf("６") >= 0
   );
   assert.strictEqual(nums.length, 1, "全角数字也要注音：" + ps[0].innerHTML);
   for (let i = 1; i < 3; i++) {
-    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "信息行不许注音：" + ps[i].textContent);
+    assert.strictEqual(ps[i].querySelectorAll(".wk-ruby").length, 0, "信息行不许注音：" + ps[i].textContent);
   }
 });
 
@@ -3993,7 +3993,7 @@ test("歌词界面里双击注音就能改：只改这一行，并落盘", async
   await sleep(300);
 
   const ps = env.document.querySelectorAll("ul.lyric li p");
-  const firstRuby = ps[0].querySelector("ruby.wk-ruby");
+  const firstRuby = ps[0].querySelector(".wk-ruby");
   assert.ok(firstRuby, "第一行要有注音：" + ps[0].innerHTML);
 
   // 双击注音 -> 冒出输入框
@@ -4052,7 +4052,7 @@ test("面板里填了按句的读音修正：只有那一行变，别的行照�
 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const read = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.strictEqual(read(ps[0])[0][1], "あした", "这一行按修正读：" + ps[0].innerHTML);
   // 另一行没命中范围：用词典读音（明日 词典给 あした，所以这里换个词更能说明问题）
   assert.ok(read(ps[1]).length >= 1, "另一行照旧要注音：" + ps[1].innerHTML);
@@ -4152,10 +4152,10 @@ test("中文歌的版权块不注音（词版权管理方：… 有限公司）"
   await sleep(1600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   // 歌词行照标（汉字）
-  assert.ok(ps[0].querySelectorAll("ruby.wk-ruby").length > 3, "歌词行要逐字注音：" + ps[0].innerHTML);
+  assert.ok(ps[0].querySelectorAll(".wk-ruby").length > 3, "歌词行要逐字注音：" + ps[0].innerHTML);
   // 版权块一行都不许标
   for (let i = 1; i < ps.length; i++) {
-    assert.strictEqual(ps[i].querySelectorAll("ruby.wk-ruby").length, 0, "版权行不许注音：" + ps[i].textContent);
+    assert.strictEqual(ps[i].querySelectorAll(".wk-ruby").length, 0, "版权行不许注音：" + ps[i].textContent);
     assert.strictEqual(ps[i].textContent, ps[i].textContent.trim(), "原文一个字都不动");
   }
 });
@@ -4209,7 +4209,7 @@ test("多音字：大模型按整句挑读音（银行 ハン / 行走 シン）
 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const reading = (p, ch) => {
-    const r = [...p.querySelectorAll("ruby.wk-ruby")].filter((x) => x.childNodes[0].nodeValue === ch)[0];
+    const r = [...p.querySelectorAll(".wk-ruby")].filter((x) => x.childNodes[0].nodeValue === ch)[0];
     return r ? r.querySelector(".wk-rt").textContent : null;
   };
   assert.strictEqual(reading(ps[0], "行"), "ハン", "银行里的行读 ハン：" + ps[0].innerHTML);
@@ -4222,7 +4222,7 @@ test("多音字：大模型按整句挑读音（银行 ハン / 行走 シン）
   await off.runLoad();
   await sleep(400);
   const offPs = off.document.querySelectorAll("ul.lyric li p");
-  const offRow = [...offPs[0].querySelectorAll("ruby.wk-ruby")].filter((x) => x.childNodes[0].nodeValue === "行")[0];
+  const offRow = [...offPs[0].querySelectorAll(".wk-ruby")].filter((x) => x.childNodes[0].nodeValue === "行")[0];
   assert.strictEqual(offRow.querySelector(".wk-rt").textContent, "シン", "离线读音：" + offPs[0].innerHTML);
   assert.strictEqual(offRow.classList.contains("wk-pending"), false, "没开大模型就不是暂定");
 });
@@ -4247,7 +4247,7 @@ test("西语歌词（On My Way）：y イ、ti ティ、de デ（不是字母名
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const map = (p) =>
     new Map(
-      [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+      [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
     );
 
   const l0 = map(ps[0]);
@@ -4283,7 +4283,7 @@ test("朝鲜语歌词：一个音节一个注音（안녕 アンニョン）", a
   await env.runLoad();
   await sleep(1600);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...p.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -4458,7 +4458,7 @@ ${CREDITS.map((c) => '  <li class="line"><p>' + c + "</p></li>").join("\n")}
 
   // 前两行是真歌词，照常注音（尤其 `Music と light の 中で`：不能因为以 Music 开头就杀）
   assert.ok(rubyCount(ps[0]) >= 2, "真歌词要注音：" + ps[0].innerHTML);
-  const lyric = new Map([...ps[1].querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]));
+  const lyric = new Map([...ps[1].querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]));
   assert.strictEqual(lyric.get("Music"), "ミュージック", "以 Music 开头但后面是空格的**真歌词**不该被当署名：" + JSON.stringify([...lyric]));
   assert.strictEqual(lyric.get("light"), "ライト", JSON.stringify([...lyric]));
 
@@ -4577,7 +4577,7 @@ test("连字符串起来的长词：一行里每个词各自一个 ruby（不许
   await sleep(1600);
 
   const p = env.document.querySelectorAll("ul.lyric li p")[0];
-  const bases = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.childNodes[0].nodeValue);
+  const bases = [...p.querySelectorAll(".wk-ruby")].map((r) => r.childNodes[0].nodeValue);
   assert.ok(!bases.includes("Looser-Krankheit-Was"), "整条链不许当成一个词：" + JSON.stringify(bases));
   // `A-Z` 是记号 -> 拆成 A / Z 两个字母各一个 ruby；连字符链 -> 拆成三个词
   assert.deepStrictEqual(bases, ["A", "Z", "Looser", "Krankheit", "Was", "IS", "das"], JSON.stringify(bases));
@@ -4847,7 +4847,7 @@ test("两可的短音节：大模型按整句语境判（Do→ド / Re→レ）�
 
   const p = env.document.querySelector("ul.lyric li p");
   const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.get("Do"), "ド", "唱名要按语境读成 ド：" + JSON.stringify([...got]));
   assert.strictEqual(got.get("Re"), "レ", "唱名要按语境读成 レ：" + JSON.stringify([...got]));
@@ -4868,7 +4868,7 @@ test("Shoo / Gimme / Yeah：词典里补上，不再被罗马音层抢走", asyn
   await sleep(250);
   const p = env.document.querySelector("ul.lyric li p");
   const got = new Map(
-    [...p.querySelectorAll("ruby.wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
+    [...p.querySelectorAll(".wk-ruby")].map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent])
   );
   assert.strictEqual(got.get("Shoo"), "シュー", "Shoo 该是 シュー：" + JSON.stringify([...got]));
   assert.strictEqual(got.get("Gimme"), "ギミー", "Gimme 该是 ギミー");
@@ -4919,7 +4919,7 @@ test("学会的词：模型在两个句子里答同一个读音 -> 沉淀成离�
   // 页面用的是模型答案
   const ps = env.document.querySelectorAll("ul.lyric li p");
   for (const p of ps) {
-    const rt = [...p.querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+    const rt = [...p.querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
     assert.deepStrictEqual(rt, ["セレンディピティ"], "两句都要用模型答案：" + p.innerHTML);
   }
   // 两句 -> 收下
@@ -4952,7 +4952,7 @@ test("学会的词：模型在两个句子里答同一个读音 -> 沉淀成离�
   await sleep(600);
 
   const ps2 = env2.document.querySelectorAll("ul.lyric li p");
-  const got2 = [...ps2[0].querySelectorAll("ruby.wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
+  const got2 = [...ps2[0].querySelectorAll(".wk-ruby")].map((r) => r.querySelector(".wk-rt").textContent);
   assert.deepStrictEqual(got2, ["セレンディピティ"], "重启后离线也要读对：" + ps2[0].innerHTML);
   assert.strictEqual(calls, 0, "已经学会的词一个字都不该再问模型（这就是省钱的地方）");
   // 来源标记也要是 learned（按来源上色时显示成"学会的词"）
@@ -5128,7 +5128,7 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
   const preview = root.querySelector(".wk-preview");
   assert.ok(preview, "面板里应该有预览区");
 
-  const pairs = [...preview.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const pairs = [...preview.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -5159,7 +5159,7 @@ test("设置面板的预览：照 JapaneseFonts 的样子，两行日语振假�
   const kata = bootPlugin(NCM_HTML, { dev: true, config: { furiganaKana: "katakana" } });
   await kata.runLoad();
   const kataPreview = kata.listeners.config[0]().querySelector(".wk-preview");
-  const kataPairs = [...kataPreview.querySelectorAll("ruby.wk-ruby")].map((r) => [
+  const kataPairs = [...kataPreview.querySelectorAll(".wk-ruby")].map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -5310,7 +5310,7 @@ test("中文歌里夹日语行：中文行走普通话读音，日语行照旧�
   await sleep(600);
 
   const pairs = (el) =>
-    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    Array.from(el.querySelectorAll(".wk-ruby")).map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ]);
@@ -5349,7 +5349,7 @@ test("逐字节点 + 日语标题行：雫 / 愛 按整行判成日文，不许�
   await sleep(600);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const rubyOver = (p, ch) => {
-    const hit = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === ch);
+    const hit = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === ch);
     return hit.length ? hit[0].querySelector(".wk-rt").textContent : null;
   };
   assert.strictEqual(rubyOver(ps[0], "雫"), "しずく", "雫 要读日语 しずく：" + ps[0].innerHTML);
@@ -5375,7 +5375,7 @@ test("就地改读音只改点中的那一处（同一行两个相同的字不�
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const first = p.querySelectorAll("ruby.wk-ruby")[2]; // 誰 / 魂 / 辛 / 辛
+  const first = p.querySelectorAll(".wk-ruby")[2]; // 誰 / 魂 / 辛 / 辛
   assert.strictEqual(first.childNodes[0].nodeValue, "辛", "取到第一个 辛：" + p.innerHTML);
   first.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   await sleep(50);
@@ -5388,7 +5388,7 @@ test("就地改读音只改点中的那一处（同一行两个相同的字不�
   const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.deepStrictEqual(saved.furiganaLineSpans, { 誰だって魂辛辛: [[5, "辛", "からしさ"]] }, "只存这一处：" + JSON.stringify(saved.furiganaLineSpans));
 
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -5420,10 +5420,10 @@ test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 / �
 
   const p = env.document.querySelector("ul.lyric li p");
   const read = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-  const rubyOf = (word) => Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "").trim() === word)[0];
+  const rubyOf = (word) => Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "").trim() === word)[0];
   const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
   const chip = (label) => chips().filter((b) => b.textContent === label)[0];
   const chipTexts = () => chips().map((b) => b.textContent);
@@ -5451,23 +5451,23 @@ test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 / �
   dbl(rubyOf("行"));
   await sleep(50);
   // 行：手写表的动词读法在前，后面接常用漢字表的音读 / 训读（用户要求"候选别太少"）
-  assert.deepStrictEqual(chipTexts().slice(0, 2), ["いく", "ゆく"], "行 的候选（手写表在前）：" + JSON.stringify(chipTexts()));
-  mdown(chip("ゆく"));
+  assert.deepStrictEqual(chipTexts().slice(0, 2), ["い(く)", "ゆ(く)"], "行 的候选（手写表在前）：" + JSON.stringify(chipTexts()));
+  mdown(chip("ゆ(く)"));
   await sleep(500);
   assert.strictEqual(read()[1][1], "ゆ", "行 = ゆ：" + p.innerHTML);
 
   // 抱：だく / いだく / かかえる / だっこ（后面是单字表的读音）
   dbl(rubyOf("抱"));
   await sleep(50);
-  assert.deepStrictEqual(chipTexts().slice(0, 4), ["だく", "いだく", "かかえる", "だっこ"], "抱 的候选：" + JSON.stringify(chipTexts()));
-  mdown(chip("だく"));
+  assert.deepStrictEqual(chipTexts().slice(0, 4), ["だ(く)", "いだ(く)", "かか(える)", "だっ(こ)"], "抱 的候选：" + JSON.stringify(chipTexts()));
+  mdown(chip("だ(く)"));
   await sleep(500);
   assert.strictEqual(read()[2][1], "だ", "抱 = だ：" + p.innerHTML);
 
   // 解：とく / ほどく
   dbl(rubyOf("解"));
   await sleep(50);
-  mdown(chip("ほどく"));
+  mdown(chip("ほど(く)"));
   await sleep(500);
   assert.strictEqual(read()[3][1], "ほど", "解 = ほど：" + p.innerHTML);
 
@@ -5547,7 +5547,7 @@ test("候选按后面的语法过滤：良い 才给 い，良かった / 皆さ
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const rubies = () => Array.from(p.querySelectorAll(".wk-ruby"));
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
   assert.deepStrictEqual(
@@ -5598,7 +5598,7 @@ test("单字多读法：歌 うた/か、詩 し/うた、花 はな/か 也能�
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const rubies = () => Array.from(p.querySelectorAll(".wk-ruby"));
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
@@ -5640,7 +5640,7 @@ test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const rubies = () => Array.from(p.querySelectorAll(".wk-ruby"));
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant"));
@@ -5672,8 +5672,8 @@ test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、
   // 寂しい：さびしい / さみしい
   dbl(rubies()[3]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["さびしい", "さみしい"], "寂しい 的候选：" + JSON.stringify(chips().map((b) => b.textContent)));
-  mdown(chips().filter((b) => b.textContent === "さみしい")[0]);
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["さび(しい)", "さみ(しい)"], "寂しい 的候选：" + JSON.stringify(chips().map((b) => b.textContent)));
+  mdown(chips().filter((b) => b.textContent === "さみ(しい)")[0]);
   await sleep(400);
   assert.strictEqual(rubies()[3].querySelector(".wk-rt").textContent, "さみ", "寂しい = さみしい：" + p.innerHTML);
 
@@ -5698,7 +5698,7 @@ test("数字也有候选：4 よん/し、7 なな/しち、四 し/よん、七
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const rubies = () => Array.from(p.querySelectorAll("ruby.wk-ruby"));
+  const rubies = () => Array.from(p.querySelectorAll(".wk-ruby"));
   const byWord = (w) => rubies().filter((r) => (r.childNodes[0].nodeValue || "").trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const mdown = (el) => el.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
@@ -5846,7 +5846,7 @@ test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不�
 
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs(ps[0]), [["泥水", "でいすい"], ["夜", "よる"]], "命中的行用网站读音：" + ps[0].innerHTML);
   assert.deepStrictEqual(pairs(ps[1]), [["知", "し"], ["街", "まち"]], "对不上的行回退词典：" + ps[1].innerHTML);
 });
@@ -5891,7 +5891,7 @@ test("外部网站读音：没有缓存时按歌名 / 歌手联网取（请求�
   await sleep(900);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [["泡沫", "うたかた"], ["夢", "ゆめ"]], "网站读音要覆盖词典：" + p.innerHTML);
   assert.ok(requested.some((u) => u.indexOf("title=Net%20Song") >= 0), "要按歌名搜：" + JSON.stringify(requested));
   assert.ok(requested.some((u) => u.indexOf("/lyric/net/") >= 0), "要取命中的歌词页：" + JSON.stringify(requested));
@@ -5940,7 +5940,7 @@ test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら",
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const rubies = p.querySelectorAll("ruby.wk-ruby");
+  const rubies = p.querySelectorAll(".wk-ruby");
   const first = rubies[2];
   assert.strictEqual(first.childNodes[0].nodeValue, "辛");
   first.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
@@ -5960,7 +5960,7 @@ test("合并相邻两个注音成一个词：辛 + 辛 → 辛辛 からがら",
   const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config"));
   assert.deepStrictEqual(saved.furiganaLineSpans, { 誰だって魂辛辛: [[5, "辛辛", "からがら"]] }, "按位置存整段：" + JSON.stringify(saved.furiganaLineSpans));
 
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -6018,7 +6018,7 @@ test("RNP：一行三层时语种按原文判，不按翻译（今夜、不该�
   await env.runLoad();
   await sleep(500);
   const orig = env.document.querySelector(".rnp-lyrics-line-original");
-  const pairs = Array.from(orig.querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(orig.querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -6044,12 +6044,12 @@ test("就地编辑器：清空 = 恢复默认读音，输入 - 才留空", async
   await sleep(400);
 
   const pairs = () =>
-    Array.from(env.document.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    Array.from(env.document.querySelectorAll(".wk-ruby")).map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ]);
   const openAndSave = async (value) => {
-    const ruby = env.document.querySelector("ruby.wk-ruby");
+    const ruby = env.document.querySelector(".wk-ruby");
     ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
     await sleep(40);
     const box = env.document.querySelector("input.wk-edit");
@@ -6092,7 +6092,7 @@ test("留空之后还能点回来：留空的那一段包一层壳，双击就�
   await sleep(400);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const firstRuby = p.querySelector("ruby.wk-ruby");
+  const firstRuby = p.querySelector(".wk-ruby");
   firstRuby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   await sleep(50);
   let box = env.document.querySelector("input.wk-edit");
@@ -6113,7 +6113,7 @@ test("留空之后还能点回来：留空的那一段包一层壳，双击就�
   box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   await sleep(450);
 
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
     r.childNodes[0].nodeValue,
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -6144,7 +6144,7 @@ test("就地改读音 / 留空：行文本按原文那层算（RNP 里带罗马�
 
   const p = env.document.querySelector(".rnp-lyrics-line-original");
   const find = (word) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === word)[0] || null;
+    Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === word)[0] || null;
   const one = find("1");
   assert.ok(one, "要先注上 1：" + p.innerHTML);
   one.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
@@ -6189,14 +6189,14 @@ test("西文注音单独开关：关掉之后只注汉字，打开又回来", as
   await off.runLoad();
   await sleep(500);
   const offP = off.document.querySelector("ul.lyric li p");
-  assert.strictEqual(offP.querySelectorAll("ruby.wk-ruby").length, 0, "关掉之后西文不注：" + offP.innerHTML);
+  assert.strictEqual(offP.querySelectorAll(".wk-ruby").length, 0, "关掉之后西文不注：" + offP.innerHTML);
 
   const on = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
   on.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ きらめく: "キラメク", と: "ト" }));
   await on.runLoad();
   await sleep(600);
   const onP = on.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(onP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  const pairs = Array.from(onP.querySelectorAll(".wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.deepStrictEqual(pairs, ["light", "clover"], "默认要注西文：" + onP.innerHTML);
 });
 
@@ -6215,7 +6215,7 @@ test("整行只有一个全大写词（MWAH!）也要注音", async () => {
   const p = env.document.querySelector("ul.lyric li p");
   const rt = p.querySelector("ruby.wk-ruby .wk-rt");
   assert.ok(rt, "MWAH 要有注音：" + p.innerHTML);
-  assert.strictEqual(p.querySelector("ruby.wk-ruby").childNodes[0].nodeValue, "MWAH", "底字是 MWAH");
+  assert.strictEqual(p.querySelector(".wk-ruby").childNodes[0].nodeValue, "MWAH", "底字是 MWAH");
   // 翻译行不许注
   assert.strictEqual(env.document.querySelectorAll("ul.lyric li p")[1].querySelectorAll("ruby").length, 0, "翻译行不许注");
 });
@@ -6237,7 +6237,7 @@ test("就地编辑器：合并、斜杠切词、取消合并", async () => {
 
   const p = env.document.querySelector("ul.lyric li p");
   const read = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const click = (label) =>
     Array.from(env.document.querySelectorAll(".wk-edit-box button"))
@@ -6252,7 +6252,7 @@ test("就地编辑器：合并、斜杠切词、取消合并", async () => {
   assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "初始：" + p.innerHTML);
 
   // 合并
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  dbl(p.querySelectorAll(".wk-ruby")[0]);
   await sleep(40);
   click("→");
   await sleep(20);
@@ -6261,21 +6261,21 @@ test("就地编辑器：合并、斜杠切词、取消合并", async () => {
   assert.deepStrictEqual(read(), [["嘲笑", "あざわら"]], "合并之后：" + p.innerHTML);
 
   // 斜杠切词
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  dbl(p.querySelectorAll(".wk-ruby")[0]);
   await sleep(40);
   type("あざ/わら");
   await sleep(400);
   assert.deepStrictEqual(read(), [["嘲", "あざ"], ["笑", "わら"]], "斜杠切开：" + p.innerHTML);
 
   // 空段 = 并入前一个字
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  dbl(p.querySelectorAll(".wk-ruby")[0]);
   await sleep(40);
   type("あざ/");
   await sleep(400);
   assert.deepStrictEqual(read(), [["嘲笑", "あざ"]], "空段并入前一个字：" + p.innerHTML);
 
   // 减号 = 那个字留空
-  dbl(p.querySelectorAll("ruby.wk-ruby")[0]);
+  dbl(p.querySelectorAll(".wk-ruby")[0]);
   await sleep(40);
   type("-/わら");
   await sleep(400);
@@ -6309,14 +6309,14 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
   await sleep(400);
 
   const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
-  const got = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(
     got,
     [["燃", "も"], ["上", "あ"], ["体温", "たいおん"]],
     "读音要按整行分词，不许按单字：" + JSON.stringify(got) + " / " + root.innerHTML
   );
   // ruby 的底字里也不许带着那个空格（否则 rt 会往右偏、那一格还会被撑宽）
-  Array.from(root.querySelectorAll("ruby.wk-ruby")).forEach((r) => {
+  Array.from(root.querySelectorAll(".wk-ruby")).forEach((r) => {
     assert.strictEqual(
       /[\s\u3000]/.test(r.childNodes[0].nodeValue || ""),
       false,
@@ -6360,7 +6360,7 @@ test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟
     .map((w) => w.textContent.trim());
   assert.deepStrictEqual(hidden, ["(", "セ", "カ", "イ", ")"], "括号那几个字都要藏起来：" + lines[0].innerHTML);
 
-  const pairs = Array.from(lines[1].querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(lines[1].querySelectorAll(".wk-ruby")).map((r) => [
     (r.childNodes[0].nodeValue || "").trim(),
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -6395,7 +6395,7 @@ test("逐字歌词（RNP karaoke）：一个词跨好几个字时，整段读音
   await sleep(700);
 
   const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
-  const pairs = Array.from(root.querySelectorAll("ruby.wk-ruby")).map((r) => [
+  const pairs = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [
     (r.childNodes[0].nodeValue || "").trim(),
     r.querySelector(".wk-rt").textContent,
   ]);
@@ -6442,7 +6442,7 @@ test("外部网站的读音压过括号读音（MY HEART(マイココロ) → �
   await sleep(1800);
 
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const heart = pairs.filter((x) => x[0] === "HEART")[0];
   assert.deepStrictEqual(heart, ["HEART", "こころ"], "网站标的读音要压过括号读音：" + p.innerHTML);
   /*
@@ -6495,7 +6495,7 @@ test("网站把括号读音那一段整段重新切一遍时，括号读音不�
    * 所以这里轮询到稳定为止，最多等 4 秒。
    */
   const readPairs = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ]);
@@ -6545,7 +6545,7 @@ test("网站只标了词尾、读音也对得上时，别把整词弄丢（100�
 
   const p = env.document.querySelector("ul.lyric li p");
   const readPairs = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
       r.childNodes[0].nodeValue,
       r.querySelector(".wk-rt").textContent,
     ]);
@@ -6593,7 +6593,7 @@ test("逐字歌词（RNP karaoke）：slide 动画的替身节点跟着一起注
   const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
   const words = Array.from(root.querySelectorAll(".rnp-karaoke-word"));
   const rubies = (el) =>
-    Array.from(el.querySelectorAll("ruby.wk-ruby")).map((r) => [
+    Array.from(el.querySelectorAll(".wk-ruby")).map((r) => [
       (r.childNodes[0].nodeValue || "").trim(),
       r.querySelector(".wk-rt").textContent,
     ]);
@@ -6628,7 +6628,7 @@ test("西文词也能就地改读音（MY → エムワイ），留空 / 改回�
 
   const p = env.document.querySelector("ul.lyric li p");
   const read = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const type = (v) => {
     const box = env.document.querySelector("input.wk-edit");
@@ -6636,7 +6636,7 @@ test("西文词也能就地改读音（MY → エムワイ），留空 / 改回�
     box.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   };
   const myRuby = () =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "MY")[0];
+    Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "MY")[0];
 
   assert.strictEqual(myRuby().querySelector(".wk-rt").textContent, "マイ", "初始是词典读音：" + p.innerHTML);
 
@@ -6653,7 +6653,7 @@ test("西文词也能就地改读音（MY → エムワイ），留空 / 改回�
   await sleep(40);
   type("-");
   await sleep(400);
-  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "留空之后不该有注音：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-ruby").length, 0, "留空之后不该有注音：" + p.innerHTML);
   const blank = p.querySelector(".wk-blank");
   assert.ok(blank, "留空处要能点回来：" + p.innerHTML);
 
@@ -6682,7 +6682,7 @@ test("音译兜底：读不出的汉字用页面上的音译行补读音（不�
   await sleep(400);
 
   const orig = env.document.querySelector(".rnp-lyrics-line-original");
-  const got = Array.from(orig.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const got = Array.from(orig.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(got, [["霽", "は"], ["待", "ま"], ["君", "きみ"]], "音译行要能补出 霽 は：" + JSON.stringify(got) + " / " + orig.innerHTML);
 });
 
@@ -6707,7 +6707,7 @@ test("日语歌里夹的西文单独一个开关：关掉只影响日语歌", as
   await jp.runLoad();
   await sleep(1200);
   const jpP = jp.document.querySelector("ul.lyric li p");
-  const jpBases = Array.from(jpP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  const jpBases = Array.from(jpP.querySelectorAll(".wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.ok(
     jpBases.every((b) => !/[A-Za-z]/.test(b)),
     "日语歌里的英文不该标：" + JSON.stringify(jpBases) + " / " + jpP.innerHTML
@@ -6719,7 +6719,7 @@ test("日语歌里夹的西文单独一个开关：关掉只影响日语歌", as
   await en.runLoad();
   await sleep(1600);
   const enP = en.document.querySelector("ul.lyric li p");
-  const enBases = Array.from(enP.querySelectorAll("ruby.wk-ruby")).map((r) => r.childNodes[0].nodeValue);
+  const enBases = Array.from(enP.querySelectorAll(".wk-ruby")).map((r) => r.childNodes[0].nodeValue);
   assert.ok(enBases.length > 0, "非日语歌的西文照旧注：" + enP.innerHTML);
 });
 
@@ -6857,7 +6857,7 @@ test("外部网站：读音一样、只是切得更细的一方胜（网站 `太
   await env.runLoad();
   await sleep(700);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [["太", "たい"], ["陽", "よう"]], "细的那一方胜：" + p.innerHTML);
 });
 
@@ -6976,7 +6976,7 @@ test("外部网站：片假名注音也要收（`午前一時 = エーエムワ�
   await sleep(700);
   const lines = env.document.querySelectorAll("ul.lyric li p");
   const p = lines[1];
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [["午前一時", "エーエムワンオクロック"], ["瞼", "まぶた"]], "片假名照原样：" + p.innerHTML);
 });
 
@@ -7035,7 +7035,7 @@ test("括号里作者标的读音不许被网站覆盖（限界超え（みの�
   await env.runLoad();
   await sleep(700);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs, [["Jump", "ジャンプ"], ["限界超え", "みのり"]], "括号读音要压过网站：" + p.innerHTML);
   assert.strictEqual(p.querySelectorAll(".wk-hide").length, 1, "括号那段要藏起来：" + p.innerHTML);
 });
@@ -7102,7 +7102,7 @@ test("括号读音的底字太宽、网站有更窄的同读法时用网站的�
   await env.runLoad();
   await sleep(700);
   const p = env.document.querySelector("ul.lyric li p");
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   const stardom = pairs.filter((x) => x[1] === "スターダム")[0];
   assert.deepStrictEqual(stardom, ["天", "スターダム"], "底字收到 天（网站更窄）：" + p.innerHTML);
   assert.ok(
@@ -7121,7 +7121,7 @@ test("永遠 有 とわ 候选（歌词里常按 とわ 唱）", async () => {
   await env.runLoad();
   await sleep(500);
   const p = env.document.querySelector("ul.lyric li p");
-  const ruby = Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "永遠")[0];
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "永遠")[0];
   assert.ok(ruby, "永远 要注上音：" + p.innerHTML);
   ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   await sleep(50);
@@ -7130,7 +7130,7 @@ test("永遠 有 とわ 候选（歌词里常按 とわ 唱）", async () => {
   const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "とわ")[0];
   chip.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
   await sleep(400);
-  const after = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const after = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(after[0], ["永遠", "とわ"], "点 とわ 要生效：" + p.innerHTML);
 });
 
@@ -7146,7 +7146,7 @@ test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
   const p = env.document.querySelector("ul.lyric li p");
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
-  const rubyOf = (w) => Array.from(p.querySelectorAll("ruby.wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === w)[0];
+  const rubyOf = (w) => Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === w)[0];
 
   assert.ok(rubyOf("時代"), "時代 要注上音：" + p.innerHTML);
   dbl(rubyOf("時代"));
@@ -7156,7 +7156,7 @@ test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
     new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true })
   );
   await sleep(400);
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs.filter((x) => x[0] === "時代")[0], ["時代", "とき"], "時代 = とき：" + p.innerHTML);
 
   dbl(rubyOf("彷徨"));
@@ -7174,15 +7174,15 @@ test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => 
   await env.runLoad();
   await sleep(500);
   const p = env.document.querySelector("ul.lyric li p");
-  const ruby = p.querySelector("ruby.wk-ruby");
+  const ruby = p.querySelector(".wk-ruby");
   assert.ok(ruby, "征 要注上音：" + p.innerHTML);
   ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   await sleep(50);
-  const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "ゆく")[0];
+  const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter((b) => b.textContent === "ゆ(く)")[0];
   assert.ok(chip, "候选里要有 ゆく：" + JSON.stringify(Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent)));
   chip.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
   await sleep(400);
-  const pairs = Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs[0], ["征", "ゆ"], "征 = ゆ（不是 ゆく）：" + p.innerHTML);
 });
 
@@ -7216,7 +7216,7 @@ test("外部网站：只用 Uta-net 时，用罗马音反推的读音覆盖词�
   await sleep(1800);
   const ps = env.document.querySelectorAll("ul.lyric li p");
   const pairs = (p) =>
-    Array.from(p.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+    Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs(ps[0]), [["泡沫", "うたかた"], ["夢", "ゆめ"]], "Uta-net 罗马音要覆盖词典：" + ps[0].innerHTML);
   assert.deepStrictEqual(pairs(ps[1]), [["知", "し"], ["街", "まち"]], "第二行同理：" + ps[1].innerHTML);
 });
@@ -7298,7 +7298,7 @@ test("本地歌词：抓到的 JSON 写进缓存目录，下次播放直接读�
   await env2.runLoad();
   await sleep(1200);
   const p2 = env2.document.querySelector("ul.lyric li p");
-  const pairs2 = Array.from(p2.querySelectorAll("ruby.wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  const pairs2 = Array.from(p2.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
   assert.deepStrictEqual(pairs2, [["泥水", "でいすい"], ["夜", "よる"]], "从文件读出来的读音：" + p2.innerHTML);
   assert.strictEqual(fetched2, 0, "缓存命中不许联网");
 });
@@ -7338,18 +7338,18 @@ test("RNP 歌词页：右下角竖排按钮组上方有个「ふりがな」开�
 
   // 点一下 → 关掉整个插件的注音，读音从行里撤掉
   const p = doc.querySelector("ul.lyric li p");
-  assert.ok(p.querySelectorAll("ruby.wk-ruby").length > 0, "先得有注音：" + p.innerHTML);
+  assert.ok(p.querySelectorAll(".wk-ruby").length > 0, "先得有注音：" + p.innerHTML);
   btn.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(env.api.config.enabled, false, "点击要关掉整个插件（config.enabled），不是只关振假名");
   assert.ok(!/(^|\s)active(\s|$)/.test(btn.className), "关掉后不该是 active：" + btn.className);
-  assert.strictEqual(p.querySelectorAll("ruby.wk-ruby").length, 0, "关掉后读音要撤掉：" + p.innerHTML);
+  assert.strictEqual(p.querySelectorAll(".wk-ruby").length, 0, "关掉后读音要撤掉：" + p.innerHTML);
 
   // 再点一下 → 打开
   btn.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(env.api.config.enabled, true, "再点一次打开");
-  assert.ok(p.querySelectorAll("ruby.wk-ruby").length > 0, "打开后读音要回来：" + p.innerHTML);
+  assert.ok(p.querySelectorAll(".wk-ruby").length > 0, "打开后读音要回来：" + p.innerHTML);
 });
 
 test("RNP 播放页设置：在「歌词」后面加一栏「注音」，开关能改配置", async () => {
@@ -7408,7 +7408,7 @@ test("RNP 歌词页：双击注音只开编辑器，不把「跳到这句」传�
   await env.runLoad();
   await sleep(400);
   const doc = env.document;
-  const ruby = doc.querySelector("ruby.wk-ruby");
+  const ruby = doc.querySelector(".wk-ruby");
   // 宿主（RNP / 网易云）在 window / document 捕获阶段监听「跳到这句」
   let seeks = 0;
   env.window.addEventListener("dblclick", () => seeks++, true);
@@ -7430,7 +7430,7 @@ test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假�
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
-  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const byWord = (w) => Array.from(p.querySelectorAll('.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('12'));
@@ -7457,7 +7457,7 @@ test("单字候选：补上常用漢字表里的所有音读 / 训读（标「�
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
-  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const byWord = (w) => Array.from(p.querySelectorAll('.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('間'));
@@ -7490,7 +7490,7 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
-  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const byWord = (w) => Array.from(p.querySelectorAll('.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('手'));
@@ -7512,7 +7512,7 @@ test("日期词：一日 给 いちにち / ついたち，二日~十日 也给�
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
-  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const byWord = (w) => Array.from(p.querySelectorAll('.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('一日'));
@@ -7536,7 +7536,7 @@ test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async (
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
-  const byWord = (w) => Array.from(p.querySelectorAll('ruby.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
+  const byWord = (w) => Array.from(p.querySelectorAll('.wk-ruby')).filter((r) => (r.childNodes[0].nodeValue || '').trim() === w)[0];
   const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('共'));
@@ -7551,3 +7551,26 @@ test("共鳴らせ：共 给 きょう / とも，鳴 给 めい / な", async (
   assert.ok(chips().indexOf('な') >= 0, '鳴 的训读 な：' + chips().join('/'));
 });
 
+
+test("何時 / 何処 双击只有一种读法，不弹别的候选", async () => {
+  /*
+   * 用户要求：何時 = いつ、何処 = どこ，歌词里没有别的读法，双击时别给
+   * なんじ / いずこ 那一排。
+   */
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>何時も何処かで</p></li></ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 何時: "イツ", 何処: "ドコ", も: "モ", か: "カ", で: "デ" }));
+  await env.runLoad();
+  await sleep(400);
+  const p = env.document.querySelector("ul.lyric li p");
+  const byWord = (w) => Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "").trim() === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const chips = () => Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+
+  dbl(byWord("何時"));
+  await sleep(60);
+  assert.deepStrictEqual(chips(), [], "何時 不该有别的候选：" + chips().join("/"));
+  dbl(byWord("何処"));
+  await sleep(60);
+  assert.deepStrictEqual(chips(), [], "何処 不该有别的候选：" + chips().join("/"));
+});

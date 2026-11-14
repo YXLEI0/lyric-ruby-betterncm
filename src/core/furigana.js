@@ -1495,6 +1495,7 @@
     var d = deps();
     if (!d.tokenizer || !d.core) return [];
     var surface = w;
+    var tok = null;
     try {
       var toks = d.tokenizer.tokenize(s);
       var pos = 0;
@@ -1502,6 +1503,7 @@
         var sf = String(toks[i].surface_form || "");
         if (pos === at && sf.indexOf(w) === 0) {
           surface = sf;
+          tok = toks[i];
           break;
         }
         pos += sf.length;
@@ -1509,6 +1511,19 @@
       }
     } catch (eTok) {
       surface = w;
+    }
+    /*
+     * 动词 / 形容词按**原形**取读音：`食べた` 的候选要是 `た(べる)`，
+     * 不是 `た(べた)` —— 原形才是这个词真正的读法，词形只是这一句的活用。
+     * kuromoji 的 basic_form 就是原形；只有词形真变了、且剩下的送假名全是假名时才换。
+     */
+    if (tok && tok.basic_form) {
+      var bf = String(tok.basic_form);
+      var posName = String(tok.pos || "");
+      if (bf && bf !== "*" && bf !== surface && /^(動詞|形容詞)/.test(posName)) {
+        var bfTail = bf.slice(w.length);
+        if (bfTail && /^[\u3041-\u3096\u30FC]+$/.test(bfTail)) surface = bf;
+      }
     }
     var tail = surface.slice(w.length);
     // 词后面跟的是汉字（今日中 的 中）就不是送假名，退回按底字本身查

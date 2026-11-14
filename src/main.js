@@ -2362,6 +2362,9 @@
     "今朝": ["けさ", "こんちょう"],
     "大人": ["おとな", "たいじん"],
     "何": ["なに", "なん"],
+    // 何時 / 何処：歌词里就一种读法，双击时别弹一排 なんじ / いずこ 出来
+    "何時": [{ kana: "いつ" }],
+    "何処": [{ kana: "どこ" }],
     "良": [{ kana: "よ" }, { kana: "い", after: /^い/ }],
     "皆": [{ kana: "みな" }, { kana: "みんな", notAfter: /^(さん|様|さま)/ }],
     "歌": ["うた", "か"],
@@ -2490,6 +2493,22 @@
     return s.replace(/[\u3041-\u3096]/g, function (c) {
       return String.fromCharCode(c.charCodeAt(0) + 0x60);
     });
+  }
+
+  /**
+   * 候选按钮上显示什么：`{kana:"か", label:"かなでる"}` → `か(なでる)`。
+   *
+   * 括号里是送假名。注音的底字只占读音的前半截（`奏` かな），后面那截属于词形
+   * （奏でる / 奏でた），摊开写成整词，才看得出点下去会读成什么。
+   * 读音整个落在底字上（`そう`、`みょうにち`）就照原样显示。
+   */
+  function chipText(kana, label) {
+    var k = String(kana == null ? "" : kana);
+    var l = String(label == null ? k : label);
+    if (!k || l.length <= k.length || l.indexOf(k) !== 0) return kanaByConfig(l);
+    var tail = l.slice(k.length);
+    if (!/^[\u3041-\u3096\u30FC]+$/.test(tail)) return kanaByConfig(l);
+    return kanaByConfig(k) + "(" + kanaByConfig(tail) + ")";
   }
 
   /**
@@ -2803,8 +2822,8 @@
           vb.type = "button";
           vb.className = "wk-edit-variant";
           vb.setAttribute("data-kana", reading);
-          vb.textContent = kanaByConfig(label);
-          vb.title = "切到「" + kanaByConfig(label) + "」";
+          vb.textContent = chipText(reading, label);
+          vb.title = "切到「" + chipText(reading, label) + "」";
           vb.style.fontSize = "12px";
           vb.style.padding = "1px 6px";
           vb.addEventListener("mousedown", function (ev) {
