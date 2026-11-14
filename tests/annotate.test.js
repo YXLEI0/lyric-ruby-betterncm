@@ -699,6 +699,24 @@ test("逐字词格：逐字层改回 block（和普通行一样按基线排、�
  * 结构照 RNP 真机来：时长 / 起始推迟写在格子里那个 span 上，
  * 不在词格 div 上（写到 div 上等于没写，真机上高亮照旧只跑头一格）。
  */
+/*
+ * 整组扫光靠我们自己的 CSS 动画（`@keyframes wk-sweep`）：
+ *   - 时长是整组时长、用负 delay 跳进度；
+ *   - 不在当前行时必须撤掉动画（animation: none !important），
+ *     否则唱完那一行之后遮罩会一直停在"已唱完"，下一轮歌词全亮着。
+ */
+test("跨格的词：样式表里有 wk-sweep 关键帧，非当前行撤掉动画", () => {
+  const ctx = newCtx();
+  ctx.WKAnnotate.applyStyles(ctx.document, {});
+  const css = ctx.document.getElementById("lyric-ruby-style").textContent;
+  assert.match(css, /@keyframes wk-sweep \{[^@]*?-webkit-mask-position-x:\s*100%/, "要有 wk-sweep 关键帧：" + css.slice(0, 200));
+  assert.match(
+    css,
+    /body\.rnp-karaoke-animation-slide[^{]*:not\(\[offset="0"\]\)[^{]*\.rnp-karaoke-word-filler \{[^}]*animation:\s*none !important/,
+    "不在当前行要撤掉动画"
+  );
+});
+
 test("跨格的词：逐字时长 = 整组的时间跨度（写在格内 span 和它的替身上）", () => {
   /*
    * 每一格：起点 r、时长 n。结构照 RNP 真机来 —— w(t)（时长 / 推迟）在**词格 div** 上，
@@ -794,10 +812,10 @@ test("跨格的词：行开始时（offset 变化后的下一轮）重新累加�
 
 /*
  * 已经在跑的 transition 改不了时长（CSS Transitions 规定 transition-* 的改动
- * 不影响运行中的过渡），所以把时长换成整组之后要把那一下扫光重启：
- * 遮罩位置钉回 100%（未唱）再撤掉，让它按整组时长重跑一遍。
+ * 不影响运行中的过渡），所以整组扫光改用**我们自己的 CSS 动画**：动画盖得住
+ * 内联样式和 transition，还能用负 delay 跳到任意进度。
  */
-test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再撤掉）", () => {
+test("跨格的词：整组扫光用 wk-sweep 动画，按已经过去的毫秒数跳进度", () => {
   const cell = (c, r, n) =>
     `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">` +
     `<span>${c}</span>` +
@@ -812,9 +830,13 @@ test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再�
   ann.pass();
   const words = ctx.document.querySelectorAll(".rnp-karaoke-word");
   const filler = words[0].querySelector(".rnp-karaoke-word-filler");
-  assert.match(filler.style.transitionDuration, /^400ms/, "按整组时长亮");
+  assert.strictEqual(filler.style.animationName, "wk-sweep", "要用我们的动画：" + filler.getAttribute("style"));
+  assert.strictEqual(filler.style.animationDuration, "400ms", "整组时长：" + filler.getAttribute("style"));
+  assert.strictEqual(filler.style.animationFillMode, "both", "跑完要停在已唱完的状态");
+  assert.strictEqual(filler.style.animationDelay, "0ms", "刚开始唱，从 0 起：" + filler.getAttribute("style"));
   assert.strictEqual(filler.__wkGrp, 400, "标记里记着整组时长（排障导出用）");
-  assert.strictEqual(filler.style.getPropertyValue("-webkit-mask-position-x"), "", "重启完内联位置要撤掉");
+  // 兜底的 transition 时长也一起写（动画被别的规则撤掉时还能用）
+  assert.match(filler.style.transitionDuration, /^400ms/, "兜底的 transition 时长：" + filler.getAttribute("style"));
 
   // RNP 重绘：把替身的时长写回它自己的那一格，再补一次
   filler.style.transitionDuration = "200ms, 160ms, 0.5s";
@@ -822,13 +844,6 @@ test("跨格的词：换时长之后重启扫光（遮罩位置钉回 100% 再�
   assert.match(filler.style.transitionDuration, /^400ms/, "补回整组时长：" + filler.getAttribute("style"));
 });
 
-/*
- * 括号读音那一格的时间也算进这个词里。
- *
- * 真机：`怒れる人(ラングラー)` —— 括号六个字没有读音、被藏起来，但它们是同一个词
- * 唱出来的（网站 / 作者标的读法）。以前分组到这里就断了，整组的时间只剩 怒れる人
- * 那四拍，高亮还没唱完括号就跳到下一个词了（用户报的「怒れる人 跳太快」）。
- */
 test("跨格的词：紧跟的括号读音那几格也算进同一组的时长", () => {
   const line = "怒れる人(ラングラー)を";
   let i = 0;

@@ -2873,11 +2873,35 @@ function buildRuby(base, gloss, provisional, source, flat) {
      * 记一圈，导出诊断时连"我们写了多少"一起带走 —— 不用现场盯着看。
      */
     var retimeRing = [];
-    var RETIME_KEEP = 16;
+    var RETIME_KEEP = 32;
 
+    /*
+     * 同一行每轮 pass 都会重算一次（读数一样），记账只留一条，重复次数记在 n 里 ——
+     * 不然一圈 16 条全被同一行占满，真正出毛病的那一行反而被挤掉了。
+     */
     function noteRetime(row) {
+      var last = retimeRing[retimeRing.length - 1];
+      if (last && last.line === row.line && last.total === row.total && last.cells === row.cells) {
+        last.n = (last.n || 1) + 1;
+        last.lastAt = row.at;
+        last.r0 = row.r0;
+        last.dN = row.dN;
+        last.cellS = row.cellS;
+        last.prev = row.prev;
+        last.offset = row.offset;
+        return;
+      }
+      row.n = 1;
       retimeRing.push(row);
       while (retimeRing.length > RETIME_KEEP) retimeRing.shift();
+    }
+
+    /** 往上找带 `offset` 属性的那一层（RNP 的 .rnp-lyrics-line），找不到就 null */
+    function offsetOf(el) {
+      for (var p = el, d = 0; p && p.nodeType === 1 && d < 8; p = p.parentNode, d++) {
+        if (p.getAttribute && p.getAttribute("offset") != null) return p.getAttribute("offset");
+      }
+      return null;
     }
 
     function retimeGroup(grp) {
@@ -2910,7 +2934,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       }
       noteRetime({
         at: clock(),
-        line: String(grp.line || "").slice(0, 40),
+        line: String(grp.line || "").slice(0, 60),
         cells: hosts.length,
         r0: r0,
         rN: rN,
@@ -2918,27 +2942,65 @@ function buildRuby(base, gloss, provisional, source, flat) {
         total: total,
         cellS: perCell,
         prev: filler.style.transitionDuration,
-        offset: first.parentNode && first.parentNode.parentNode ? first.parentNode.parentNode.getAttribute("offset") : null,
+        // 原始字符串：`1ms` 和 `0.001s` 读出来都是 1，要看清是谁写的
+        rawLast: String(tN.style.transitionDuration || "") + " / " + String(tN.style.transitionDelay || ""),
+        delay0: String(t0.style.transitionDelay || ""),
+        offset: offsetOf(first),
       });
-      retimeFiller(filler, total);
+      retimeFiller(filler, total, readMs(t0.style.transitionDuration));
     }
 
-    /** 把替身的扫光时长改成整组时长，并把已经开始的那一次重启（见上面的注释 3） */
-    function retimeFiller(el, total) {
+    /**
+     * 把替身的扫光改成"整组时长 + 跳到当前进度"。
+     *
+     * 为什么不用 transition 换时长（1.32.7 ~ 1.32.10 走的就是那条路，真机上句首的词
+     * 还是跳得飞快）：CSS 规定**已经在跑的 transition 改不了时长**，行一开始唱
+     * RNP 就用"头一格那点时间"把扫光起了个头，我们下一帧再改就是白改；靠"重启一次"
+     * 补，又依赖 pass 什么时候跑（一帧到几百毫秒都有），时序一歪就看着像跳。
+     *
+     * 换成 CSS 动画就不一样了：动画**盖得住**内联样式和 transition，
+     * 而且可以随时用负的 `animation-delay` **跳到任意进度** —— 于是每次 pass 都能写
+     * "按现在已经过去多少毫秒，从哪儿接着跑"，写多少次结果都一样（幂等），
+     * 不再依赖谁先谁后。
+     */
+    function sweepProgress(el) {
+      try {
+        var win = doc.defaultView;
+        if (!win || !win.getComputedStyle) return null;
+        var cs = win.getComputedStyle(el);
+        var v = cs.webkitMaskPositionX || cs.getPropertyValue("-webkit-mask-position-x");
+        var n = parseFloat(String(v || ""));
+        if (!isFinite(n)) return null;
+        return Math.max(0, Math.min(1, 1 - n / 100));
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function retimeFiller(el, total, ownMs) {
       var dur = total + "ms, " + Math.round(total * 0.8) + "ms, 0.5s";
-      if (el.style.transitionDuration === dur) return;
-      el.__wkGrp = total;
       /*
-       * 重启三步，顺序不能反：
-       *   1. 时长归零 + 遮罩位置钉到 100%（未唱）—— 时长归零它才瞬间到位
-       *   2. 读一次 offsetWidth 把样式刷下去（读到 0 也没关系，要的是这次刷新）
-       *   3. 先把时长换成整组，再撤掉内联位置 —— 这时才起新过渡
+       * 已经过去多少毫秒：看遮罩现在停在百分之几。
+       *   - 第一次（还没接上我们的动画）：遮罩是 RNP 那条 transition 在动，
+       *     它的时长是"头一格自己的时长"，所以用 ownMs 换算
+       *   - 之后：遮罩是我们的动画在动，用整组时长换算
+       * 换算出来的数就是"这一组已经唱了多少"，写进负 delay 就能接上，不会重头再来。
        */
-      el.style.transitionDuration = "0s";
-      el.style.setProperty("-webkit-mask-position-x", "100%");
-      if (el.offsetWidth !== undefined) el.offsetWidth; // 强制刷新样式
-      el.style.transitionDuration = dur;
-      el.style.removeProperty("-webkit-mask-position-x");
+      var prog = sweepProgress(el);
+      var span = el.__wkGrp === total && el.__wkSweep ? total : ownMs || total;
+      var elapsed = prog == null ? 0 : Math.round(prog * span);
+      if (elapsed > total) elapsed = total;
+      if (el.style.transitionDuration !== dur) el.style.transitionDuration = dur;
+      el.__wkGrp = total;
+      el.__wkSweep = 1;
+      // 先撤掉动画并刷一次样式，否则同名动画不会重新起（时长变了但 delay 不会更新）
+      el.style.animationName = "none";
+      if (el.offsetWidth !== undefined) el.offsetWidth;
+      el.style.animationName = "wk-sweep";
+      el.style.animationDuration = total + "ms";
+      el.style.animationTimingFunction = "linear";
+      el.style.animationFillMode = "both";
+      el.style.animationDelay = "-" + elapsed + "ms";
     }
 
     function retimeGroups(rec) {
@@ -3956,6 +4018,19 @@ function buildRuby(base, gloss, provisional, source, flat) {
       // 每一层 span 都写 0.4，嵌套相乘之后底字只剩 0.16，注音淡到看不见
       ".rnp-karaoke-word .wk-line {",
       "  opacity: 1 !important;",
+      "}",
+      /*
+       * 跨格词的"整组扫光"：RNP 自己那条 transition 改不了时长（行一开始唱就按头一格
+       * 的时长跑起来了），所以换成我们自己的动画 —— 动画盖得住内联样式和 transition，
+       * 还能用负 delay 跳到任意进度（见 retimeFiller）。
+       */
+      "@keyframes wk-sweep {",
+      "  from { -webkit-mask-position-x: 100%; }",
+      "  to { -webkit-mask-position-x: 0%; }",
+      "}",
+      // 不在当前行就别让动画占着遮罩位置：撤掉动画，RNP 的 100%（未唱）自然生效
+      "body.rnp-karaoke-animation-slide .rnp-lyrics-line:not([offset=\"0\"]) .rnp-karaoke-word-filler {",
+      "  animation: none !important;",
       "}",
       // 这几条是为了对抗 RefinedNowPlaying 之类的逐字歌词插件：它会给自己插的
       // 节点打 opacity，嵌套相乘会把注音压得几乎看不见，所以对注音强制不透明。
