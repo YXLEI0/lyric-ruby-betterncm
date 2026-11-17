@@ -7217,10 +7217,9 @@ test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
   assert.ok(chips().indexOf("さまよ") >= 0, "彷徨 候选要有 さまよ：" + JSON.stringify(chips()));
 });
 
-test("一時 的候选要按字组合补全：ひととき / いっとき 都要能点到", async () => {
+test("两个以上汉字的词：整词候选只留常用读音，别的读法交给逐字组合", async () => {
   /*
-   * 用户报「给一時增加更多候选」：分词只给 いちじ，手写表也没列，于是只能改成一个读音。
-   * 现在两个以上汉字的词会按每个字的音读 / 训读组合再生一批（含促音便 いっとき）。
+   * 用户要求：不是熟字训的词，整词候选只留常用读音，别的读法交给逐字表自己拼。
    */
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
@@ -7236,9 +7235,10 @@ test("一時 的候选要按字组合补全：ひととき / いっとき 都要
   ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
   await sleep(50);
   const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
-  assert.ok(chips.indexOf("いちじ") >= 0, "原来的读音还留着：" + JSON.stringify(chips));
-  assert.ok(chips.indexOf("ひととき") >= 0, "候选要有 ひととき：" + JSON.stringify(chips));
-  assert.ok(chips.indexOf("いっとき") >= 0, "候选要有促音便的 いっとき：" + JSON.stringify(chips));
+  // 只剩常用读音一条时干脆不出按钮（点了也是同一个读音），改法交给下面的逐字表
+  assert.ok(chips.length <= 1, "整词候选只留常用读音（至多一条）：" + JSON.stringify(chips));
+  assert.ok(chips.indexOf("ひととき") < 0 && chips.indexOf("いっとき") < 0, "不再堆按字拼出来的读法：" + JSON.stringify(chips));
+  assert.ok(env.document.querySelector(".wk-edit-box [data-wk-chars]"), "逐字组合表要在");
 });
 
 test("两个以上汉字的词：每个字的读音都摊开，点几下自由组合", async () => {

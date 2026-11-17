@@ -2742,12 +2742,11 @@
     function expandVariants(word, items) {
       var base = dedupe(withOnbin(word, withKanjiReadings(word, items)));
       /*
-       * 候选已经够多（3 条以上）就别再堆：按字组合出来的读法一定有一堆噪音
-       * （明日 已经有 あした / あす / みょうにち，再堆十几个只会挡住要点的那个）。
-       * 只有"只有一个读法、想改都没得改"的词（一時 这种）才补。
+       * 两个以上汉字的词：**只留词本身的常用读音**（手写表 / 分词 / 熟字训），
+       * 不再把"按字拼"出来的读法一股脑堆上来（一時 会给到十几条噪音）。
+       * 别的读法交给编辑器里的**逐字表**自己拼（`ひと` + `とき` → ひととき）。
        */
-      if (base.length >= 3) return base;
-      return dedupe(withPerCharReadings(word, base));
+      return base;
     }
 
     if (list && list.length) {
@@ -5735,12 +5734,16 @@
         if (cells.length) {
           var ov = overlapOf(cells);
           if (ov) row.overlap = ov;
-          if (el.getAttribute("offset") === "0") {
-            try {
-              row.html = String(el.innerHTML || "").slice(0, 4000);
-            } catch (eH) {
-              /* 拿不到就算了 */
-            }
+        }
+        /*
+         * 当前句的 DOM 原样带一小段回去（叠字、错位这类毛病光看 text 看不出是哪一层），
+         * 不限于逐字行 —— 普通行的 ruby 底字 / 读音就在这段 HTML 里。
+         */
+        if (el.getAttribute("offset") === "0" || el.getAttribute("offset") === "") {
+          try {
+            row.html = String(el.innerHTML || "").slice(0, 4000);
+          } catch (eH) {
+            /* 拿不到就算了 */
           }
         }
         dom.push(row);
