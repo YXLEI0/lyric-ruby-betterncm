@@ -2758,6 +2758,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       var word = hostEl.parentNode;
       if (!word || word.nodeType !== 1 || typeof word.className !== "string") return;
       if (!RE_KARAOKE_WORD.test(word.className)) return;
+      var want = segsText(segs);
       var kids = word.children || [];
       for (var i = 0; i < kids.length; i++) {
         var twin = kids[i];
@@ -2766,14 +2767,20 @@ function buildRuby(base, gloss, provisional, source, flat) {
         /*
          * 已经是我们的 wrap 了就登记一下，不要再套一层。
          * 换歌/重绘时 RNP 会重建替身，那时这里会走重新套的那条路。
+         *
+         * 但**内容**也要对一遍：React 复用的替身里可能还躺着上一次渲染的
+         * 那份 wrap（字形是旧句子的），只查结构就会一直沿用它的字 ——
+         * 真机现象就是"上一首 / 上一句的歌词叠在新句子上"（替身是亮的那一层，
+         * 叠出来最显眼）。对不上就当场重抄一遍。
          */
         if (
           twin.childNodes.length === 1 &&
           twin.firstChild &&
           twin.firstChild.nodeType === 1 &&
-          RE_WRAP_OWN.test(String(twin.firstChild.className || ""))
+          RE_WRAP_OWN.test(String(twin.firstChild.className || "")) &&
+          (want == null || visibleText(twin.firstChild) === want)
         ) {
-          rec.mirrors.push({ el: twin, wrap: twin.firstChild, orig: [] });
+          rec.mirrors.push({ el: twin, wrap: twin.firstChild, orig: [], text: want });
           continue;
         }
         var keep = [];
@@ -2787,8 +2794,15 @@ function buildRuby(base, gloss, provisional, source, flat) {
         var clone = buildWrapEl(segs, cls, keep, flat);
         clearKids(twin);
         twin.appendChild(clone);
-        rec.mirrors.push({ el: twin, wrap: clone, orig: keep });
+        rec.mirrors.push({ el: twin, wrap: clone, orig: keep, text: want });
       }
+    }
+
+    /** 一段分段拼起来的原文字符串（替身内容对不对，拿它比） */
+    function segsText(segs) {
+      var out = "";
+      for (var i = 0; i < (segs || []).length; i++) out += segs[i].text;
+      return out;
     }
 
     /**
@@ -3139,8 +3153,28 @@ function buildRuby(base, gloss, provisional, source, flat) {
           alive = false;
           break;
         }
+        /*
+         * 结构还在也不等于内容还是这一句的：替身是"亮起来"的那一层，
+         * 里面要是留着上一次渲染的字，屏幕上就是旧句子叠在新句子上。
+         * 所以按字数再对一遍，对不上就整套重抄（见 mirrorToFillers）。
+         */
+        if (
+          m.text != null &&
+          (!m.el ||
+            !m.el.isConnected ||
+            !m.wrap ||
+            m.wrap.parentNode !== m.el ||
+            visibleText(m.wrap) !== m.text)
+        ) {
+          alive = false;
+          break;
+        }
       }
       if (alive && rec.mirrors.length) return;
+      for (var d = 0; d < rec.mirrors.length; d++) {
+        var dead = rec.mirrors[d];
+        if (dead && dead.wrap && dead.wrap.parentNode === dead.el) dead.el.removeChild(dead.wrap);
+      }
       rec.mirrors = [];
       for (var h = 0; h < rec.hosts.length; h++) {
         var host = rec.hosts[h];

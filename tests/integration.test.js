@@ -401,6 +401,52 @@ test("大模型层：规则读歪的词，结果回来之后注音会被换上�
   assert.strictEqual(baseText(line), "きらめく kaleidoscope の light", "底字不许动");
 });
 
+/*
+ * 本地词典读不出来的汉字（表外字 / 人名用字）要问一句大模型 —— 这条兜底
+ * 以前只接在逐字行上，普通歌词行的 `莉` 永远空着（用户：「大模型兜底真接回去了吗」）。
+ */
+test("本地读不出来的汉字（莉）：普通歌词行也会问大模型，答案回来就注上", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>きらめくステージ</p></li>
+  <li class="line"><p><span>(</span><span>ツ</span><span>ン</span><span>デ</span><span>レ</span><span> </span><span>愛</span><span>莉</span><span>)</span></p></li>
+</ul></div></body></html>`;
+
+  const asked = [];
+  const env = bootPlugin(HTML, {
+    config: { llmEnabled: true, llmKey: "sk-test", llmEndpoint: "https://api.example.com/v1/chat/completions" },
+    fetch: function (url, init) {
+      if (!init || !init.body) return Promise.reject(new Error("offline (test)"));
+      const body = JSON.parse(init.body);
+      const items = JSON.parse(body.messages[0].content.slice(body.messages[0].content.indexOf("[")));
+      items.forEach((it) => asked.push({ w: it.w, kind: it.kind }));
+      const out = {};
+      items.forEach((it, i) => {
+        out[String(i + 1)] = it.w === "莉" ? "ひ" : "ダミー";
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify(out) } }] }),
+      });
+    },
+  });
+  env.window.WKFurigana.setTokenizer(
+    perCharTokenizer({ き: "キ", ら: "ラ", め: "メ", く: "ク", ス: "ス", テ: "テ", ー: "ー", ジ: "ジ", ツ: "ツ", ン: "ン", デ: "デ", レ: "レ", 愛: "アイ" })
+  );
+  await env.runLoad();
+  await sleep(1400);
+
+  const flat = asked.map((a) => a.w).join(",");
+  assert.ok(asked.some((a) => a.w === "莉"), "莉 应该进队列问一次：" + flat);
+  assert.ok(asked.every((a) => a.kind !== "han"), "日语的 莉 不该按中文多音字问：" + JSON.stringify(asked));
+
+  const p = env.document.querySelectorAll("ul.lyric li p")[1];
+  const bob = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "莉");
+  assert.strictEqual(bob.length, 1, "莉 应该注上读音：" + p.innerHTML);
+  assert.strictEqual(bob[0].querySelector(".wk-rt").textContent, "ひ", "读音要用模型给的：" + p.innerHTML);
+});
+
 test("大模型层没配 key 时：一切照旧走本地，不发任何请求", async () => {
   let called = 0;
   const env = bootPlugin(NCM_HTML, {
@@ -5482,10 +5528,10 @@ test("双击注音给多个读法的候选：明日 / 行 / 抱 / 解 / 何 / �
   await sleep(500);
   assert.strictEqual(read()[4][1], "なん", "何 = なん：" + p.innerHTML);
 
-  // 泥水：どろみず / でいすい
+  // 泥水：どろみず / でいすい（前两条；后面接按字组合出来的，见候选补全）
   dbl(rubyOf("泥水"));
   await sleep(50);
-  assert.deepStrictEqual(chipTexts(), ["どろみず", "でいすい"], "泥水 的候选");
+  assert.deepStrictEqual(chipTexts().slice(0, 2), ["どろみず", "でいすい"], "泥水 的候选");
   mdown(chip("でいすい"));
   await sleep(500);
   assert.strictEqual(read()[5][1], "でいすい", "泥水 = でいすい：" + p.innerHTML);
@@ -5656,10 +5702,10 @@ test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、
 
   dbl(rubies()[0]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["せお", "しょ", "せおい", "しょい"], "背負 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 4), ["せお", "しょ", "せおい", "しょい"], "背負 的候选");
   dbl(rubies()[1]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["びしょう", "ほほえみ"], "微笑 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["びしょう", "ほほえみ"], "微笑 的候选");
   mdown(chips().filter((b) => b.textContent === "ほほえみ")[0]);
   await sleep(400);
   assert.strictEqual(rubies()[1].querySelector(".wk-rt").textContent, "ほほえみ", "微笑 = ほほえみ：" + p.innerHTML);
@@ -5684,7 +5730,7 @@ test("背負 / 微笑 也有候选（背負 せお/しょ/せおい/しょい、
   // 道標：みちしるべ / どうひょう
   dbl(rubies()[4]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["みちしるべ", "どうひょう"], "道標 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["みちしるべ", "どうひょう"], "道標 的候选");
 });
 
 test("数字也有候选：4 よん/し、7 なな/しち、四 し/よん、七 しち/なな", async () => {
@@ -7171,6 +7217,30 @@ test("時代 有 とき、彷徨 有 さまよ 候选", async () => {
   assert.ok(chips().indexOf("さまよ") >= 0, "彷徨 候选要有 さまよ：" + JSON.stringify(chips()));
 });
 
+test("一時 的候选要按字组合补全：ひととき / いっとき 都要能点到", async () => {
+  /*
+   * 用户报「给一時增加更多候选」：分词只给 いちじ，手写表也没列，于是只能改成一个读音。
+   * 现在两个以上汉字的词会按每个字的音读 / 训读组合再生一批（含促音便 いっとき）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>一時の休息を</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 一時: "イチジ", の: "ノ", 休息: "キュウソク", を: "ヲ" }));
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "一時")[0];
+  assert.ok(ruby, "一時 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+  const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  assert.ok(chips.indexOf("いちじ") >= 0, "原来的读音还留着：" + JSON.stringify(chips));
+  assert.ok(chips.indexOf("ひととき") >= 0, "候选要有 ひととき：" + JSON.stringify(chips));
+  assert.ok(chips.indexOf("いっとき") >= 0, "候选要有促音便的 いっとき：" + JSON.stringify(chips));
+});
+
 test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
@@ -7524,7 +7594,8 @@ test("日期词：一日 给 いちにち / ついたち，二日~十日 也给�
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('一日'));
   await sleep(50);
-  assert.deepStrictEqual(chips(), ['いちにち', 'ついたち'], '一日 的候选：' + chips().join('/'));
+  // 前面两条要是这两个（后面还会接"按字组合"出来的读法，见候选补全）
+  assert.deepStrictEqual(chips().slice(0, 2), ['いちにち', 'ついたち'], '一日 的候选：' + chips().join('/'));
   // 点 ついたち 要立刻换过去
   const t = Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).filter((b) => b.textContent === 'ついたち')[0];
   t.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
@@ -7575,10 +7646,43 @@ test("何時 / 何処 双击给 なんじ / いずこ 这些读法", async () =>
 
   dbl(byWord("何時"));
   await sleep(60);
-  assert.deepStrictEqual(chips(), ["いつ", "なんじ"], "何時 的候选：" + chips().join("/"));
+  // 前两条是"常用的那两个"，后面接的是按字组合出来的（候选补全，见 v1.32.16）
+  assert.deepStrictEqual(chips().slice(0, 2), ["いつ", "なんじ"], "何時 的候选：" + chips().join("/"));
   dbl(byWord("何処"));
   await sleep(60);
-  assert.deepStrictEqual(chips(), ["どこ", "いずこ"], "何処 的候选：" + chips().join("/"));
+  assert.deepStrictEqual(chips().slice(0, 2), ["どこ", "いずこ"], "何処 的候选：" + chips().join("/"));
+});
+
+test("同一行里重复出现的括号读音，不许被当成人名标注（弄人(ろうにん) 牢人(ろうにん)）", async () => {
+  /*
+   * 真机：`空いた言葉で 弄人(ろうにん) 牢人(ろうにん)` 的括号原样露在屏幕上。
+   * 原因：一行里两个 ろうにん 挂在不同底字上，被"同一个括号内容挂过不同底字 =>
+   * 那是唱歌人的名字"这条判据误伤了。人名标注必须**跨行**才算。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>空いた言葉で 弄人(ろうにん) 牢人(ろうにん)</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 空: "ア", いた: "イタ", 言葉: "コトバ", で: "デ", 弄人: "ロウニン", 牢人: "ロウニン" })
+  );
+  await env.runLoad();
+  await sleep(600);
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [
+    (r.childNodes[0].nodeValue || "").trim(),
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    pairs.filter((x) => x[0] === "弄人" || x[0] === "牢人"),
+    [
+      ["弄人", "ろうにん"],
+      ["牢人", "ろうにん"],
+    ],
+    "两个括号都要并成读音：" + p.innerHTML
+  );
+  assert.strictEqual(p.querySelectorAll(".wk-hide").length, 2, "括号本身要藏起来：" + p.innerHTML);
 });
 
 test("逐字行里漏掉的汉字用本地词典兜底（哀 没读音 → 单字查）", async () => {

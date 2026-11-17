@@ -851,6 +851,38 @@ test("跨格的词：紧跟的括号读音那几格也算进同一组的时长",
  * "行一开始就唱"的词因此永远拿不到整组时长，扫光按头一格的时间刷一下就完
  * （真机：一切合切 跳太快）。这条守着它。
  */
+test("替身里留着旧句子的字：下一轮就地重抄（亮的那层不许叠旧字）", () => {
+  /*
+   * 真机现象「播放第二首歌的时候出现了第一首歌歌词的逐字动画」的一个成因：
+   * 替身（`.rnp-karaoke-word-filler`）是"亮起来"的那一层，框架复用它时只换
+   * 本体、不换我们插进去的 wrap —— 于是替身里躺着的还是上一次渲染的那句话。
+   * 只查"结构还在不在"是看不出来的，必须对一遍字。
+   */
+  const cell = (c) =>
+    `<div class="rnp-karaoke-word is-cjk" style="transition-duration: 100ms, 80ms; transition-delay: 0ms">` +
+    `<span>${c}</span>` +
+    `<span class="rnp-karaoke-word-filler" style="transition-duration: 100ms, 80ms, 0.5s">${c}</span></div>`;
+  const ctx = newCtx(`<!doctype html><html><body>
+<div class="rnp-lyrics"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${cell("体")}${cell("温")}</div></div></div>
+</body></html>`);
+  forceRubyLayout(ctx, true);
+  const annotator = makeAnnotator(ctx, {
+    annotator: { lineTokens: () => [{ start: 0, end: 2, kana: "たいおん" }] },
+  });
+  annotator.pass();
+
+  const line = ctx.document.querySelector(".rnp-lyrics-line-karaoke");
+  const filler = line.querySelector(".rnp-karaoke-word-filler");
+  assert.ok(filler.querySelector("span.wk-line"), "替身里应该已经抄了一份：" + filler.innerHTML);
+
+  // 模拟"替身被复用、里面还是上一句话"：字换了，结构还是我们的
+  filler.querySelector("span.wk-line").textContent = "旧句";
+  annotator.pass();
+
+  const now = filler.textContent;
+  assert.strictEqual(baseText(filler).replace(/\s+/g, ""), "体温", "替身要重抄成这一句的字：" + filler.innerHTML);
+});
+
 test("跨格的词：负的推迟（已经开唱）也要能读出整组时长", () => {
   const cell = (c, r, n) =>
     `<div class="rnp-karaoke-word is-cjk" style="transition-duration: ${n}ms, ${Math.round(n * 0.8)}ms; transition-delay: ${r}ms">` +

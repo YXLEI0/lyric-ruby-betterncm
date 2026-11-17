@@ -2663,6 +2663,82 @@
       }
       return items;
     }
+    /**
+     * 两个以上汉字组成的词：按**每个字的音读 / 训读组合**再生一批候选。
+     *
+     * 为什么需要：分词（IPADIC）只给这个词"最常见的那个读法"，手写表也只列几首歌里
+     * 常见的写法，于是 `一時` 只有 いちじ 一个按钮 —— 想换成 ひととき / いっとき
+     * （真机：用户报「给一時增加更多候选」）根本没有地方点。
+     *
+     * 组合会很多，所以每个字只取前两个音读 + 前两个训读，总数封顶 12 条；
+     * 另外补上**促音便**的组合（いち + とき → いっとき、いち + かい → いっかい）：
+     * 前一个字以 つ / ち / く / き 收尾、后一个字以清音开头时，日语里就这么变。
+     */
+    function withPerCharReadings(word, items) {
+      if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return items;
+      var chars = String(word == null ? "" : word).split("");
+      if (chars.length < 2 || chars.length > 4) return items;
+      var c;
+      for (c = 0; c < chars.length; c++) if (!/^[\u4E00-\u9FFF]$/.test(chars[c])) return items;
+      var VOICELESS = /^[かきくけこさしすせそたちつてとはひふへほ]/;
+      var pools = [];
+      for (c = 0; c < chars.length; c++) {
+        var on = WKKanjiReadings.onOf(chars[c]).slice(0, 2);
+        var kun = WKKanjiReadings.kunOf(chars[c]).slice(0, 2);
+        var pool = on.concat(kun);
+        // 有一处查不到就别拼了：拼出来的读音一定缺点什么，反而误导
+        if (!pool.length) return items;
+        pools.push(pool);
+      }
+      function have(kana) {
+        var h = hiraOnly(kana);
+        for (var q = 0; q < items.length; q++) if (hiraOnly(items[q].kana) === h) return true;
+        return false;
+      }
+      var combos = [[]];
+      for (c = 0; c < pools.length; c++) {
+        var next = [];
+        for (var a = 0; a < combos.length; a++) {
+          for (var b = 0; b < pools[c].length; b++) next.push(combos[a].concat([pools[c][b]]));
+        }
+        combos = next;
+        if (combos.length > 16) break;
+      }
+      var extra = [];
+      for (var k = 0; k < combos.length; k++) {
+        var parts = combos[k];
+        extra.push(parts.join(""));
+        /*
+         * 促音便：前一个字收 つ/ち/く/き、后一个字清音开头 → いっ + とき。
+         * 必须按"这一段自己的读音"换（不能用每个字的第一个读音去拼尾巴，
+         * 那样会拼出 いっひとじ 这种根本不存在的读法）。
+         */
+        for (var pc = 0; pc < parts.length - 1; pc++) {
+          var sok = sokuonForm(parts[pc]);
+          if (!sok || !VOICELESS.test(parts[pc + 1].charAt(0))) continue;
+          var v2 = parts.slice();
+          v2[pc] = sok;
+          extra.push(v2.join(""));
+        }
+      }
+      for (var e = 0; e < extra.length && items.length < 12; e++) {
+        if (!extra[e] || have(extra[e])) continue;
+        items.push({ kana: extra[e], label: extra[e] });
+      }
+      return items;
+    }
+
+    function expandVariants(word, items) {
+      var base = dedupe(withOnbin(word, withKanjiReadings(word, items)));
+      /*
+       * 候选已经够多（3 条以上）就别再堆：按字组合出来的读法一定有一堆噪音
+       * （明日 已经有 あした / あす / みょうにち，再堆十几个只会挡住要点的那个）。
+       * 只有"只有一个读法、想改都没得改"的词（一時 这种）才补。
+       */
+      if (base.length >= 3) return base;
+      return dedupe(withPerCharReadings(word, base));
+    }
+
     if (list && list.length) {
       for (i = 0; i < list.length; i++) {
         var v = list[i];
@@ -2677,7 +2753,7 @@
        * 两个按钮，かい / げ / さと / ほぐ / なだ 这些常用读法一个都点不到
        * （用户报"解的候选项太少了"）。按钮多一点比改不出来强。
        */
-      var merged = dedupe(withOnbin(word, withKanjiReadings(word, out)));
+      var merged = expandVariants(word, out);
       /*
        * 手写表里被"后面跟什么"这条规则否掉的读法，常用漢字表也不许再把它堆回来：
        * 皆さん 不给 みんな、良かった 不给 い（这两条都有测试守着）。
@@ -2700,7 +2776,8 @@
         merged = filtered;
       }
       // 按钮别无限长：手写表那几条一定在最前面，后面的按表序补到这里为止
-      if (merged.length > 10) merged = merged.slice(0, 10);
+      // （12 条 = 差不多两排：一時 这种"按字组合"的读法多，太窄就点不到）
+      if (merged.length > 12) merged = merged.slice(0, 12);
       return merged;
     }
     // 多位数（12 / 105）：整串读法 + 逐个数字读（日语 / 英文片假名）
@@ -2709,7 +2786,7 @@
       if (nums.length) return dedupe(nums);
     }
     if (typeof WKFurigana === "undefined" || !WKFurigana.variants) {
-      return dedupe(withOnbin(word, withKanjiReadings(word, out)));
+      return expandVariants(word, out);
     }
     var found = [];
     try {
@@ -2722,7 +2799,7 @@
       if (!f || !f.kana) continue;
       out.push({ kana: f.kana, label: f.label || f.kana });
     }
-    return dedupe(withOnbin(word, withKanjiReadings(word, out)));
+    return expandVariants(word, out);
   }
 
   /**
@@ -5058,10 +5135,17 @@
    *
    * 只补汉字：假名 / 标点 / 罗马音不动；括号读音那几格本来就有 hide token 盖着，
    * 不会被补成读音。查不到就跳过 —— 宁可不注，也不瞎注。
+   *
+   * `opts.dict === false` 时**不用本地词典**兜底，只留着"本地读不出来 → 问大模型"
+   * 那一档。普通歌词行走这条：它的分词本来就是整行一次，漏字大多是有意的留白
+   * （真机：好几行末尾的 良 被补成 よ），但**本地词典完全读不出来的字**
+   * （表外字 / 人名用字，比如 `愛莉` 的 莉）还是该问一句大模型 —— 只问这一档，
+   * 不会把留白补上，也不会瞎补。
    */
-  function fillGapReadings(line, tokens) {
+  function fillGapReadings(line, tokens, opts) {
     var s = String(line == null ? "" : line);
     if (!s || typeof WKFurigana === "undefined") return tokens;
+    var useDict = !(opts && opts.dict === false);
     var covered = {};
     var list = tokens || [];
     var i;
@@ -5078,7 +5162,10 @@
       var ch = s.charAt(i);
       // 只有汉字值得补；假名、标点、数字、拉丁都不管
       if (!/[\u3400-\u4DBF\u4E00-\u9FFF]/.test(ch)) continue;
-      var kana = singleCharReading(ch);
+      var local = singleCharReading(ch);
+      // 普通行只补"本地根本读不出来"的字，读得出来的留白一律不动
+      if (!useDict && local) continue;
+      var kana = local;
       var src = "dict";
       if (!kana) {
         /*
@@ -5109,21 +5196,117 @@
    */
   var JA_LLM_EXTRA = { kind: "ja" };
 
+  /**
+   * 一个 token 里不许带空格。
+   *
+   * 真机现象（截图）：`正 真` 那一行，读音 しょうしん 挂在 `真` 上、`正` 反而没有 ——
+   * 网站给的词是 `正真`（两个字），可这一行的原文里两个词之间有个空格，
+   * 于是按字数对位置时整体错开一格，空格还被算进了底字。
+   *
+   * 这里按空格把这种 token 拆开，读音按"非空格字符数"比例切开
+   * （两个字对两个字就是对半分），宁可粗一点也不让空格进底字。
+   */
+  function splitSpaceTokens(tokens, text) {
+    var s = String(text == null ? "" : text);
+    var out = [];
+    var list = tokens || [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t || !(t.end > t.start)) continue;
+      var seg = s.slice(t.start, t.end);
+      if (!/[ \u3000]/.test(seg)) {
+        out.push(t);
+        continue;
+      }
+      // 拆成"非空格段 + 空格段"，再按非空格字符数切读音
+      var runs = [];
+      var cur = null;
+      for (var k = 0; k < seg.length; k++) {
+        var sp = /[ \u3000]/.test(seg.charAt(k));
+        if (sp) {
+          cur = null;
+          continue;
+        }
+        if (!cur) {
+          cur = { from: k, len: 0 };
+          runs.push(cur);
+        }
+        cur.len++;
+      }
+      var total = 0;
+      for (var r = 0; r < runs.length; r++) total += runs[r].len;
+      if (!total) continue;
+      var kana = String(t.kana || "");
+      var pos = 0;
+      for (var q = 0; q < runs.length; q++) {
+        var run = runs[q];
+        var piece;
+        if (q === runs.length - 1) piece = kana.slice(pos);
+        else {
+          var take = run.len >= 2 && kana.length >= total ? Math.round((kana.length * run.len) / total) : run.len;
+          piece = kana.slice(pos, pos + take);
+          pos += piece.length;
+        }
+        var one = {
+          text: seg.substr(run.from, run.len),
+          start: t.start + run.from,
+          end: t.start + run.from + run.len,
+        };
+        if (piece) one.kana = piece;
+        if (t.source && one.kana) one.source = t.source;
+        if (t.kind) one.kind = t.kind;
+        out.push(one);
+      }
+    }
+    return out;
+  }
+
+  /*
+   * 「本地读不出来 -> 问大模型」这条兜底到底走了没有（导出诊断用）。
+   *
+   * 真机上这条链路很容易看起来像"没接"：没填 key、这一层没开、句子还没重扫，
+   * 屏幕上都是"这个字没有读音"。所以每个字一条记录：是没开、排队中、还是拿到了。
+   */
+  var gapDiag = [];
+  var GAP_DIAG_KEEP = 10;
+  var gapSeen = {};
+
+  function noteGapDiag(ch, line, state, kana) {
+    var s = String(line == null ? "" : line).slice(0, 60);
+    var key = ch + "\u0004" + s;
+    if (gapSeen[key] === state) return;
+    gapSeen[key] = state;
+    gapDiag.push({ at: Date.now(), ch: ch, state: state, kana: kana || "", line: s });
+    while (gapDiag.length > GAP_DIAG_KEEP) {
+      var old = gapDiag.shift();
+      if (old) delete gapSeen[old.ch + "\u0004" + old.line];
+    }
+  }
+
   function kanjiFromLLM(ch, line) {
-    if (!state.llm || !llmAvailable()) return null;
+    if (!state.llm || !llmAvailable()) {
+      noteGapDiag(ch, line, "off");
+      return null;
+    }
     var got = null;
     try {
       got = state.llm.lookup(ch, line, null, JA_LLM_EXTRA);
       if (!got) {
         state.llm.want(ch, line, null, JA_LLM_EXTRA);
+        noteGapDiag(ch, line, "ask");
         return null;
       }
     } catch (e) {
+      noteGapDiag(ch, line, "error");
       return null;
     }
     if (typeof got !== "string") return null;
     // 只收纯假名（模型偶尔会答汉字 / 罗马字）
-    if (!/^[\u3041-\u3096\u30A1-\u30FA\u30FC]+$/.test(got)) return null;
+    if (!/^[\u3041-\u3096\u30A1-\u30FA\u30FC]+$/.test(got)) {
+      noteGapDiag(ch, line, "bad", got);
+      return null;
+    }
+    noteGapDiag(ch, line, "hit", got);
     return got;
   }
 
@@ -5203,12 +5386,60 @@
           if (/[ \u3000]/.test(raw.charAt(k))) sp.push(k);
         }
         if (sp.length) row.spaces = sp;
+        /*
+         * 替身里现在到底写着什么字。
+         *
+         * 排障用：替身是"亮起来"的那一层，它要是还留着上一句 / 上一首的字，
+         * 屏幕上就是两层字叠在一起（真机现象「播放第二首歌的时候出现了
+         * 第一首歌歌词的逐字动画」）。这里把替身的可见文字一起带走，
+         * 导出后一比就能看出是哪一层在捣鬼，不用现场盯着看。
+         */
+        var twin = null;
+        var kids = w.children || [];
+        for (var q = 0; q < kids.length; q++) {
+          if (kids[q] !== span && /rnp-karaoke-word-filler/.test(String(kids[q].className || ""))) {
+            twin = kids[q];
+            break;
+          }
+        }
+        if (twin) row.filler = String(twin.textContent || "").slice(0, 40);
+        /*
+         * 几何：格子的位置和宽度。字挤成一团（重叠）时这两个数一眼就能看出来 ——
+         * jsdom 里拿到的是 0，只有真机才有值，所以只在有宽度时记。
+         */
+        try {
+          var r = w.getBoundingClientRect ? w.getBoundingClientRect() : null;
+          if (r && r.width > 0) {
+            row.x = Math.round(r.left);
+            row.w = Math.round(r.width);
+          }
+        } catch (eR) {
+          /* 拿不到几何就算了 */
+        }
         out.push(row);
       }
     } catch (e) {
       /* 结构不认识就少导一点 */
     }
     return out;
+  }
+
+  /**
+   * 相邻格子有没有横向重叠（字挤成一团的直接证据）。
+   *
+   * 正常逐字格里，下一个格子的起点应该 ≥ 上一个格子的起点 + 宽度；重叠超过
+   * 一个字的四成，说明这一行的排版已经乱了（真机截图里那种"字叠在一起"）。
+   */
+  function overlapOf(cells) {
+    var n = 0;
+    for (var i = 1; i < cells.length; i++) {
+      var a = cells[i - 1];
+      var b = cells[i];
+      if (a.x == null || b.x == null || !a.w || !b.w) continue;
+      var over = a.x + a.w - b.x;
+      if (over > Math.min(a.w, b.w) * 0.4) n++;
+    }
+    return n;
   }
 
   /** 最近几次"就地改读音"的保存细节（排障导出用，见 collectDiag 的 edits） */
@@ -5299,15 +5530,33 @@
         } catch (e2) {
           t = "";
         }
-        dom.push({
+        var cells = cellsOf(el);
+        var row = {
           offset: el.getAttribute("offset"),
           karaoke: !!el.querySelector(".rnp-karaoke-word"),
           text: t,
-          cells: cellsOf(el),
+          cells: cells,
           hide: el.querySelectorAll(".wk-hide").length,
           ruby: el.querySelectorAll(".wk-ruby").length,
           rt: el.querySelectorAll(".wk-rt").length,
-        });
+        };
+        /*
+         * 格子横向重叠的个数（>0 就是"字挤成一团"）。只在真机有几何时才有意义。
+         * 另外把当前句的 DOM 原样带一小段回去 —— 叠字这类毛病光看 text 看不出
+         * 是哪一层多出来的，得看结构。
+         */
+        if (cells.length) {
+          var ov = overlapOf(cells);
+          if (ov) row.overlap = ov;
+          if (el.getAttribute("offset") === "0") {
+            try {
+              row.html = String(el.innerHTML || "").slice(0, 4000);
+            } catch (eH) {
+              /* 拿不到就算了 */
+            }
+          }
+        }
+        dom.push(row);
       }
     } catch (e3) {
       /* 歌词层还没渲染出来 */
@@ -5325,6 +5574,7 @@
       },
       tokens: lineDiag.slice(),
       edits: editDiag.slice(),
+      gaps: gapDiag.slice(),
       wrap: state.annotator && state.annotator.diagLines ? state.annotator.diagLines() : [],
       retimes: state.annotator && state.annotator.diagRetimes ? state.annotator.diagRetimes() : [],
       dom: dom,
@@ -5341,7 +5591,7 @@
    *   2. 同一个括号内容在这首歌里挂到过**不同的底字**上（`(みのり)` 出现在很多行）
    * 判出来就记进 tagSet，注音层见到这些括号直接不当读音（括号原样留着）。
    */
-  var parenSeen = Object.create(null); // 括号内容（平假名）→ 第一次挂的底字
+  var parenSeen = Object.create(null); // 括号内容（平假名）→ { base: 第一次挂的底字, line: 在哪一行 }
   var parenTags = Object.create(null); // 括号内容 → 1（判成唱歌人的名字）
   var parenSongKey = null;
 
@@ -5350,7 +5600,7 @@
   }
 
   /** 学一遍这一行的括号读音，返回"有没有学到新的标注"（学到了要重扫一次） */
-  function learnParenTags(tokens) {
+  function learnParenTags(tokens, lineText) {
     var key = null;
     try {
       key = externalKeyOf(externalIdentity());
@@ -5362,6 +5612,7 @@
       parenSeen = Object.create(null);
       parenTags = Object.create(null);
     }
+    var line = String(lineText == null ? "" : lineText);
     var learned = false;
     for (var i = 0; i < (tokens || []).length; i++) {
       var t = tokens[i];
@@ -5376,14 +5627,21 @@
         }
         continue;
       }
-      if (parenSeen[kana] && parenSeen[kana] !== base) {
+      var seen = parenSeen[kana];
+      /*
+       * 判成"唱歌人的名字"必须跨**行**：同一行里同一个读音挂在两个不同的底字上，
+       * 那是歌词在重复（真机：`弄人(ろうにん) 牢人(ろうにん)` —— 一行里两个
+       * "ろうにん"，按"底字变了就是人名"判就成了人名，括号反而合并不了、
+       * 原样露在屏幕上）。所以同行重复不算，只有换了一行、底字又变了才算。
+       */
+      if (seen && seen.line !== line && seen.base !== base) {
         if (!parenTags[kana]) {
           parenTags[kana] = 1;
           learned = true;
         }
         continue;
       }
-      parenSeen[kana] = base;
+      if (!seen || seen.line !== line) parenSeen[kana] = { base: base, line: line };
     }
     return learned;
   }
@@ -7704,26 +7962,29 @@
            * 几乎都出在逐字层（一格一个字，词被拆开之后容易被丢掉）；普通行补了
            * 反而会把"故意留白"的地方注上（真机：好几行末尾的 良 被补成 よ）。
            */
-          var toks = extraTokens(text, text, lineTokenHost(region), undefined, text);
+          var toks = splitSpaceTokens(extraTokens(text, text, lineTokenHost(region), undefined, text), text);
           var karaoke = isKaraokeRegion(region);
-          var final = karaoke ? fillGapReadings(text, toks) : toks;
+          // 逐字行允许本地词典兜底；普通行只借大模型补"本地读不出来"的字
+          var final = fillGapReadings(text, toks, { dict: karaoke });
           /*
            * 学一下这里的括号读音是不是"唱歌人的名字"（见 learnParenTags）。
            * 学到了要重扫一次：前面已经注过的行要按新判据重新切。
            */
           try {
-            if (learnParenTags(final)) scheduleParenRescan();
+            if (learnParenTags(final, text)) scheduleParenRescan();
           } catch (eLearn) {
             /* 学不到就算了，不影响这一行 */
           }
-          if (karaoke) {
-            try {
-              noteLineDiag(text, region, final);
-            } catch (eD) {
-              /* 排障记录失败不影响注音 */
-            }
-          }
-          return final;
+          /*
+           * 每一行都记（不只是逐字行）：真机上报"这个词没读音 / 括号没合并"时，
+           * 只有把这一行切出来的 token 原样带走才看得出是哪一步丢的
+           * （网站读音对不上、字典切得更细、空格错位……）。
+           */
+          try {
+            noteLineDiag(text, region, final);
+          } catch (eD) {
+            /* 排障记录失败不影响注音 */
+          }          return final;
         },
         wrapLines: config.wrapLines !== false,
         annotateAll: config.annotateAll !== false,
