@@ -7291,6 +7291,40 @@ test("两个以上汉字的词：整词候选只留常用读音，别的读法�
   assert.ok(env.document.querySelector(".wk-edit-box [data-wk-chars]"), "逐字组合表要在");
 });
 
+test("词里的字也要有词头读法（掻き回す 的 掻 能给 か）", async () => {
+  /*
+   * 掻 在常用漢字表里一条读音都没有，只在词里出现（掻く / 掻き）。
+   * 逐字表里要是没有它，这个词里的 掻 根本改不动 —— 现在每字的行也会带上这一档，
+   * 假名那几行（き / 回 / す）固定显示。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>掻き回す</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  const probes = { 掻く: "カク", 掻き: "カキ", 掻け: "カケ", 掻か: "カカ", 掻こ: "カコ", 掻い: "カイ", 掻ける: "カケル" };
+  env.window.WKFurigana.setTokenizer({
+    tokenize(text) {
+      if (probes[text]) return [{ surface_form: text, reading: probes[text] }];
+      if (text === "掻き回す") return [{ surface_form: "掻き回す", reading: "カキマワス" }];
+      return Array.from(text, (ch) => ({ surface_form: ch, reading: "*" }));
+    },
+  });
+  await env.runLoad();
+  await sleep(600);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => /掻/.test(r.childNodes[0].nodeValue || ""))[0];
+  assert.ok(ruby, "掻 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(80);
+  /*
+   * 词里的 掻 一个字注在自己的 ruby 上（掻 / き / 回 / す 是四段），
+   * 所以走的是单字候选那条：要能给出 か(き)。
+   */
+  const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  assert.ok(chips.indexOf("か(き)") >= 0 || chips.indexOf("か") >= 0, "词里的 掻 也要有 か(き)：" + JSON.stringify(chips));
+});
+
 test("两个以上汉字的词：每个字的读音都摊开，点几下自由组合", async () => {
   /*
    * 用户要求「两个以上汉字的词把每个字的读音都列出来让用户自由组合」：

@@ -2886,13 +2886,14 @@
   /** 两个以上纯汉字的词：编辑器里给它摊开"每个字能读什么" */
   function isAllKanjiWord(word) {
     var w = String(word == null ? "" : word);
-    return w.length >= 2 && w.length <= 6 && /^[\u4E00-\u9FFF]+$/.test(w);
+    if (w.length < 2 || w.length > 6) return false;
+    // 汉字 + 假名的混排词也要能展开（掻き / 奏で 这种，假名那几行固定不动）
+    return /^[\u4E00-\u9FFF\u3041-\u3096\u30FC]+$/.test(w) && /[\u4E00-\u9FFF]/.test(w);
   }
 
   /** 一个汉字能读成什么：音读 / 训读 + 促音便（いち → いっ） */
   function charReadingChoices(ch) {
     var out = [];
-    if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return out;
     function add(k) {
       var h = hiraOnly(String(k == null ? "" : k));
       if (!h || out.indexOf(h) >= 0) return;
@@ -2907,6 +2908,22 @@
       if (VOICE_OF[head]) add(VOICE_OF[head] + str.slice(1));
       if (SEMI_OF[head]) add(SEMI_OF[head] + str.slice(1));
     }
+    /*
+     * 词典里"当词头"的读法也要进表（掻 → か、切 → きり、奏 → かなで）。
+     * 常用漢字表里 `掻` 一条都没有，可它出现在词里的时候（掻き回す / 掻痒）就得靠这一档，
+     * 不然逐字表里这一行是空的，根本改不动。
+     */
+    try {
+      if (typeof WKFurigana !== "undefined" && WKFurigana.wordReadingsOfChar) {
+        var words = WKFurigana.wordReadingsOfChar(ch) || [];
+        for (var w = 0; w < words.length; w++) {
+          if (words[w] && words[w].kana) add(words[w].kana);
+        }
+      }
+    } catch (eWords) {
+      /* 拿不到就算了，后面还有汉字表 */
+    }
+    if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return out;
     var on = [];
     var kun = [];
     try {
@@ -2970,6 +2987,14 @@
     var rows = [];
     var i;
     for (i = 0; i < chars.length; i++) {
+      /*
+       * 假名那几行是"固定的读法"（掻き 的 き、奏で 的 で），只显示、不需要选。
+       * 汉字行查不到任何读音时才放弃整张表 —— 一张缺字的表拼出来一定是半截词。
+       */
+      if (!/[\u4E00-\u9FFF]/.test(chars[i])) {
+        rows.push({ ch: chars[i], choices: [hiraOnly(chars[i])], pick: hiraOnly(chars[i]), fixed: true });
+        continue;
+      }
       var choices = charReadingChoices(chars[i]);
       if (!choices.length) return null;
       rows.push({ ch: chars[i], choices: choices, pick: null });
@@ -3018,6 +3043,16 @@
         tag.style.opacity = ".7";
         tag.style.minWidth = "1.2em";
         line.appendChild(tag);
+        if (row.fixed) {
+          // 假名那几行是固定的读法：只标出来，不用选
+          var fixed = document.createElement("span");
+          fixed.textContent = kanaByConfig(row.choices[0]);
+          fixed.style.opacity = ".55";
+          fixed.style.fontSize = "12px";
+          line.appendChild(fixed);
+          host.appendChild(line);
+          return;
+        }
         for (var c = 0; c < row.choices.length; c++) {
           (function (kana) {
             var b = document.createElement("button");
