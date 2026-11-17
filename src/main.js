@@ -2757,6 +2757,26 @@
     function expandVariants(word, items) {
       var base = dedupe(withOnbin(word, withKanjiReadings(word, items)));
       /*
+       * 单字再补"词典里当词头"的读法：掻 → か(く) / か(き)、切 → き(る) / き(り)、
+       * 奏 → かな(でる)。常用漢字表只列"字"的读音，`掻` 这种一条都没有；
+       * 可歌词里它总是以词的形式出现。取的是落在汉字上的那一截，送假名放进括号。
+       */
+      if (/^[\u4E00-\u9FFF]$/.test(String(word || ""))) {
+        var words = [];
+        try {
+          if (typeof WKFurigana !== "undefined" && WKFurigana.wordReadingsOfChar) {
+            words = WKFurigana.wordReadingsOfChar(word) || [];
+          }
+        } catch (eWords) {
+          words = [];
+        }
+        for (var wq = 0; wq < words.length; wq++) {
+          var it = words[wq];
+          if (it && it.kana) base.push({ kana: it.kana, label: it.label || it.kana });
+        }
+        base = dedupe(base);
+      }
+      /*
        * 两个以上汉字的词：**只留词本身的常用读音**（手写表 / 分词 / 熟字训），
        * 不再把"按字拼"出来的读法一股脑堆上来（一時 会给到十几条噪音）。
        * 别的读法交给编辑器里的**逐字表**自己拼（`ひと` + `とき` → ひととき）。

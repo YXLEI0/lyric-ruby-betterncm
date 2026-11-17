@@ -1290,6 +1290,67 @@
     return best;
   }
 
+  /**
+   * 单字在词典里"当词头"的读法（排障 / 候选用）。
+   *
+   * 常用漢字表只给"字"的读音（掻 连一条都没有），可歌词里它总是以词的形式出现：
+   *   掻く → か、掻き → か(き)、切る → き(る)、奏でる → かな(でる)。
+   * 做法和 probeKanjiReading 一样：拿"字 + 送假名"去喂 IPADIC，看词典怎么读；
+   * 返回落在汉字上的那一截（kana）和整个词的读音（label），编辑器里显示成 か(き)。
+   */
+  var WORD_TAILS = [
+    "く", "き", "け", "か", "こ", "っ", "て", "た", "と", "す", "し", "せ", "さ", "そ",
+    "る", "れ", "ら", "り", "ろ", "う", "い", "え", "お", "む", "め", "も", "ぶ", "ば",
+    "び", "ぐ", "げ", "ご", "ず", "ぜ", "ぞ", "だ", "で", "ど", "じ", "に", "の", "ね",
+    "な", "ひ", "ふ", "へ", "ほ", "み", "ま", "や", "ゆ", "よ", "わ", "ん", "でる", "ける",
+  ];
+  var wordCache = new Map();
+  function wordReadingsOfChar(ch) {
+    if (!ch || !/^[\u4E00-\u9FFF]$/.test(ch)) return [];
+    if (wordCache.has(ch)) return wordCache.get(ch);
+    var d = deps();
+    var out = [];
+    var seen = {};
+    var toKata = function (t) {
+      return String(t == null ? "" : t).replace(/[\u3041-\u3096]/g, function (c) {
+        return String.fromCharCode(c.charCodeAt(0) + 0x60);
+      });
+    };
+    if (d.core && d.tokenizer) {
+      for (var i = 0; i < WORD_TAILS.length; i++) {
+        var tail = WORD_TAILS[i];
+        var raw = null;
+        try {
+          raw = d.tokenizer.tokenize(ch + tail);
+        } catch (e) {
+          raw = null;
+        }
+        if (!raw || !raw.length) continue;
+        var t0 = raw[0];
+        if (!t0) continue;
+        /*
+         * 只认"整段就是一个词"的那些：`掻く` / `切る` / `奏でる` 会被 IPADIC 当成一个词，
+         * `切く` 这种它只会切成 切 + く —— 后者的读音是 セツ，跟送假名没关系，
+         * 不能拼成 セツく（以前就是这么拼出假读音的）。
+         */
+        if (String(t0.surface_form || "") !== ch + tail) continue;
+        var rd = String(t0.reading || t0.pronunciation || "");
+        if (!rd) continue;
+        // 读音必须以送假名收尾（切る → キル）；不收尾就不是这个词的活用形
+        if (rd.slice(-tail.length) !== toKata(tail)) continue;
+        var stem = rd.slice(0, rd.length - tail.length);
+        if (!/^[\u30A1-\u30F6\u30FC]{1,4}$/.test(stem)) continue;
+        var key = stem + "\u0004" + rd;
+        if (seen[key]) continue;
+        seen[key] = 1;
+        out.push({ kana: stem, label: rd });
+        if (out.length >= 10) break;
+      }
+    }
+    wordCache.set(ch, out);
+    return out;
+  }
+
   /** 词典读不出来、但歌词里会唱的符号 */
   var SYMBOL_READINGS = { "\u221E": "むげん", "\u3006": "しめ" };
 
@@ -1675,6 +1736,7 @@
     clearCache: clearCache,
     candidates: candidates,
     variants: variants,
+    wordReadingsOfChar: wordReadingsOfChar,
     /** 给测试用：直接塞一个分词器 */
     setTokenizer: function (tokenizer) {
       state.tokenizer = tokenizer;

@@ -855,3 +855,45 @@ test("括号里是唱歌人的名字时不当读音（Jump!! 限界超え(みの
   const mikusan = pairs("限界超え(ミクさん)", { tags: { "みくさん": 1 } });
   assert.deepStrictEqual(mikusan, [["限界", "げんかい"], ["超", "こ"]], "称呼后缀的也一样：" + JSON.stringify(mikusan));
 });
+
+test("单字词头读法：掻 かき、切 きり、奏 かなでる 都要能查出来", async () => {
+  /*
+   * 常用漢字表只列"字"的读音（掻 连一条都没有），可歌词里它总以词的形式出现：
+   * 掻き / 切る / 奏でる。这里拿"字 + 送假名"喂真词典，把整词的读音反推出来。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  loadScripts(ctx.dom, [VENDOR_KUROMOJI].concat(VENDOR_FILES));
+  W.betterncm = {
+    fs: {
+      readFile(p) {
+        const buf = fs.readFileSync(p);
+        const u8 = new W.Uint8Array(buf.length);
+        u8.set(buf);
+        return u8.buffer;
+      },
+    },
+  };
+  W.WKFurigana.configure({ dicPath: path.join(ROOT, "vendor", "dict") });
+  W.WKFurigana.load(() => {});
+  await new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      if (W.WKFurigana.ready()) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - t0 > 30000) {
+        clearInterval(timer);
+        reject(new Error("词典加载超时"));
+      }
+    }, 50);
+  });
+
+  const pick = (ch) => (W.WKFurigana.wordReadingsOfChar(ch) || []).map((x) => x.kana + "|" + x.label);
+  const kas = pick("掻");
+  assert.ok(kas.indexOf("カ|カキ") >= 0, "掻 要有 かき：" + JSON.stringify(kas));
+  const kiri = pick("切");
+  assert.ok(kiri.indexOf("キ|キリ") >= 0, "切 要有 きり：" + JSON.stringify(kiri));
+  const kanade = pick("奏");
+  assert.ok(kanade.indexOf("カナ|カナデル") >= 0, "奏 要有 かなでる：" + JSON.stringify(kanade));
+});
