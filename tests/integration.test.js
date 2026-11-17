@@ -5660,10 +5660,12 @@ test("单字多读法：歌 うた/か、詩 し/うた、花 はな/か 也能�
 
   dbl(rubies()[0]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["うた", "か"], "歌 的候选");
+  // 浊音变也补全了（か → が），所以 歌 多一个 が
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["うた", "か"], "歌 的候选");
+  assert.ok(chips().map((b) => b.textContent).indexOf("が") >= 0, "歌 的连浊 が：" + JSON.stringify(chips().map((b) => b.textContent)));
   dbl(rubies()[1]);
   await sleep(50);
-  assert.deepStrictEqual(chips().map((b) => b.textContent), ["し", "うた"], "詩 的候选");
+  assert.deepStrictEqual(chips().map((b) => b.textContent).slice(0, 2), ["し", "うた"], "詩 的候选");
   mdown(chips().filter((b) => b.textContent === "うた")[0]);
   await sleep(400);
   assert.strictEqual(rubies()[1].querySelector(".wk-rt").textContent, "うた", "詩 = うた：" + p.innerHTML);
@@ -7655,9 +7657,9 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
    * 同一个字在词里会变音：手 て → で（拍手）、花 はな → ばな / ぱな、一 いち → いっ（一回）。
    * 这些读音常用漢字表里没有单列，按规则生成后一起列进候选。
    */
-  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>手と一と花</p></li></ul></div></div></body></html>";
+  const HTML = "<!doctype html><html><head></head><body><div id=\"root\"><div class=\"m-lyric\"><ul class=\"lyric\"><li class=\"line\"><p>手と一と花と発と津</p></li></ul></div></div></body></html>";
   const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
-  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 手: "テ", と: "ト", 一: "イチ", 花: "ハナ" }));
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 手: "テ", と: "ト", 一: "イチ", 花: "ハナ", 発: "ハツ", 津: "ツ" }));
   await env.runLoad();
   await sleep(400);
   const p = env.document.querySelector('ul.lyric li p');
@@ -7669,12 +7671,24 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
   assert.ok(chips().indexOf('で') >= 0, '手 的连浊 で：' + chips().join('/'));
   dbl(byWord('一'));
   await sleep(50);
-  // 促音便（いっ）不列：一个汉字单独读的时候不会以 っ 收尾（用户要求）
-  assert.ok(chips().indexOf('いっ') < 0, '一 不许给 いっ：' + chips().join('/'));
+  // 促音便要留着（一 いち → いっ）；只有 っ 本身才算不可能的读音
+  assert.ok(chips().indexOf('いっ') >= 0, '一 的促音便 いっ：' + chips().join('/'));
+  assert.ok(chips().indexOf('っ') < 0, '只有 っ 的读音不许出现：' + chips().join('/'));
   dbl(byWord('花'));
   await sleep(50);
   assert.ok(chips().indexOf('ばな') >= 0, '花 的连浊 ばな：' + chips().join('/'));
   assert.ok(chips().indexOf('ぱな') >= 0, '花 的半浊 ぱな：' + chips().join('/'));
+  // 浊音 / 半浊对**音读**也补全（発 はつ → ばつ / ぱつ）
+  dbl(byWord('発'));
+  await sleep(50);
+  const hatsu = chips();
+  assert.ok(hatsu.indexOf('はっ') >= 0, '発 的促音便 はっ：' + hatsu.join('/'));
+  assert.ok(hatsu.indexOf('ばつ') >= 0, '発 的连浊 ばつ：' + hatsu.join('/'));
+  assert.ok(hatsu.indexOf('ぱつ') >= 0, '発 的半浊 ぱつ：' + hatsu.join('/'));
+  // 只有 っ 的读音（津 つ → っ）不许出现
+  dbl(byWord('津'));
+  await sleep(50);
+  assert.ok(chips().indexOf('っ') < 0, '津 不许给只有 っ 的读音：' + chips().join('/'));
 });
 
 test("日期词：一日 给 いちにち / ついたち，二日~十日 也给另一种读法", async () => {

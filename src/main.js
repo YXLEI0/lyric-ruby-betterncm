@@ -2472,6 +2472,15 @@
     });
   }
 
+  /** 连浊 / 半浊（模块级）：首字变音，编辑器两处都要用 */
+  var VOICE_OF = {
+    か: "が", き: "ぎ", く: "ぐ", け: "げ", こ: "ご",
+    さ: "ざ", し: "じ", す: "ず", せ: "ぜ", そ: "ぞ",
+    た: "だ", ち: "ぢ", つ: "づ", て: "で", と: "ど",
+    は: "ば", ひ: "び", ふ: "ぶ", へ: "べ", ほ: "ぼ",
+  };
+  var SEMI_OF = { は: "ぱ", ひ: "ぴ", ふ: "ぷ", へ: "ぺ", ほ: "ぽ" };
+
   /** 促音便（模块级）：いち → いっ、はつ → はっ、がく → がっ。编辑器两处都要用 */
   function sokuonOf(kana) {
     var s = String(kana == null ? "" : kana);
@@ -2626,21 +2635,29 @@
       }
       function add(kana, suffix) {
         if (!kana || have(kana)) return;
+        // 只有 っ 的读音不成立（津 つ → っ 这种），丢掉
+        if (!/[^っ]/.test(kana)) return;
         items.push({ kana: kana, label: kana });
+      }
+      // 连浊 / 半浊：首字变音（手 て → で、花 はな → ばな / ぱな、発 はつ → ばつ）
+      function addVoice(k) {
+        var str = String(k || "");
+        if (!str) return;
+        var head = str.charAt(0);
+        if (VOICE_MAP[head]) add(VOICE_MAP[head] + str.slice(1), "（浊）");
+        if (SEMI_MAP[head]) add(SEMI_MAP[head] + str.slice(1), "（半浊）");
       }
       var on = WKKanjiReadings.onOf(single);
       var kun = WKKanjiReadings.kunOf(single);
       var i;
       for (i = 0; i < on.length; i++) add(on[i], "（音）");
       for (i = 0; i < kun.length; i++) add(kun[i], "（训）");
-      // 促音便（いち → いっ）不列：一个汉字单独读时不会以 っ 收尾
-      // （一時 的 いっとき 那种只在词里成立，交给逐字表去拼）。
-      // 连浊 / 半浊：训读首字变音（手 て → で、花 はな → ばな / ぱな）
-      for (i = 0; i < kun.length; i++) {
-        var head = kun[i].charAt(0);
-        if (VOICE_MAP[head]) add(VOICE_MAP[head] + kun[i].slice(1), "（浊）");
-        if (SEMI_MAP[head]) add(SEMI_MAP[head] + kun[i].slice(1), "（半浊）");
-      }
+      // 促音便：一 いち → いっ、発 はつ → はっ（词里就是这个音）
+      for (i = 0; i < on.length; i++) add(sokuonForm(on[i]), "（促）");
+      for (i = 0; i < kun.length; i++) add(sokuonForm(kun[i]), "（促）");
+      // 连浊 / 半浊：音读训读都试（除了训读 て→で，音读 はつ→ばつ / ぱつ 也真的存在）
+      for (i = 0; i < on.length; i++) addVoice(on[i]);
+      for (i = 0; i < kun.length; i++) addVoice(kun[i]);
       return items;
     }
 
@@ -2658,17 +2675,17 @@
       }
       function add(kana, suffix) {
         if (!kana || have(kana)) return;
+        if (!/[^っ]/.test(kana)) return;
         items.push({ kana: kana, label: kana });
       }
       var base = items.slice();
       var i;
-      if (base.length) {
-        var first = String(base[0].kana || "");
-        var h0 = first.charAt(0);
-        if (h0 && SEMI_MAP[h0]) {
-          add(VOICE_MAP[h0] + first.slice(1), "（浊）");
-          add(SEMI_MAP[h0] + first.slice(1), "（半浊）");
-        }
+      for (i = 0; i < base.length; i++) add(sokuonForm(base[i].kana), "（促）");
+      for (i = 0; i < base.length; i++) {
+        var k = String(base[i].kana || "");
+        var h0 = k.charAt(0);
+        if (VOICE_MAP[h0]) add(VOICE_MAP[h0] + k.slice(1), "（浊）");
+        if (SEMI_MAP[h0]) add(SEMI_MAP[h0] + k.slice(1), "（半浊）");
       }
       return items;
     }
@@ -2859,7 +2876,16 @@
     function add(k) {
       var h = hiraOnly(String(k == null ? "" : k));
       if (!h || out.indexOf(h) >= 0) return;
+      // 只有 っ 的读音不成立
+      if (!/[^っ]/.test(h)) return;
       out.push(h);
+    }
+    function addVoice(k) {
+      var str = hiraOnly(String(k == null ? "" : k));
+      var head = str.charAt(0);
+      if (!head) return;
+      if (VOICE_OF[head]) add(VOICE_OF[head] + str.slice(1));
+      if (SEMI_OF[head]) add(SEMI_OF[head] + str.slice(1));
     }
     var on = [];
     var kun = [];
@@ -2869,10 +2895,18 @@
     } catch (e) {
       return out;
     }
-    // 促音便不列：一是"一个字单独读成 いっ"不成立，二是逐字拼时
-    // いっ + じ 会拼出不可能的读法
     for (var i = 0; i < on.length; i++) add(on[i]);
     for (i = 0; i < kun.length; i++) add(kun[i]);
+    // 促音便（一 いち → いっ）和连浊 / 半浊（手 て → で、花 はな → ばな / ぱな）
+    // 都要能选：逐字拼 いっ + とき = いっとき 就是靠这一档
+    for (i = 0; i < on.length; i++) {
+      add(sokuonOf(on[i]));
+      addVoice(on[i]);
+    }
+    for (i = 0; i < kun.length; i++) {
+      add(sokuonOf(kun[i]));
+      addVoice(kun[i]);
+    }
     return out.slice(0, 12);
   }
 
