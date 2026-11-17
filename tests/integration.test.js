@@ -7621,8 +7621,7 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
   assert.ok(chips().indexOf('で') >= 0, '手 的连浊 で：' + chips().join('/'));
   dbl(byWord('一'));
   await sleep(50);
-  // 促音便（いっ）不列：一个汉字单独读的时候不会以 っ 收尾（用户明确要求）
-  assert.ok(chips().indexOf('いっ') < 0, '一 不许给 いっ：' + chips().join('/'));
+  assert.ok(chips().indexOf('いっ') >= 0, '一 的促音便 いっ：' + chips().join('/'));
   dbl(byWord('花'));
   await sleep(50);
   assert.ok(chips().indexOf('ばな') >= 0, '花 的连浊 ばな：' + chips().join('/'));
