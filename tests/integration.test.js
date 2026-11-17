@@ -7241,6 +7241,52 @@ test("一時 的候选要按字组合补全：ひととき / いっとき 都要
   assert.ok(chips.indexOf("いっとき") >= 0, "候选要有促音便的 いっとき：" + JSON.stringify(chips));
 });
 
+test("两个以上汉字的词：每个字的读音都摊开，点几下自由组合", async () => {
+  /*
+   * 用户要求「两个以上汉字的词把每个字的读音都列出来让用户自由组合」：
+   * 编辑器里每个字一行按钮（音读 / 训读 / 促音便），点什么就是什么，
+   * 输入框跟着变，回车才存 —— 这样 一時 = ひととき 这种"整词候选里没有"的读法也能拼出来。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>一時の休息を</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 一時: "イチジ", の: "ノ", 休息: "キュウソク", を: "ヲ" }));
+  await env.runLoad();
+  await sleep(500);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "一時")[0];
+  assert.ok(ruby, "一時 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(50);
+
+  const rows = Array.from(env.document.querySelectorAll(".wk-edit-box [data-wk-chars] > div"));
+  assert.strictEqual(rows.length, 2, "两个字各一行：" + env.document.querySelector(".wk-edit-box").innerHTML.slice(0, 300));
+  const chars = rows.map((r) => r.firstChild.textContent);
+  assert.deepStrictEqual(chars, ["一", "時"], "行首是那个字：" + JSON.stringify(chars));
+  const chipsOf = (idx) => Array.from(rows[idx].querySelectorAll(".wk-edit-char"));
+  assert.ok(chipsOf(0).some((b) => b.textContent === "ひと"), "一 的训读要列出来");
+  assert.ok(chipsOf(1).some((b) => b.textContent === "とき"), "時 的训读要列出来");
+
+  const pick = (idx, kana) => {
+    const btn = chipsOf(idx).filter((b) => b.textContent === kana)[0];
+    assert.ok(btn, "要有 " + kana + " 这个按钮");
+    btn.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  };
+  const input = env.document.querySelector(".wk-edit-box input.wk-edit");
+  pick(0, "ひと");
+  await sleep(30);
+  pick(1, "とき");
+  await sleep(30);
+  assert.strictEqual(input.value, "ひととき", "输入框要拼成 ひととき：" + input.value);
+
+  input.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(400);
+  const now = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "一時")[0];
+  assert.strictEqual(now.querySelector(".wk-rt").textContent, "ひととき", "回车之后要按拼出来的存：" + p.innerHTML);
+});
+
 test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">

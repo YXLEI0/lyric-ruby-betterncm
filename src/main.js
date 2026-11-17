@@ -2472,6 +2472,17 @@
     });
   }
 
+  /** 促音便（模块级）：いち → いっ、はつ → はっ、がく → がっ。编辑器两处都要用 */
+  function sokuonOf(kana) {
+    var s = String(kana == null ? "" : kana);
+    if (!s) return "";
+    if (s === "いち" || s === "はち") return s.slice(0, -1) + "っ";
+    if (s === "じゅう") return "じゅっ";
+    var last = s.charAt(s.length - 1);
+    if (last === "つ" || last === "く" || last === "き") return s.slice(0, -1) + "っ";
+    return "";
+  }
+
   /** 0-9 的日语读法（逐位读用）与英文读法（片假名） */
   var NUMBER_JP = ["ぜろ", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"];
   var NUMBER_EN = ["ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン"];
@@ -2838,6 +2849,161 @@
     return mine[idx] || el;
   }
 
+  /** 两个以上纯汉字的词：编辑器里给它摊开"每个字能读什么" */
+  function isAllKanjiWord(word) {
+    var w = String(word == null ? "" : word);
+    return w.length >= 2 && w.length <= 6 && /^[\u4E00-\u9FFF]+$/.test(w);
+  }
+
+  /** 一个汉字能读成什么：音读 / 训读 + 促音便（いち → いっ） */
+  function charReadingChoices(ch) {
+    var out = [];
+    if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return out;
+    function add(k) {
+      var h = hiraOnly(String(k == null ? "" : k));
+      if (!h || out.indexOf(h) >= 0) return;
+      out.push(h);
+    }
+    var on = [];
+    var kun = [];
+    try {
+      on = WKKanjiReadings.onOf(ch) || [];
+      kun = WKKanjiReadings.kunOf(ch) || [];
+    } catch (e) {
+      return out;
+    }
+    for (var i = 0; i < on.length; i++) {
+      add(on[i]);
+      add(sokuonOf(on[i]));
+    }
+    for (i = 0; i < kun.length; i++) {
+      add(kun[i]);
+      add(sokuonOf(kun[i]));
+    }
+    return out.slice(0, 12);
+  }
+
+  /**
+   * 把当前读音摊回到每个字上（`一時` 的 いちじ → いち + じ）。
+   *
+   * 摊不开就返回 null —— 那说明现在这个读音不是"逐字拼出来"的
+   * （`明日` あした 这种熟字训），这时**不许**拿每字的第一个读音去覆盖输入框，
+   * 不然用户只是点开看看，读音就被改掉了。
+   */
+  function alignPicks(rows, current) {
+    var s = hiraOnly(String(current == null ? "" : current));
+    if (!s) return null;
+    var memo = {};
+    function walk(i, pos) {
+      if (i === rows.length) return pos === s.length ? [] : null;
+      var key = i + ":" + pos;
+      if (memo[key] !== undefined) return memo[key];
+      var picks = rows[i].choices;
+      for (var c = 0; c < picks.length; c++) {
+        var k = picks[c];
+        if (s.substr(pos, k.length) !== k) continue;
+        var rest = walk(i + 1, pos + k.length);
+        if (rest) {
+          memo[key] = [k].concat(rest);
+          return memo[key];
+        }
+      }
+      memo[key] = null;
+      return null;
+    }
+    return walk(0, 0);
+  }
+
+  /**
+   * 逐字读音表：每个字一行按钮，点什么就是什么，组合权交给用户。
+   * 点按钮只改输入框（不直接存），回车才存。
+   */
+  function buildCharRows(word, box, current, onChange) {
+    var chars = String(word || "").split("");
+    var rows = [];
+    var i;
+    for (i = 0; i < chars.length; i++) {
+      var choices = charReadingChoices(chars[i]);
+      if (!choices.length) return null;
+      rows.push({ ch: chars[i], choices: choices, pick: null });
+    }
+    var aligned = alignPicks(rows, current);
+    if (aligned) {
+      for (i = 0; i < rows.length; i++) rows[i].pick = aligned[i];
+    }
+    var host = document.createElement("div");
+    host.className = "wk-edit-chars";
+    host.setAttribute("data-wk-chars", "1");
+    host.style.flexBasis = "100%";
+    host.style.marginTop = "4px";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.gap = "2px";
+    var buttons = [];
+    function compose() {
+      var out = "";
+      for (var q = 0; q < rows.length; q++) out += rows[q].pick || rows[q].choices[0];
+      return out;
+    }
+    function paintButtons() {
+      for (var b = 0; b < buttons.length; b++) {
+        var btn = buttons[b];
+        var row = rows[+btn.getAttribute("data-row")];
+        var on = !!row && row.pick === btn.getAttribute("data-kana");
+        btn.disabled = on;
+        btn.style.opacity = on ? ".5" : "1";
+        btn.style.fontWeight = on ? "700" : "400";
+      }
+    }
+    function paint() {
+      paintButtons();
+      onChange(compose());
+    }
+    for (var r = 0; r < rows.length; r++) {
+      (function (row, idx) {
+        var line = document.createElement("div");
+        line.style.display = "flex";
+        line.style.flexWrap = "wrap";
+        line.style.gap = "3px";
+        line.style.alignItems = "center";
+        var tag = document.createElement("span");
+        tag.textContent = row.ch;
+        tag.style.opacity = ".7";
+        tag.style.minWidth = "1.2em";
+        line.appendChild(tag);
+        for (var c = 0; c < row.choices.length; c++) {
+          (function (kana) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "wk-edit-char";
+            b.setAttribute("data-kana", kana);
+            b.setAttribute("data-row", String(idx));
+            b.textContent = kanaByConfig(kana);
+            b.title = "把「" + row.ch + "」读成 " + kanaByConfig(kana);
+            b.style.fontSize = "12px";
+            b.style.padding = "0 5px";
+            b.addEventListener("mousedown", function (ev) {
+              ev.preventDefault(); // 别让输入框失焦（失焦就把编辑器关了）
+              ev.stopPropagation();
+              row.pick = kana;
+              paint();
+              try {
+                box.focus();
+              } catch (eF) {
+                /* 焦点回不去也不影响输入框里的字 */
+              }
+            });
+            buttons.push(b);
+            line.appendChild(b);
+          })(row.choices[c]);
+        }
+        host.appendChild(line);
+      })(rows[r], r);
+    }
+    paintButtons();
+    return host;
+  }
+
   function openEditor(rubyEl) {
     rubyEl = canonicalRuby(rubyEl);
     if (!rubyEl || !rubyEl.parentNode) return;
@@ -2912,6 +3078,8 @@
         span = { at: at, word: joined };
         // 合并之后底字变了，原来的候选对不上了 —— 收起来，别点出个错的
         if (variantChips) variantChips.style.display = "none";
+        var charBox = wrap.querySelector ? wrap.querySelector("[data-wk-chars]") : null;
+        if (charBox) charBox.style.display = "none";
         box.value = a.kana + z.kana;
         box.select();
       });
@@ -2988,6 +3156,25 @@
       }
       wrap.appendChild(variantChips);
       markVariant(current);
+    }
+
+    /*
+     * 逐字读音表：两个以上汉字的词，把**每个字的读音都列一行**，让用户自己拼。
+     *
+     * 为什么还要这个（上一版已经有"按字组合"的整词候选）：组合出来的整词一定
+     * 有一堆噪音（`一時` 能给到 12 条），但真正要的那一个常常不在里面
+     * （ひととき / いっとき 这种）。把每个字的读音摊开、点着什么就是什么，
+     * 组合权交给用户 —— 想拼 `ひと` + `とき` 就点这两个。
+     *
+     * 点按钮只改输入框里的字，不直接存：一个一个点的时候中间态都是半截词，
+     * 存下去就等于把半截读音钉死了。回车才存（和手输同一条路）。
+     */
+    var charRows = null;
+    if (isAllKanjiWord(word)) {
+      charRows = buildCharRows(word, box, current, function (val) {
+        box.value = kanaByConfig(val);
+      });
+      if (charRows) wrap.appendChild(charRows);
     }
 
     try {
