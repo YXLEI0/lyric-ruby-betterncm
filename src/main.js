@@ -2633,9 +2633,8 @@
       var i;
       for (i = 0; i < on.length; i++) add(on[i], "（音）");
       for (i = 0; i < kun.length; i++) add(kun[i], "（训）");
-      // 促音便：音读也做（一 いち → いっ、発 はつ → はっ、学 がく → がっ）
-      for (i = 0; i < on.length; i++) add(sokuonForm(on[i]), "（促）");
-      for (i = 0; i < kun.length; i++) add(sokuonForm(kun[i]), "（促）");
+      // 促音便（いち → いっ）不列：一个汉字单独读时不会以 っ 收尾
+      // （一時 的 いっとき 那种只在词里成立，交给逐字表去拼）。
       // 连浊 / 半浊：训读首字变音（手 て → で、花 はな → ばな / ぱな）
       for (i = 0; i < kun.length; i++) {
         var head = kun[i].charAt(0);
@@ -2663,7 +2662,6 @@
       }
       var base = items.slice();
       var i;
-      for (i = 0; i < base.length; i++) add(sokuonForm(base[i].kana), "（促）");
       if (base.length) {
         var first = String(base[0].kana || "");
         var h0 = first.charAt(0);
@@ -2871,14 +2869,10 @@
     } catch (e) {
       return out;
     }
-    for (var i = 0; i < on.length; i++) {
-      add(on[i]);
-      add(sokuonOf(on[i]));
-    }
-    for (i = 0; i < kun.length; i++) {
-      add(kun[i]);
-      add(sokuonOf(kun[i]));
-    }
+    // 促音便不列：一是"一个字单独读成 いっ"不成立，二是逐字拼时
+    // いっ + じ 会拼出不可能的读法
+    for (var i = 0; i < on.length; i++) add(on[i]);
+    for (i = 0; i < kun.length; i++) add(kun[i]);
     return out.slice(0, 12);
   }
 
@@ -4981,6 +4975,61 @@
     for (j = 0; j < ext.length; j++) {
       if (siteTailOfCoarser(ext[j])) siteCoarser[j] = true;
     }
+
+    /**
+     * 本地一条 token 被网站切走一部分之后，剩下那几截各自该读什么。
+     *
+     * 按**字数比例**切读音（4 个字 10 个假名，前 2 个字让出去，后 2 个拿后半截）。
+     * 切出来读音是空的就整截丢掉 —— 宁可不注，也不把半截读音贴上去。
+     */
+    function siteRemainders(tk) {
+      var text = String(tk.text || "");
+      var kana = String(tk.kana || "");
+      if (!text || !kana) return [tk];
+      var covered = [];
+      for (var q = 0; q < ext.length; q++) {
+        if (coarser[q] || siteCoarser[q]) continue;
+        var a = Math.max(tk.start, ext[q].start);
+        var b = Math.min(tk.end, ext[q].end);
+        if (b > a) covered.push([a, b]);
+      }
+      if (!covered.length) return [tk];
+      covered.sort(function (x, y) {
+        return x[0] - y[0];
+      });
+      var merged = [];
+      for (var m = 0; m < covered.length; m++) {
+        var last = merged[merged.length - 1];
+        if (last && covered[m][0] <= last[1]) last[1] = Math.max(last[1], covered[m][1]);
+        else merged.push([covered[m][0], covered[m][1]]);
+      }
+      var pieces = [];
+      var pos = tk.start;
+      for (var g = 0; g < merged.length; g++) {
+        if (merged[g][0] > pos) pieces.push([pos, merged[g][0]]);
+        pos = Math.max(pos, merged[g][1]);
+      }
+      if (pos < tk.end) pieces.push([pos, tk.end]);
+      var kept = [];
+      for (var p = 0; p < pieces.length; p++) {
+        var from = pieces[p][0] - tk.start;
+        var to = pieces[p][1] - tk.start;
+        if (!(to > from)) continue;
+        var kFrom = Math.round((kana.length * from) / text.length);
+        var kTo = Math.round((kana.length * to) / text.length);
+        var piece = kana.slice(kFrom, kTo);
+        if (!piece) continue;
+        kept.push({
+          text: text.slice(from, to),
+          start: tk.start + from,
+          end: tk.start + to,
+          kana: piece,
+          kind: tk.kind,
+          source: tk.source,
+        });
+      }
+      return kept;
+    }
     for (i = 0; i < base.length; i++) {
       var tk = base[i];
       if (!tk) continue;
@@ -5004,6 +5053,19 @@
         }
       }
       if (!hit) out.push(tk);
+      else {
+        /*
+         * 网站只在本地这条 token **里面**标了一段（更细）：让给网站，但**剩下的字
+         * 不能一起丢**。
+         *
+         * 真机：`正真正銘` 词典给一整条 正真正銘=しょうしんしょうめい，网站只标了
+         * `正真`=しょうしん，于是整条被丢掉、`正銘` 一个字读音都没有（用户截图）。
+         * 这里按"没被网站盖住的那几截"把读音按字数比例切回来（4 个字 10 个假名，
+         * 前 2 个字让出去，后 2 个拿 しょうめい）。
+         */
+        var remainder = siteRemainders(tk);
+        for (var r = 0; r < remainder.length; r++) out.push(remainder[r]);
+      }
     }
     for (j = 0; j < ext.length; j++) {
       if (coarser[j] || siteCoarser[j]) continue;

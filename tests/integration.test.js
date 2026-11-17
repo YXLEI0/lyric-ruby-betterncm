@@ -5901,6 +5901,54 @@ test("外部网站读音：UtaTen 解析 + 命中的行用网站读音、对不�
   assert.deepStrictEqual(pairs(ps[1]), [["知", "し"], ["街", "まち"]], "对不上的行回退词典：" + ps[1].innerHTML);
 });
 
+test("网站只标了长词的一部分：剩下的字也要有读音（正真正銘 → 正真 + 正銘）", async () => {
+  /*
+   * 真机截图：`はい そうです 正真正銘 僕のせいだった` 只注了 正真=しょうしん，
+   * 正銘 整段没有读音 —— 因为网站只标了 `正真`，而词典那条 正真正銘 被"有交集就替换"
+   * 整条丢掉了。现在让出网站那一段，剩下的字按比例切回读音（しょうめい）。
+   */
+  const SEARCH_HTML = `<!doctype html><html><body><table><tr>
+    <td class="searchResult__title"><a href="/lyric/seimei/"><span class="songlist-title">Seimei Song</span></a></td>
+    <td class="searchResult__artist"><p><a href="/artist/7/">Seimei Artist</a></p></td>
+  </tr></table></body></html>`;
+  const LYRIC_HTML = `<!doctype html><html><body>
+    <div class="lyricBody"><div class="hiragana">
+      はい そうです <span class="ruby"><span class="rb">正真</span><span class="rt">しょうしん</span></span>正銘<br>
+    </div></div>
+  </body></html>`;
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">Seimei Song</a></span>
+  <span class="by"><a href="#">Seimei Artist</a></span>
+</div></div>
+<div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>はい そうです 正真正銘</p></li>
+</ul></div></body></html>`;
+  const cacheDir = tempCacheDir();
+  const env = bootPlugin(HTML, {
+    config: { online: false, llmEnabled: false, externalUtaten: true, externalConsent: true, externalCacheDir: cacheDir },
+    fs: diskFs(),
+  });
+  env.window.__WK_TRACK__ = { id: "2669794388", title: "Seimei Song", artists: ["Seimei Artist"] };
+  env.window.__WK_EXTERNAL_FETCH__ = function (url) {
+    return Promise.resolve(url.indexOf("/search") >= 0 ? SEARCH_HTML : LYRIC_HTML);
+  };
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 正真正銘: "ショウシンショウメイ" }));
+  await env.runLoad();
+  await sleep(900);
+
+  const p = env.document.querySelector("ul.lyric li p");
+  const pairs = Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(
+    pairs,
+    [
+      ["正真", "しょうしん"],
+      ["正銘", "しょうめい"],
+    ],
+    "网站标一半，剩下那半也要有读音：" + p.innerHTML
+  );
+});
+
 test("外部网站读音：没有缓存时按歌名 / 歌手联网取（请求可被测试替身接管）", async () => {
   /*
    * 真机的请求走 utaten.com 的隐形 iframe（main.js 的 fetchExternalHtml）；
@@ -7621,7 +7669,8 @@ test("单字候选：音便（连浊 / 半浊 / 促音便）也要有", async ()
   assert.ok(chips().indexOf('で') >= 0, '手 的连浊 で：' + chips().join('/'));
   dbl(byWord('一'));
   await sleep(50);
-  assert.ok(chips().indexOf('いっ') >= 0, '一 的促音便 いっ：' + chips().join('/'));
+  // 促音便（いっ）不列：一个汉字单独读的时候不会以 っ 收尾（用户要求）
+  assert.ok(chips().indexOf('いっ') < 0, '一 不许给 いっ：' + chips().join('/'));
   dbl(byWord('花'));
   await sleep(50);
   assert.ok(chips().indexOf('ばな') >= 0, '花 的连浊 ばな：' + chips().join('/'));
