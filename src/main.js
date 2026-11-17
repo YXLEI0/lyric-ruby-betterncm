@@ -2633,9 +2633,8 @@
       var i;
       for (i = 0; i < on.length; i++) add(on[i], "（音）");
       for (i = 0; i < kun.length; i++) add(kun[i], "（训）");
-      // 促音便：音读也做（一 いち → いっ、発 はつ → はっ、学 がく → がっ）
-      for (i = 0; i < on.length; i++) add(sokuonForm(on[i]), "（促）");
-      for (i = 0; i < kun.length; i++) add(sokuonForm(kun[i]), "（促）");
+      // 促音便（いち → いっ）不列：一个汉字单独读时不会以 っ 收尾
+      // （一時 的 いっとき 那种只在词里成立，交给逐字表去拼）。
       // 连浊 / 半浊：训读首字变音（手 て → で、花 はな → ばな / ぱな）
       for (i = 0; i < kun.length; i++) {
         var head = kun[i].charAt(0);
@@ -2663,7 +2662,6 @@
       }
       var base = items.slice();
       var i;
-      for (i = 0; i < base.length; i++) add(sokuonForm(base[i].kana), "（促）");
       if (base.length) {
         var first = String(base[0].kana || "");
         var h0 = first.charAt(0);
@@ -2871,14 +2869,10 @@
     } catch (e) {
       return out;
     }
-    for (var i = 0; i < on.length; i++) {
-      add(on[i]);
-      add(sokuonOf(on[i]));
-    }
-    for (i = 0; i < kun.length; i++) {
-      add(kun[i]);
-      add(sokuonOf(kun[i]));
-    }
+    // 促音便不列：一个是"一字单独读成 いっ"不成立，二是逐字拼的时候
+    // いっ + じ 会拼出不可能的读法
+    for (var i = 0; i < on.length; i++) add(on[i]);
+    for (i = 0; i < kun.length; i++) add(kun[i]);
     return out.slice(0, 12);
   }
 
@@ -5331,6 +5325,9 @@
   function fillGapReadings(line, tokens, opts) {
     var s = String(line == null ? "" : line);
     if (!s || typeof WKFurigana === "undefined") return tokens;
+    function isHanChar(c) {
+      return /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(c || "");
+    }
     var useDict = !(opts && opts.dict === false);
     var covered = {};
     var list = tokens || [];
@@ -5349,8 +5346,17 @@
       // 只有汉字值得补；假名、标点、数字、拉丁都不管
       if (!/[\u3400-\u4DBF\u4E00-\u9FFF]/.test(ch)) continue;
       var local = singleCharReading(ch);
-      // 普通行只补"本地根本读不出来"的字，读得出来的留白一律不动
-      if (!useDict && local) continue;
+      /*
+       * 普通行：单个散字照旧不补（`良` 那种留白是有意的），但**两个以上连着、
+       * 都没被任何词盖住的汉字**要按字补上 —— 那是分词把它们切成了没有读音的词
+       * （真机：`正真正銘` 被切成 正真(しょうしん) + 正銘，正銘 整段空着）。
+       *
+       * 这样不会把"故意留白"补掉：留白多是句末一个字。
+       */
+      var runLen = 1;
+      for (var bpos = i - 1; bpos >= 0 && !covered[bpos] && isHanChar(s.charAt(bpos)); bpos--) runLen++;
+      for (var apos = i + 1; apos < s.length && !covered[apos] && isHanChar(s.charAt(apos)); apos++) runLen++;
+      if (!useDict && local && runLen < 2) continue;
       var kana = local;
       var src = "dict";
       if (!kana) {
@@ -5736,12 +5742,17 @@
           if (ov) row.overlap = ov;
         }
         /*
-         * 当前句的 DOM 原样带一小段回去（叠字、错位这类毛病光看 text 看不出是哪一层），
-         * 不限于逐字行 —— 普通行的 ruby 底字 / 读音就在这段 HTML 里。
+         * 当前句**前后各三行**的 DOM 原样带一段回去。
+         *
+         * 只带当前句不够：真机上"上一句错位"的毛病，导出时那一句往往刚好已经
+         * 变成 offset="-1"（`何 十年とも` 就是这么错过去的）。范围放宽到 ±3，
+         * 一次导出就能看到那一行 ruby 的底字和读音。
          */
-        if (el.getAttribute("offset") === "0" || el.getAttribute("offset") === "") {
+        var offNum = parseInt(el.getAttribute("offset") || "99", 10);
+        if (offNum >= -3 && offNum <= 3) {
           try {
-            row.html = String(el.innerHTML || "").slice(0, 4000);
+            var h = String(el.innerHTML || "");
+            row.html = h.slice(0, 2000);
           } catch (eH) {
             /* 拿不到就算了 */
           }
