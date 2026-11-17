@@ -1304,6 +1304,19 @@
     "び", "ぐ", "げ", "ご", "ず", "ぜ", "ぞ", "だ", "で", "ど", "じ", "に", "の", "ね",
     "な", "ひ", "ふ", "へ", "ほ", "み", "ま", "や", "ゆ", "よ", "わ", "ん", "でる", "ける",
   ];
+  /*
+   * 五段动词的连用形：把词尾换成同一个 い段 的假名（く→き、る→り、う→い…）。
+   * 用户要的就是这一档：掻く → かき、切る → きり、書く → かき。别的活用形
+   * （く / け / こ / っ）一律不列，省得一屏都是用不上的读音。
+   */
+  var RENYOU = {
+    う: "い", く: "き", ぐ: "ぎ", す: "し", つ: "ち", ぬ: "に", ぶ: "び", む: "み", る: "り",
+  };
+  var toHira = function (t) {
+    return String(t == null ? "" : t).replace(/[\u30A1-\u30F6]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0x60);
+    });
+  };
   var wordCache = new Map();
   function wordReadingsOfChar(ch) {
     if (!ch || !/^[\u4E00-\u9FFF]$/.test(ch)) return [];
@@ -1330,21 +1343,38 @@
         if (!t0) continue;
         /*
          * 只认"整段就是一个词"的那些：`掻く` / `切る` / `奏でる` 会被 IPADIC 当成一个词，
-         * `切く` 这种它只会切成 切 + く —— 后者的读音是 セツ，跟送假名没关系，
-         * 不能拼成 セツく（以前就是这么拼出假读音的）。
+         * `切く` 这种它只会切成 切 + く —— 后者的读音是 セツ，跟送假名没关系。
          */
         if (String(t0.surface_form || "") !== ch + tail) continue;
         var rd = String(t0.reading || t0.pronunciation || "");
         if (!rd) continue;
-        // 读音必须以送假名收尾（切る → キル）；不收尾就不是这个词的活用形
         if (rd.slice(-tail.length) !== toKata(tail)) continue;
-        var stem = rd.slice(0, rd.length - tail.length);
-        if (!/^[\u30A1-\u30F6\u30FC]{1,4}$/.test(stem)) continue;
-        var key = stem + "\u0004" + rd;
+        /*
+         * 只要连用形（い段 / 一段动词的词干 + で 这种）：
+         *   掻く → かき、切る → きり、奏でる → かなで。
+         * 一段动词的判据：送假名以 る 收尾、而且 る 前面是 い段 / え段 的假名
+         * （奏でる 的 で、食べる 的 べ）—— 这种连用形是去掉 る，不是把 る 换 り。
+         */
+        var renyou = "";
+        var prevHira = tail.length >= 2 ? toHira(tail.charAt(tail.length - 2)) : "";
+        var isIchidan =
+          tail.charAt(tail.length - 1) === "る" && /[いきしちにひみりぎじびぴえけせてねへめれげぜでべぺ]/.test(prevHira);
+        var lastHira = toHira(tail.charAt(tail.length - 1));
+        if (isIchidan) {
+          renyou = tail.slice(0, -1);
+        } else if (RENYOU[lastHira]) {
+          renyou = tail.slice(0, -1) + RENYOU[lastHira];
+        }
+        if (!renyou) continue;
+        var stemKata = rd.slice(0, rd.length - tail.length);
+        if (!/^[\u30A1-\u30F6\u30FC]{1,4}$/.test(stemKata)) continue;
+        var kana = toHira(stemKata);
+        var label = toHira(stemKata + toKata(renyou));
+        var key = kana + "\u0004" + label;
         if (seen[key]) continue;
         seen[key] = 1;
-        out.push({ kana: stem, label: rd });
-        if (out.length >= 10) break;
+        out.push({ kana: kana, label: label });
+        if (out.length >= 6) break;
       }
     }
     wordCache.set(ch, out);
