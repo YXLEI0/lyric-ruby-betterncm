@@ -1350,31 +1350,38 @@
         if (!rd) continue;
         if (rd.slice(-tail.length) !== toKata(tail)) continue;
         /*
-         * 只要连用形（い段 / 一段动词的词干 + で 这种）：
-         *   掻く → かき、切る → きり、奏でる → かなで。
+         * 两种形式都要列，送假名都不省：
+         *   辞书形  掻く → か(く)、切る → き(る)、奏でる → かな(でる)
+         *   连用形  掻く → かき、  切る → きり、  奏でる → かなで
          * 一段动词的判据：送假名以 る 收尾、而且 る 前面是 い段 / え段 的假名
          * （奏でる 的 で、食べる 的 べ）—— 这种连用形是去掉 る，不是把 る 换 り。
          */
         var renyou = "";
         var prevHira = tail.length >= 2 ? toHira(tail.charAt(tail.length - 2)) : "";
         var isIchidan =
-          tail.charAt(tail.length - 1) === "る" && /[いきしちにひみりぎじびぴえけせてねへめれげぜでべぺ]/.test(prevHira);
+          tail.charAt(tail.length - 1) === "る" && /[いきしちにちひみりぎじびぴえけせてねへめれげぜでべぺ]/.test(prevHira);
         var lastHira = toHira(tail.charAt(tail.length - 1));
         if (isIchidan) {
           renyou = tail.slice(0, -1);
         } else if (RENYOU[lastHira]) {
           renyou = tail.slice(0, -1) + RENYOU[lastHira];
         }
-        if (!renyou) continue;
         var stemKata = rd.slice(0, rd.length - tail.length);
         if (!/^[\u30A1-\u30F6\u30FC]{1,4}$/.test(stemKata)) continue;
-        var kana = toHira(stemKata);
-        var label = toHira(stemKata + toKata(renyou));
-        var key = kana + "\u0004" + label;
-        if (seen[key]) continue;
-        seen[key] = 1;
-        out.push({ kana: kana, label: label });
-        if (out.length >= 6) break;
+        var stem = toHira(stemKata);
+        var pairs = [{ kana: stem, label: toHira(rd) }]; // 辞书形：か(く)
+        if (renyou) {
+          var renyouKana = stem + renyou; // 连用形：かき（整个读音都留着）
+          pairs.push({ kana: renyouKana, label: renyouKana });
+        }
+        for (var pi = 0; pi < pairs.length; pi++) {
+          var pr = pairs[pi];
+          var key = pr.kana + "\u0004" + pr.label;
+          if (seen[key]) continue;
+          seen[key] = 1;
+          out.push({ kana: pr.kana, label: pr.label });
+        }
+        if (out.length >= 8) break;
       }
     }
     wordCache.set(ch, out);

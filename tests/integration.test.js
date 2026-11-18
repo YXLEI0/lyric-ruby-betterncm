@@ -7322,7 +7322,10 @@ test("词里的字也要有词头读法（掻き回す 的 掻 能给 か）", a
    * 所以走的是单字候选那条：要能给出 か(き)。
    */
   const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
-  assert.ok(chips.indexOf("か(き)") >= 0 || chips.indexOf("か") >= 0, "词里的 掻 也要有 か(き)：" + JSON.stringify(chips));
+  assert.ok(
+    chips.indexOf("か(く)") >= 0 && chips.indexOf("かき") >= 0,
+    "词里的 掻 要有 か(く) 和 かき：" + JSON.stringify(chips)
+  );
 });
 
 test("两个以上汉字的词：每个字的读音都摊开，点几下自由组合", async () => {

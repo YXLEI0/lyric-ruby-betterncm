@@ -891,12 +891,14 @@ test("单字词头读法：掻 かき、切 きり、奏 かなでる 都要能�
 
   const pick = (ch) => (W.WKFurigana.wordReadingsOfChar(ch) || []).map((x) => x.kana + "|" + x.label);
   const kas = pick("掻");
-  assert.ok(kas.indexOf("か|かき") >= 0, "掻 要有 かき：" + JSON.stringify(kas));
+  assert.ok(kas.indexOf("か|かく") >= 0, "掻 要有辞书形 か(く)：" + JSON.stringify(kas));
+  assert.ok(kas.indexOf("かき|かき") >= 0, "掻 要有连用形 かき：" + JSON.stringify(kas));
   const kiri = pick("切");
-  assert.ok(kiri.indexOf("き|きり") >= 0, "切 要有 きり：" + JSON.stringify(kiri));
+  assert.ok(kiri.indexOf("き|きる") >= 0, "切 要有辞书形 き(る)：" + JSON.stringify(kiri));
+  assert.ok(kiri.indexOf("きり|きり") >= 0, "切 要有连用形 きり：" + JSON.stringify(kiri));
   const kanade = pick("奏");
-  assert.ok(kanade.indexOf("かな|かなで") >= 0, "奏 要有 かなで：" + JSON.stringify(kanade));
-  // 只给连用形：掻く 的 かく / かけ / かこ 这些不要，而且不许出现片假名
-  assert.ok(kas.indexOf("か|かく") < 0, "掻 不该列 かく：" + JSON.stringify(kas));
+  assert.ok(kanade.indexOf("かな|かなでる") >= 0, "奏 要有辞书形 かな(でる)：" + JSON.stringify(kanade));
+  assert.ok(kanade.indexOf("かなで|かなで") >= 0, "奏 要有连用形 かなで：" + JSON.stringify(kanade));
+  // 一律平假名
   assert.ok(!/[ァ-ヶー]/.test(JSON.stringify(kas)), "候选不许是片假名：" + JSON.stringify(kas));
 });
