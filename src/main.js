@@ -2589,9 +2589,16 @@
       var seen = {};
       var res = [];
       for (var q = 0; q < items.length; q++) {
-        var label = kanaByConfig(items[q].label || items[q].kana);
-        if (Object.prototype.hasOwnProperty.call(seen, label)) continue;
-        seen[label] = 1;
+        /*
+         * 键是「读音 + 显示文字」：`か(く)` 和 `かく` 的显示文字不一样，两条都要留
+         * （前者把送假名放括号、只注汉字那一截；后者是整词的连用形 / 活用形）。
+         * 真正重复的（ぜろ / ゼロ 切到片假名后一模一样）还是只留一个。
+         */
+        var kana = kanaByConfig(items[q].kana || "");
+        var label = kanaByConfig(items[q].label || items[q].kana || "");
+        var key = kana + "\u0004" + label;
+        if (Object.prototype.hasOwnProperty.call(seen, key)) continue;
+        seen[key] = 1;
         res.push(items[q]);
       }
       return res;
@@ -2770,10 +2777,45 @@
         } catch (eWords) {
           words = [];
         }
+        /*
+         * 只留**一个**动词的两条（辞书形 + 连用形），别的动词 / 别的活用形都不列。
+         *
+         * 有这个必要：`掻く` 之外还能探出 `掻ける`、`切る` 之外还有 `切れる`、
+         * `奏す` 和 `奏でる` —— 同一个字能探出好几个动词，全列出来又是一屏噪音。
+         * 挑法：
+         *   1. 这个字有训读时，只认读法以训读开头的那个（奏 → かな 而不是 そう）；
+         *   2. 再只留第一个动词的那一对（它的辞书形和连用形）。
+         */
+        var kun = [];
+        try {
+          if (typeof WKKanjiReadings !== "undefined" && WKKanjiReadings.kunOf) kun = WKKanjiReadings.kunOf(word) || [];
+        } catch (eKun) {
+          kun = [];
+        }
+        var picked = [];
+        var firstLabel = null;
         for (var wq = 0; wq < words.length; wq++) {
           var it = words[wq];
-          if (it && it.kana) base.push({ kana: it.kana, label: it.label || it.kana });
+          if (!it || !it.kana) continue;
+          if (kun.length) {
+            var okKun = false;
+            for (var ki = 0; ki < kun.length; ki++) {
+              if (it.kana.indexOf(hiraOnly(kun[ki])) === 0) {
+                okKun = true;
+                break;
+              }
+            }
+            if (!okKun) continue;
+          }
+          // 辞书形那条 kana 比 label 短（か / かく），用它认出"换到下一个动词了"
+          var dictStyle = it.kana !== it.label;
+          if (dictStyle) {
+            if (firstLabel == null) firstLabel = it.label;
+            else if (it.label !== firstLabel) break;
+          }
+          picked.push({ kana: it.kana, label: it.label || it.kana });
         }
+        for (var pq = 0; pq < picked.length; pq++) base.push(picked[pq]);
         base = dedupe(base);
       }
       /*

@@ -893,6 +893,8 @@ test("单字词头读法：掻 かき、切 きり、奏 かなでる 都要能�
   const kas = pick("掻");
   assert.ok(kas.indexOf("か|かく") >= 0, "掻 要有辞书形 か(く)：" + JSON.stringify(kas));
   assert.ok(kas.indexOf("かき|かき") >= 0, "掻 要有连用形 かき：" + JSON.stringify(kas));
+  // 其他活用形不许列（かけ / かこ / かか）
+  assert.ok(kas.indexOf("かけ|かけ") < 0 && kas.indexOf("かこ|かこ") < 0, "不许列其他活用形：" + JSON.stringify(kas));
   const kiri = pick("切");
   assert.ok(kiri.indexOf("き|きる") >= 0, "切 要有辞书形 き(る)：" + JSON.stringify(kiri));
   assert.ok(kiri.indexOf("きり|きり") >= 0, "切 要有连用形 きり：" + JSON.stringify(kiri));

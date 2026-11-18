@@ -1323,6 +1323,7 @@
     if (wordCache.has(ch)) return wordCache.get(ch);
     var d = deps();
     var out = [];
+    var verbs = [];
     var seen = {};
     var toKata = function (t) {
       return String(t == null ? "" : t).replace(/[\u3041-\u3096]/g, function (c) {
@@ -1346,6 +1347,12 @@
          * `切く` 这种它只会切成 切 + く —— 后者的读音是 セツ，跟送假名没关系。
          */
         if (String(t0.surface_form || "") !== ch + tail) continue;
+        /*
+         * 只要**辞书形**：`掻く` 的 basic_form 就是它自己，`掻け` / `掻か` 的 basic_form
+         * 是 `掻く` —— 那些是同一个词的其他活用形，不该一个个列出来（用户明确要求省略）。
+         */
+        var baseForm = String(t0.basic_form || t0.surface_form || "");
+        if (baseForm !== String(t0.surface_form || "")) continue;
         var rd = String(t0.reading || t0.pronunciation || "");
         if (!rd) continue;
         if (rd.slice(-tail.length) !== toKata(tail)) continue;
@@ -1369,20 +1376,49 @@
         var stemKata = rd.slice(0, rd.length - tail.length);
         if (!/^[\u30A1-\u30F6\u30FC]{1,4}$/.test(stemKata)) continue;
         var stem = toHira(stemKata);
-        var pairs = [{ kana: stem, label: toHira(rd) }]; // 辞书形：か(く)
+        var full = toHira(rd);
+        /*
+         * 一个辞书形只列两条，别的活用形一律不列（用户要求省略）：
+         *   辞书形  掻く → か(く)   （读音 か 落在汉字上，送假名放括号）
+         *   连用形  掻く → かき     （整个读音都留着）
+         */
+        var pairList = [{ kana: stem, label: full }];
         if (renyou) {
-          var renyouKana = stem + renyou; // 连用形：かき（整个读音都留着）
-          pairs.push({ kana: renyouKana, label: renyouKana });
+          var renyouKana = stem + renyou;
+          pairList.push({ kana: renyouKana, label: renyouKana });
         }
-        for (var pi = 0; pi < pairs.length; pi++) {
-          var pr = pairs[pi];
-          var key = pr.kana + "\u0004" + pr.label;
-          if (seen[key]) continue;
-          seen[key] = 1;
-          out.push({ kana: pr.kana, label: pr.label });
-        }
-        if (out.length >= 8) break;
+        verbs.push({ stem: stem, pairs: pairList });
+        if (verbs.length >= 8) break;
       }
+    }
+    /*
+     * 同一个字能探出好几个动词（掻く / 掻ける、切る / 切れる、そうす / 奏でる），
+     * 全列出来又是一屏噪音 —— 只留**一个**动词的两条。
+     *
+     * 挑法：这个字有训读时优先读法以训读开头的那个（奏 → かな 而不是 そう），
+     * 没有训读（掻 在汉字表里一条都没有）就取第一个探到的。
+     */
+    var kun = [];
+    try {
+      var tbl = typeof WKKanjiReadings !== "undefined" ? WKKanjiReadings : null;
+      if (tbl && tbl.kunOf) kun = tbl.kunOf(ch) || [];
+    } catch (eKun) {
+      kun = [];
+    }
+    var chosen = null;
+    if (kun.length) {
+      for (var vi = 0; vi < verbs.length && !chosen; vi++) {
+        for (var ki = 0; ki < kun.length; ki++) {
+          if (verbs[vi].stem.indexOf(toHira(kun[ki])) === 0) {
+            chosen = verbs[vi];
+            break;
+          }
+        }
+      }
+    }
+    if (!chosen) chosen = verbs[0] || null;
+    if (chosen) {
+      for (var pi = 0; pi < chosen.pairs.length; pi++) out.push(chosen.pairs[pi]);
     }
     wordCache.set(ch, out);
     return out;
