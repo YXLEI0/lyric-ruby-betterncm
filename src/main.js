@@ -2172,6 +2172,13 @@
     return el;
   }
 
+  /*
+   * 这一次保存是从哪儿来的（chips / enter / merge / reset / free）。
+   * 排障用：真机上出现过"改一处，别的读音被存成留空"，光看 at/word/kana 分不出
+   * 是点了候选按钮、按了回车，还是合并按钮，所以把来源一起记进诊断。
+   */
+  var fixSrc = "enter";
+
   function saveInlineFix(lineText, at, word, kana) {
     if (!lineText || !word) return;
     /*
@@ -2199,7 +2206,7 @@
      * 把这几项一起带走，一眼能看出来是哪一种。
      */
     try {
-      noteEditDiag({ line: lineText, word: word, kana: kana == null ? "" : kana, at: at });
+      noteEditDiag({ line: lineText, word: word, kana: kana == null ? "" : kana, at: at, src: fixSrc });
     } catch (eEd) {
       /* 排障记录失败不影响保存 */
     }
@@ -3283,6 +3290,7 @@
       ev.preventDefault();
       ev.stopPropagation();
       closeEditor();
+      fixSrc = "reset";
       saveInlineFix(lineText, span.at, span.word, null);
     });
     wrap.appendChild(resetBtn);
@@ -3326,6 +3334,7 @@
             ev.stopPropagation();
             var val = kanaByConfig(reading);
             box.value = val;
+            fixSrc = "chip";
             saveInlineFix(lineText, span.at, span.word, val);
             markVariant(reading);
             try {
@@ -3423,6 +3432,7 @@
             return;
           }
         }
+        fixSrc = "enter";
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {
@@ -3436,9 +3446,22 @@
         closeEditor();
       }
     });
-    // 点到别处就关掉
-    box.addEventListener("blur", function () {
-      setTimeout(closeEditor, 0);
+    /*
+     * 点到编辑器**外面**才关掉。
+     *
+     * 以前监听的是主输入框的 blur —— 逐字表里那个"自己填读音"的输入框一被点，
+     * 主框就失焦，编辑器当场关掉，根本键不进去（用户报「点击输入框窗口直接没了」）。
+     * 现在监听整个编辑器的 focusout，只要焦点还在编辑器里就不关。
+     */
+    wrap.addEventListener("focusout", function (ev) {
+      var to = ev && ev.relatedTarget;
+      if (to && wrap.contains(to)) return;
+      setTimeout(function () {
+        if (editingEl !== wrap) return;
+        var active = document.activeElement;
+        if (active && wrap.contains(active)) return;
+        closeEditor();
+      }, 0);
     });
     (document.body || document.documentElement).appendChild(wrap);
     editingEl = wrap;
@@ -5162,6 +5185,27 @@
           if (itk.start >= cands[j].start) continue;
           if (!sameKana(itk.kana, cands[j].kana)) continue;
           narrowInline.push(itk);
+          /*
+           * 让出底字的同时**括号里的读音还得藏起来**。
+           *
+           * 真机：`怒れる人(ラングラー)` 网站只把 `人` 标成 ラングラー，我们让给它之后，
+           * 自己那条（含括号）被丢掉，括号就整个露在屏幕上（用户报「这个ラングラー没省略」）。
+           * 这里补一条只负责"藏"的 token，范围是当前 token 尾部那段括号。
+           */
+          try {
+            var segTxt = String(line || "").slice(itk.start, itk.end);
+            var parenAt = segTxt.search(/[（(]/);
+            if (parenAt > 0) {
+              out.push({
+                text: segTxt.slice(parenAt),
+                start: itk.start + parenAt,
+                end: itk.end,
+                hide: true,
+              });
+            }
+          } catch (eParen) {
+            /* 藏不了就算了，宁可露出括号也不乱注 */
+          }
           break;
         }
       }
@@ -5918,6 +5962,7 @@
       at: row.at,
       word: row.word,
       kana: row.kana,
+      src: row.src || "",
       // 起点和底字对不对得上（对不上就等于保存了一条永远匹配不到的记录）
       matches: String(row.line || "").substr(row.at, String(row.word || "").length) === String(row.word || ""),
     });

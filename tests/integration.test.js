@@ -7413,6 +7413,35 @@ test("中 的候选里要有 じゅう（一日中 / 世界中）", async () => 
   assert.ok(chips.indexOf("じゅう") >= 0, "中 的候选要有 じゅう：" + JSON.stringify(chips));
 });
 
+test("改一处的读音，不许把同一行别的读音带走（神 → こう 之后 回避 还在）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>神回避しちゃってなんて</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 神: "カミ", 回避: "カイヒ", しちゃってなんて: "シチャッテナンテ" })
+  );
+  await env.runLoad();
+  await sleep(600);
+  const p = env.document.querySelector("ul.lyric li p");
+  const byWord = (w) =>
+    Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "").trim() === w)[0];
+  const pairs = () => Array.from(p.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.ok(byWord("神"), "神 要注上音：" + p.innerHTML);
+  assert.ok(byWord("回避"), "回避 要注上音：" + p.innerHTML);
+
+  byWord("神").dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(60);
+  const input = env.document.querySelector(".wk-edit-box input.wk-edit");
+  input.value = "こう";
+  input.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+  const now = pairs();
+  assert.ok(now.some((x) => x[0] === "神" && x[1] === "こう"), "神 要换成 こう：" + JSON.stringify(now));
+  assert.ok(now.some((x) => x[0] === "回避"), "回避 的读音不许消失：" + JSON.stringify(now));
+});
+
 test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
