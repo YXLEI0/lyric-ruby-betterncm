@@ -2472,6 +2472,14 @@
     });
   }
 
+  /**
+   * 补充读音：常用漢字表里没列、但歌词里真会唱的读法。
+   *
+   * `中` 只有 ちゅう，没有 じゅう（一日中 / 世界中 的 じゅう）——
+   * 连浊规则也变不出来（ちゅう → ぢゅう 是错的），只能手写。
+   */
+  var EXTRA_KANJI_READINGS = { 中: ["じゅう"] };
+
   /** 连浊 / 半浊（模块级）：首字变音，编辑器两处都要用 */
   var VOICE_OF = {
     か: "が", き: "ぎ", く: "ぐ", け: "げ", こ: "ご",
@@ -2566,6 +2574,14 @@
    * `{kana, label}` —— kana 是注音存的词干读音，label 是按钮上显示的整个词读音。
    */
   function editorVariants(word, lineText, at) {
+    /*
+     * 叠字符（々 / ゝ / ヽ）：它自己没有读音表，读的就是前一个汉字。
+     * 双击它时把前一个字的候选整套借过来（`星々` 的 々 也就有 ほし / せい 了）。
+     */
+    if (/^[々ゝゞヽヾ]+$/.test(String(word == null ? "" : word)) && at > 0) {
+      var prevCh = String(lineText == null ? "" : lineText).charAt(at - 1);
+      if (prevCh && prevCh !== word) return editorVariants(prevCh, lineText, at - 1);
+    }
     // 全角数字也按半角查表（`４` 和 `4` 是同一组候选）
     var norm = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
       return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
@@ -2654,7 +2670,9 @@
         if (VOICE_MAP[head]) add(VOICE_MAP[head] + str.slice(1), "（浊）");
         if (SEMI_MAP[head]) add(SEMI_MAP[head] + str.slice(1), "（半浊）");
       }
-      var on = WKKanjiReadings.onOf(single);
+      var on = (WKKanjiReadings.onOf(single) || []).concat(
+        Object.prototype.hasOwnProperty.call(EXTRA_KANJI_READINGS, single) ? EXTRA_KANJI_READINGS[single] : []
+      );
       var kun = WKKanjiReadings.kunOf(single);
       var i;
       for (i = 0; i < on.length; i++) add(on[i], "（音）");
@@ -2974,6 +2992,9 @@
     } catch (e) {
       return out;
     }
+    if (Object.prototype.hasOwnProperty.call(EXTRA_KANJI_READINGS, ch)) {
+      on = on.concat(EXTRA_KANJI_READINGS[ch]);
+    }
     for (var i = 0; i < on.length; i++) add(on[i]);
     for (i = 0; i < kun.length; i++) add(kun[i]);
     // 促音便（一 いち → いっ）和连浊 / 半浊（手 て → で、花 はな → ばな / ぱな）
@@ -3031,17 +3052,21 @@
     for (i = 0; i < chars.length; i++) {
       /*
        * 假名那几行是"固定的读法"（掻き 的 き、奏で 的 で），只显示、不需要选。
-       * 汉字行查不到任何读音时才放弃整张表 —— 一张缺字的表拼出来一定是半截词。
        */
       if (!/[\u4E00-\u9FFF]/.test(chars[i])) {
         rows.push({ ch: chars[i], choices: [hiraOnly(chars[i])], pick: hiraOnly(chars[i]), fixed: true });
         continue;
       }
       var choices = charReadingChoices(chars[i]);
-      if (!choices.length) return null;
-      rows.push({ ch: chars[i], choices: choices, pick: null });
+      /*
+       * 词典里一个读音都查不到的字（表外字 / 人名用字）也给一行：留个输入框自己填。
+       * 以前这里是 `return null`，整张表都不出 —— 于是 `掻痒` 这种词里的字根本改不了。
+       */
+      rows.push({ ch: chars[i], choices: choices, pick: null, free: !choices.length });
     }
-    var aligned = alignPicks(rows, current);
+    var anyFree = rows.some ? rows.some(function (r) { return r.free; }) : false;
+    for (i = 0; i < rows.length; i++) if (rows[i].free) anyFree = true;
+    var aligned = anyFree ? null : alignPicks(rows, current);
     if (aligned) {
       for (i = 0; i < rows.length; i++) rows[i].pick = aligned[i];
     }
@@ -3092,6 +3117,41 @@
           fixed.style.opacity = ".55";
           fixed.style.fontSize = "12px";
           line.appendChild(fixed);
+          host.appendChild(line);
+          return;
+        }
+        if (row.free) {
+          /*
+           * 词典里读不出来的字：给一个输入框自己填（假名）。填完跟着别的行一起拼，
+           * 回车才存 —— 以前这种词整张表都不出，等于这一处永远改不了。
+           */
+          var freeInput = document.createElement("input");
+          freeInput.type = "text";
+          freeInput.className = "wk-edit-char-free";
+          freeInput.setAttribute("data-row", String(idx));
+          freeInput.placeholder = "读音";
+          freeInput.title = "「" + row.ch + "」的读音（假名），填完回车保存";
+          freeInput.style.fontSize = "12px";
+          freeInput.style.width = "5em";
+          freeInput.style.padding = "0 4px";
+          freeInput.addEventListener("input", function () {
+            row.pick = hiraOnly(String(freeInput.value || "").replace(/\s+/g, ""));
+            onChange(compose());
+          });
+          freeInput.addEventListener("keydown", function (ev) {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              ev.stopPropagation();
+              // 让主输入框接管回车（那边才是"保存"的那条路）
+              box.value = compose();
+              try {
+                box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+              } catch (eEnter) {
+                /* 派发不出去就让用户自己按回车 */
+              }
+            }
+          });
+          line.appendChild(freeInput);
           host.appendChild(line);
           return;
         }
@@ -3609,6 +3669,31 @@
   function lineLooksJapanese(line) {
     if (!line) return songKind() !== "zh" && songLooksJapanese();
     if (RE_KANA_ANY.test(line)) return true;
+    /*
+     * 整首是日语歌时，**没有假名的汉字行也按日语处理**。
+     *
+     * 真机：`無能無能無能` 被注成 ウ ネン ウ ネン（普通话），因为下面那条
+     * "没有假名就先看是不是中文行" 在日语歌里也生效了 —— 可 `無能` 在日语里
+     * 就是 むのう，同一句歌里到处都是假名（ワンパン / ラヴィラヴィチュウ）。
+     * 中文行只在**整首不是日语歌**时才认（那种歌里夹中文行的问题另有测试守着）。
+     */
+    var kind0 = songKind();
+    if (kind0 === "ja") {
+      /*
+       * 日语歌里没有假名的汉字行：默认按日语（`無能` 是 むのう）。
+       *
+       * 但**明显是中文**的行仍然让给中文（日语歌里夹的中文句子：`你的眼睛看见了`）。
+       * 注意判据不能只看 isChineseLine —— `無能無能無能` 里 能 出现两次，
+       * 那条"两个中文虚词"的规矩会把它当成中文行（真机现象：注成 ウ ネン）。
+       * 所以要求"至少有一个字**单独**就能证认中文"（的 / 了 / 不 / 简体字 / 中文标点）。
+       */
+      if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine && WKCnLine.isChineseLine(line)) {
+        for (var ci = 0; ci < line.length; ci++) {
+          if (WKCnLine.isChineseLine(line.charAt(ci))) return false;
+        }
+      }
+      return true;
+    }
     if (typeof WKCnLine !== "undefined" && WKCnLine.isChineseLine) {
       /*
        * 没有假名时先看"是不是中文行"。判据见 core/cn-line.js：

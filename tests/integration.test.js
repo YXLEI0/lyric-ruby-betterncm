@@ -7374,6 +7374,45 @@ test("两个以上汉字的词：每个字的读音都摊开，点几下自由�
   assert.strictEqual(now.querySelector(".wk-rt").textContent, "ひととき", "回车之后要按拼出来的存：" + p.innerHTML);
 });
 
+test("日语歌里没有假名的汉字行也按日语注（無能 → むのう，不是 ウ ネン）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>ワンパン</p></li>
+  <li class="line"><p>無能無能無能</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, annotateHanzi: true } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ ワンパン: "ワンパン", 無能: "ムノウ" }));
+  await env.runLoad();
+  await sleep(600);
+  const ps = env.document.querySelectorAll("ul.lyric li p");
+  const pairs = Array.from(ps[1].querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.ok(pairs.length > 0, "汉字行要注上音：" + ps[1].innerHTML);
+  assert.ok(
+    pairs.every((p) => /[\u3041-\u3096]/.test(p[1])),
+    "要用日语读音（假名），不能是普通话（片假名）：" + JSON.stringify(pairs)
+  );
+  assert.doesNotMatch(ps[1].innerHTML, /ウ|ネン/, "不许出现普通话读音：" + ps[1].innerHTML);
+});
+
+test("中 的候选里要有 じゅう（一日中 / 世界中）", async () => {
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>中</p></li>
+  <li class="line"><p>が</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 中: "チュウ", が: "ガ" }));
+  await env.runLoad();
+  await sleep(600);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "中")[0];
+  assert.ok(ruby, "中 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(80);
+  const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  assert.ok(chips.indexOf("じゅう") >= 0, "中 的候选要有 じゅう：" + JSON.stringify(chips));
+});
+
 test("征け 点「ゆく」→ 征 = ゆ（底字只存词干）", async () => {
   const HTML = `<!doctype html><html><head></head><body>
 <div id="root"><div class="m-lyric"><ul class="lyric">
