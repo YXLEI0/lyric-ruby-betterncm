@@ -6425,6 +6425,76 @@ test("逐字歌词（RNP karaoke）：字后面那个排版空格不许把词拆
   });
 });
 
+test("逐字歌词：IPADIC 没有的汉字词（既読）整词注音，不许按单字乱注", async () => {
+  /*
+   * 真机（ベノム「存在感 既読 ドク 欲しがルル」）：IPADIC 切成 既(スンデ) + 読(读音 *)，
+   * 屏幕上 既 顶着 すんで、読 一点注音都没有。现在这种"相邻单字普通名词里有一个
+   * 完全没读音"的段合成一条，按音读连起来（き + どく）。
+   * 感 是接尾词，不许被并进来（否则注音会横跨两格）。
+   */
+  const toks = {
+    存在: { pos: "名詞", d1: "サ変接続", r: "ソンザイ" },
+    感: { pos: "名詞", d1: "接尾", r: "カン" },
+    既: { pos: "名詞", d1: "一般", r: "スンデ" },
+    読: { pos: "名詞", d1: "一般", r: "*" },
+    欲し: { pos: "形容詞", d1: "自立", r: "ホシ" },
+    が: { pos: "助詞", d1: "接続助詞", r: "ガ" },
+    ルル: { pos: "名詞", d1: "固有名詞", r: "ルル" },
+    ドク: { pos: "名詞", d1: "固有名詞", r: "ドク" },
+  };
+  const tokenizer = {
+    tokenize(text) {
+      const out = [];
+      let i = 0;
+      while (i < text.length) {
+        let hit = null;
+        for (const s of Object.keys(toks)) {
+          if (text.startsWith(s, i)) {
+            hit = s;
+            break;
+          }
+        }
+        if (hit) {
+          out.push({ surface_form: hit, reading: toks[hit].r, pronunciation: toks[hit].r, pos: toks[hit].pos, pos_detail_1: toks[hit].d1 });
+          i += hit.length;
+        } else {
+          const ch = text.charAt(i);
+          out.push({ surface_form: ch, reading: ch, pronunciation: ch });
+          i += 1;
+        }
+      }
+      return out;
+    },
+  };
+  const cells = ["存在感", " ", "既読", " ", "ドク", " ", "欲しがルル"];
+  const html = cells
+    .map(
+      (c, i, all) =>
+        '<div class="rnp-karaoke-word is-cjk' +
+        (i < all.length - 1 ? " end-with-space" : "") +
+        '"><span>' +
+        c +
+        (i < all.length - 1 ? " " : "") +
+        "</span></div>"
+    )
+    .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${html}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(tokenizer);
+  await env.runLoad();
+  await sleep(500);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const got = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [r.childNodes[0].nodeValue, r.querySelector(".wk-rt").textContent]);
+  assert.deepStrictEqual(
+    got,
+    [["存在", "そんざい"], ["感", "かん"], ["既読", "きどく"], ["欲", "ほ"]],
+    "既読 要整词注 きどく、感 不许被吞：" + JSON.stringify(got) + " / " + root.innerHTML
+  );
+});
+
 test("逐字歌词（RNP karaoke）：括号读音整段藏起来、叠字符跟着前一个字读", async () => {
   /*
    * 逐字层一个字一个文本节点，括号读音（`(セカイ)`）横跨好几个节点。

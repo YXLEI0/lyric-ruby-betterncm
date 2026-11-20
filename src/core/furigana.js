@@ -480,6 +480,78 @@
     return list;
   }
 
+  /*
+   * IPADIC 切不开的汉字词：`既読` 被切成 既 / 読，而且 読 连读音都没有
+   * （真机：既読 注成了 すんで，読 一点注音都没有）。
+   *
+   * 判据收得很窄，只认这四条同时成立：
+   *   1. 相邻的 2~3 个 token 都是「单字汉字名词」；
+   *   2. 里面至少一个 token 完全没有假名读音（IPADIC 给 * 的那种）；
+   *   3. 每个字都有音读（WKKanjiReadings）；
+   *   4. 整段没有被数字 / 空格 / 假名打断（token 本来就是连着的）。
+   * 这时基本可以断定是词典里没有的汉字词，按"汉字词 = 音读连起来"合成一条
+   * （き + どく = きどく）。带送假名的（掻鳴らせ 的 鳴ら 是动词）、
+   * 每个字本来就有读音的（一人）都不动，行为跟以前一样。
+   */
+  var RE_ONE_KANJI = /^[\u4E00-\u9FFF]$/;
+
+  function hasKanaReading(t) {
+    return !!t.reading && t.reading !== "*" && /[\u3041-\u3096\u30A1-\u30FA]/.test(t.reading);
+  }
+
+  function mergeBareKanji(list) {
+    var tbl = typeof WKKanjiReadings !== "undefined" ? WKKanjiReadings : null;
+    if (!tbl || !tbl.onOf || !list || list.length < 2) return list;
+    /*
+     * 只认"普通名词"的单字：接尾（感 / 性 / 化）、固有名詞、代名詞 都不参与 ——
+     * 接尾词一律是前一个词的一部分，拉进来就会把上一个词一起吞掉
+     * （`存在感 既読` 曾经合成 `感既読` = かんきどく，注音横跨两格）。
+     */
+    function plainNoun(t) {
+      if (!t || t.number || t.pos !== "名詞") return false;
+      var d1 = t.pos_detail_1;
+      return !d1 || d1 === "一般" || d1 === "サ変接続";
+    }
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var run = [];
+      var j = i;
+      while (j < list.length && run.length < 3 && plainNoun(list[j]) && RE_ONE_KANJI.test(String(list[j].surface_form || ""))) {
+        run.push(list[j]);
+        j++;
+      }
+      if (run.length < 2) {
+        out.push(list[i]);
+        continue;
+      }
+      var bare = 0;
+      var on = [];
+      var bad = false;
+      for (var k = 0; k < run.length; k++) {
+        if (!hasKanaReading(run[k])) bare++;
+        var pick = tbl.onOf(run[k].surface_form);
+        if (!pick || !pick.length) {
+          bad = true;
+          break;
+        }
+        on.push(pick[0]);
+      }
+      if (bad || !bare) {
+        out.push(list[i]);
+        continue;
+      }
+      out.push({
+        surface_form: run.map(function (t) { return t.surface_form; }).join(""),
+        reading: on.join(""),
+        pronunciation: on.join(""),
+        pos: "名詞",
+        pos_detail_1: "一般",
+      });
+      i = j - 1;
+    }
+    return out;
+  }
+
   /**
    * 一行歌词的注音片段。
    *
@@ -558,7 +630,7 @@
       return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
     });
     try {
-      segs = d.core.tokensToSegments(d.tokenizer.tokenize(tokText), { kana: kana });
+      segs = d.core.tokensToSegments(mergeBareKanji(d.tokenizer.tokenize(tokText)), { kana: kana });
     } catch (e) {
       segs = null;
     }

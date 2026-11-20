@@ -824,6 +824,67 @@ test("音译兜底：会被唱出来的符号（×）也注上", () => {
   );
 });
 
+test("词典缺词的汉字词：既読 按音读合成 きどく（不许切成 既=すん + 読=没读音）", () => {
+  /*
+   * 真机（ベノム「存在感 既読 ドク 欲しがルル」）：IPADIC 没有 既読 这个词，
+   * 切成 既(名詞・一般・スンデ) + 読(名詞・一般・读音是 *)，结果屏幕上
+   * 既 顶着一个 すんで，読 一点注音都没有。
+   *
+   * 现在：相邻的单字普通名词里只要有一个完全没读音，就按"汉字词 = 音读连起来"
+   * 合成一条（き + どく）。接尾词（感）不参与，免得把上一个词吞掉。
+   */
+  const toks = {
+    存在: { pos: "名詞", d1: "サ変接続", r: "ソンザイ" },
+    感: { pos: "名詞", d1: "接尾", r: "カン" },
+    既: { pos: "名詞", d1: "一般", r: "スンデ" },
+    読: { pos: "名詞", d1: "一般", r: "*" },
+    一: { pos: "名詞", d1: "一般", r: "イチ" },
+    人: { pos: "名詞", d1: "一般", r: "ヒト" },
+    花: { pos: "名詞", d1: "一般", r: "ハナ" },
+    火: { pos: "名詞", d1: "一般", r: "ヒ" },
+  };
+  const tok = {
+    tokenize(text) {
+      const out = [];
+      let i = 0;
+      while (i < text.length) {
+        let hit = null;
+        for (const s of Object.keys(toks)) {
+          if (text.startsWith(s, i)) {
+            hit = s;
+            break;
+          }
+        }
+        if (hit) {
+          out.push({ surface_form: hit, reading: toks[hit].r, pronunciation: toks[hit].r, pos: toks[hit].pos, pos_detail_1: toks[hit].d1 });
+          i += hit.length;
+        } else {
+          const ch = text.charAt(i);
+          out.push({ surface_form: ch, reading: ch, pronunciation: ch });
+          i += 1;
+        }
+      }
+      return out;
+    },
+  };
+  const W = newWindow().window;
+  W.WKFurigana.setTokenizer(tok);
+  const pairs = (s2) => Array.from(W.WKFurigana.tokens(s2) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+
+  assert.deepStrictEqual(pairs("既読"), [["既読", "きどく"]], "缺读音的汉字词要合起来注：" + JSON.stringify(pairs("既読")));
+  assert.deepStrictEqual(
+    pairs("存在感既読"),
+    [["存在", "そんざい"], ["感", "かん"], ["既読", "きどく"]],
+    "接尾的 感 不许被并进 既読：" + JSON.stringify(pairs("存在感既読"))
+  );
+  // 每个字本来就有读音的不动（花 / 火 是两条，不是一条 はなひ）
+  assert.deepStrictEqual(
+    pairs("花火"),
+    [["花", "はな"], ["火", "ひ"]],
+    "两个字都有读音时不许合：" + JSON.stringify(pairs("花火"))
+  );
+});
+
 test("括号里是唱歌人的名字时不当读音（Jump!! 限界超え(みのり)）", () => {
   /*
    * 真机：`Jump!! 限界超え(みのり)` —— 括号是"这句谁唱的"（实乃里），

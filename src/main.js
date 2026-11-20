@@ -6031,8 +6031,25 @@
     var dom = [];
     try {
       var lines = document.querySelectorAll(".rnp-lyrics-line");
-      for (var i = 0; i < lines.length && i < 40; i++) {
-        var el = lines[i];
+      /*
+       * 只带当前句附近的那些行。
+       *
+       * 以前是从文档第一行开始抓 40 行 —— RNP 把整首歌的行都渲染出来了，当前句
+       * 往往排在第 47 行往后，导出来的永远是歌开头那几句（用户报「这句没有标注，
+       * 已导出诊断」，结果文件里根本没有那一句）。现在先按 offset 取 ±8 行
+       * （当前句在其中，还带 html），不够 40 行再按文档顺序补齐。
+       */
+      var near = [];
+      var far = [];
+      for (var i = 0; i < lines.length; i++) {
+        var offRaw = lines[i].getAttribute("offset");
+        var offNum = offRaw == null || offRaw === "" ? NaN : parseInt(offRaw, 10);
+        if (isNaN(offNum) || Math.abs(offNum) <= 8) near.push(lines[i]);
+        else far.push(lines[i]);
+      }
+      var picked = near.concat(far);
+      for (var i2 = 0; i2 < picked.length && i2 < 40; i2++) {
+        var el = picked[i2];
         var t = "";
         try {
           t = state.annotator ? state.annotator.textOf(el) : el.textContent;

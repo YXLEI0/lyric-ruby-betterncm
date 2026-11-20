@@ -1754,7 +1754,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
       var annLen = String(gloss).length;
       var over = annLen * 0.6 - baseLen;
       if (over > 0.3) {
-        var pad = Math.min(over * 0.5, 0.5);
+        // 真机反馈：0.5em 还是把底字撑散，只要"别贴死"就够了 —— 封顶 0.1em
+        var pad = Math.min(over * 0.25, 0.1);
         try {
           ruby.style.marginRight = pad.toFixed(2) + "em";
         } catch (eM) {
