@@ -1745,18 +1745,19 @@ function buildRuby(base, gloss, provisional, source, flat) {
         ruby.appendChild(span);
       }
       /*
-       * 盒子的最小宽度：注音比底字宽时按注音算（汉字 1em、注音 60% 字号）。
-       * 配合样式里的 `display:inline-block` —— 原生 ruby 盒子只按底字定宽，
-       * 注音会溢出到隔壁词的注音上（真机：`人(ラングラー)` 挤成一片）。
-       * 定宽之后注音有地方待，词与词之间也就有了间距。
+       * 注音比底字宽时，原生 ruby 的盒子只按底字定宽，注音会溢出到隔壁词的注音上
+       * （真机：`人(ラングラー)` 挤成一片）。改成 inline-block 会让 Chromium 91
+       * 把注音排到字下面（试过两版都这样），所以**只加一点点右外边距**：
+       * 不动 ruby 排版、注音照旧在内核给的上方位置，只是把后面的字推开一点。
        */
       var baseLen = String(base).length;
       var annLen = String(gloss).length;
-      var wantW = Math.max(baseLen, annLen * 0.6);
-      if (wantW > baseLen + 0.05) {
+      var over = annLen * 0.6 - baseLen;
+      if (over > 0.3) {
+        var pad = Math.min(over * 0.5, 0.5);
         try {
-          ruby.style.minWidth = wantW.toFixed(2) + "em";
-        } catch (eW) {
+          ruby.style.marginRight = pad.toFixed(2) + "em";
+        } catch (eM) {
           /* 设不上就算了，最多是挤一点 */
         }
       }
@@ -4032,30 +4033,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
        * 逐字歌词里每个字是独立 <span>，ruby 也不许换行，否则会被挤成两截。
        */
       "  white-space: nowrap;",
-      "}",
-      /*
-       * 注音比底字宽很多时，原生 ruby 的盒子只按**底字**定宽，注音往两边溢出去，
-       * 相邻两个词的注音就贴在一起（真机：`1(ワン) 2(トゥー)`、`人(ラングラー)`）。
-       *
-       * 这里把真 ruby 改成 `inline-block`（盒子宽度由我们写在元素上的 min-width 决定，
-       * 见 buildRuby），同时把注音**绝对定位到底字上方** ——
-       * Chromium 91 在 inline-block 下会把 <rt> 当普通行内内容排到底字后面，
-       * 所以不能依赖内核的 ruby 排版，必须自己放。
-       */
-      "ruby.wk-ruby {",
-      "  display: inline-block;",
-      "  position: relative;",
-      "  text-align: center;",
-      "  vertical-align: baseline;",
-      "}",
-      "ruby.wk-ruby > rt.wk-rt, ruby.wk-ruby > .wk-rt {",
-      "  position: absolute;",
-      "  left: 50%;",
-      "  bottom: 100%;",
-      "  transform: translateX(-50%);",
-      "  -webkit-transform: translateX(-50%);",
-      "  display: block;",
-      "  pointer-events: none;",
       "}",
       "rt.wk-rt, .wk-rt {",
       // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
