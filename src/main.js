@@ -5745,16 +5745,25 @@
       for (var r = 0; r < runs.length; r++) total += runs[r].len;
       if (!total) continue;
       var kana = String(t.kana || "");
-      var pos = 0;
+      /*
+       * 按"已经分出去多少字 / 一共多少字"排队切读音，每一截拿 [上一个边界, 这个边界)。
+       *
+       * 以前第一截按字数取（单字就取 1 个假名），最后一截拿剩下的 ——
+       * `嫌　嫌　嫌`（3 个字、いやいやいや）被切成 い / や / いやいや，
+       * 屏幕上是「い・や・いやいや」，读起来全错（真机截图）。
+       * 现在按累计字符数取整：6 个假名 3 个字 → 2 / 2 / 2。
+       */
+      var kanaLen = kana.length;
+      var done = 0;
+      var prev = 0;
       for (var q = 0; q < runs.length; q++) {
         var run = runs[q];
-        var piece;
-        if (q === runs.length - 1) piece = kana.slice(pos);
-        else {
-          var take = run.len >= 2 && kana.length >= total ? Math.round((kana.length * run.len) / total) : run.len;
-          piece = kana.slice(pos, pos + take);
-          pos += piece.length;
-        }
+        done += run.len;
+        var cut = q === runs.length - 1 ? kanaLen : Math.round((kanaLen * done) / total);
+        if (cut < prev) cut = prev;
+        if (cut > kanaLen) cut = kanaLen;
+        var piece = kana.slice(prev, cut);
+        prev = cut;
         var one = {
           text: seg.substr(run.from, run.len),
           start: t.start + run.from,
@@ -6103,6 +6112,11 @@
         wrapLines: config.wrapLines,
       },
       tokens: lineDiag.slice(),
+      /*
+       * 学到的"括号里是唱歌人的名字"（这类括号不当读音，原样留着）。
+       * 真机排障要看的：`(カラ)` 这种喊话读音被误判成名字时，括号就露在屏幕上。
+       */
+      learned: { nameTags: Object.keys(parenTags), seen: parenSeen },
       edits: editDiag.slice(),
       gaps: gapDiag.slice(),
       wrap: state.annotator && state.annotator.diagLines ? state.annotator.diagLines() : [],

@@ -397,10 +397,42 @@
   }
 
   /**
-   * 这一行里的括号读音：[{ start, end, base, kana, hideStart, hideEnd }]
+   * 括号读音：[{ start, end, base, kana, hideStart, hideEnd }]
    *
    * 只看括号自己 —— 括号里写的读法对左边的哪一段起作用，按上面的收窄规则定。
    */
+  var CLOSE_CHARS = /[\u300D\u300F\u3011\u3015\u300B\u3009\u201D\u2019]/;
+  var OPEN_OF = {
+    "\u300D": "\u300C",
+    "\u300F": "\u300E",
+    "\u3011": "\u3010",
+    "\u3015": "\u3014",
+    "\u300B": "\u300A",
+    "\u3009": "\u3008",
+    "\u201D": "\u201C",
+    "\u2019": "\u2018",
+  };
+
+  /**
+   * 括号前面是不是"一对空引号"（`「　　」(カラ)`）。
+   *
+   * 普通写法里引号不算底字（`「ド」(カラ)` 只注 ド），但只要引号**里面只有空格**
+   * （`「　　」`、`「 」`），那对引号就是作者留的"空位"，读音指的就是它。
+   * 真机（バグ「SAD　SAD　突っ伏して「　　」(カラ)」）：引号里的空格把底字收窄
+   * 逻辑卡死，网站那条 `「」` 又只盖住左边一半 —— 屏幕上 カラ 全挤在左括号上，
+   * 后面的 `(カラ)` 还明晃晃留着。
+   */
+  function emptyBracketBefore(s, at) {
+    var open = OPEN_OF[s.charAt(at - 1)];
+    if (!open || at < 2) return null;
+    for (var b = at - 2; b >= 0; b--) {
+      var c = s.charAt(b);
+      if (c === open) return { start: b, end: at, base: s.slice(b, at) };
+      if (!/[ \t\u3000]/.test(c)) return null;
+    }
+    return null;
+  }
+
   function parenReadings(s, tagSet) {
     var list = [];
     if (!s || (s.indexOf("(") < 0 && s.indexOf("（") < 0)) return list;
@@ -414,17 +446,30 @@
       while (q > 0 && /[ \t\u3000]/.test(s.charAt(q - 1))) q--;
       // 藏的范围从"括号（含前面那个空格）"开始 —— 底字往前收的时候不许把它带进去
       var hideFrom = q;
+      var kana = m[1].replace(/[・\s]/g, "");
+      if (!kana) continue;
+      /*
+       * `「　　」(カラ)`：整对空引号就是底字（见 emptyBracketBefore 的说明）。
+       * 这条要在"收尾引号不进底字"那套规则之前走，不然底字会被空格卡成空的。
+       */
+      var quoted = emptyBracketBefore(s, q);
+      if (quoted) {
+        if (tagSet && tagSet[toHira(kana)]) continue;
+        if (isRepeatedSyllables(kana)) continue;
+        // 底字里既没汉字也没假名：只有括号里是片假名才当读音（和 `ド(カラ)` 同一条）
+        if (!/^[\u30A1-\u30FA\u30FC]+$/.test(kana)) continue;
+        list.push({ start: quoted.start, end: quoted.end, base: quoted.base, kana: kana, hideStart: hideFrom, hideEnd: pEnd });
+        continue;
+      }
       /*
        * 括号前面还挡着一个收尾引号 / 书名号时（`「ド」(カラ)`），底字在引号左边。
        * 引号本身不进底字，也不藏（它是歌词的一部分）。
        */
-      while (q > 0 && /[\u300D\u300F\u3011\u3015\u300B\u3009\u201D\u2019]/.test(s.charAt(q - 1))) q--;
+      while (q > 0 && CLOSE_CHARS.test(s.charAt(q - 1))) q--;
       var baseStop = q;
       while (q > 0 && RE_PAREN_BASE_CHAR.test(s.charAt(q - 1))) q--;
       if (q >= baseStop) continue;
       var run = s.slice(q, baseStop);
-      var kana = m[1].replace(/[・\s]/g, "");
-      if (!kana) continue;
       /*
        * 已经认出来"这不是读音，是唱歌人的名字"的括号，直接跳过（见 main.js 的
        * learnParenTags：真机 `Jump!! 限界超え(みのり)`，括号里是这一句谁唱的，

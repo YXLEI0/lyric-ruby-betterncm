@@ -824,6 +824,32 @@ test("音译兜底：会被唱出来的符号（×）也注上", () => {
   );
 });
 
+test("括号读音：空引号对就是底字（「　　」(カラ) 整对注音，括号藏起来）", () => {
+  /*
+   * 真机（バグ「SAD　SAD　突っ伏して「　　」(カラ)」）：引号里是空的，括号写的是
+   * 喊出来的读音。以前底字收窄逻辑被引号里的空格卡住、一个字都不认，结果是网站那条
+   * `「」` 只盖住左半个（カラ 全挤在左括号上）、后面的 (カラ) 还露在屏幕上。
+   * 现在：整对空引号就是底字，读音照括号里那个，括号整段藏起来。
+   */
+  const ctx = newWindow();
+  const W = ctx.window;
+  W.WKFurigana.setTokenizer(fakeTokenizer({ ド: "ド", カラ: "カラ" }));
+  const pairs = (s2) => Array.from(W.WKFurigana.tokens(s2) || [], (t) => [t.text, t.kana || (t.hide ? "HIDE" : "")]);
+
+  assert.deepStrictEqual(
+    pairs("「　　」(カラ)"),
+    [["「　　」", "カラ"], ["(カラ)", "HIDE"]],
+    "整对空引号要一起注音、括号藏起来：" + JSON.stringify(pairs("「　　」(カラ)"))
+  );
+  assert.deepStrictEqual(
+    pairs("SAD SAD 突っ伏して「　　」(カラ)"),
+    [["「　　」", "カラ"], ["(カラ)", "HIDE"]],
+    "行中间也一样：" + JSON.stringify(pairs("SAD SAD 突っ伏して「　　」(カラ)"))
+  );
+  // 引号里**有字**时照旧：引号不进底字，只注里面那一段
+  assert.deepStrictEqual(pairs("「ド」(カラ)"), [["ド", "カラ"], ["(カラ)", "HIDE"]], "引号里有字时底字还是里面的字");
+});
+
 test("词典缺词的汉字词：既読 按音读合成 きどく（不许切成 既=すん + 読=没读音）", () => {
   /*
    * 真机（ベノム「存在感 既読 ドク 欲しがルル」）：IPADIC 没有 既読 这个词，
