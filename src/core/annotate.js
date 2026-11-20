@@ -3980,6 +3980,21 @@ function buildRuby(base, gloss, provisional, source, flat) {
        */
       "  white-space: nowrap;",
       "}",
+      /*
+       * 注音比底字宽很多时（`人` 上顶个 ラングラー），浏览器原生的 ruby 盒子**只按底字
+       * 定宽**，注音往两边溢出去 —— 于是相邻两个词的注音挤在一起，看着比同一个词里的
+       * 注音还紧（真机：`1(ワン) 2(トゥー) 3(スリー)` 那种）。
+       *
+       * 把真 ruby 改成 inline-block：盒子宽度按内容（底字 / 注音里宽的那个）算，
+       * 注音宽就把盒子撑宽，词与词之间自然留出间距。
+       *
+       * 只作用于**真 `<ruby>` 元素**：逐字歌词的词格里是平铺结构（`span.wk-ruby` +
+       * 绝对定位的注音，不占宽度），选择器写 `ruby.wk-ruby` 就不会碰到它。
+       */
+      "ruby.wk-ruby {",
+      "  display: inline-block;",
+      "  text-align: center;",
+      "}",
       "rt.wk-rt, .wk-rt {",
       // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
       "  font-size: " + size + "%;",
