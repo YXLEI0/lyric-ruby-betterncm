@@ -2720,6 +2720,38 @@ function buildRuby(base, gloss, provisional, source, flat) {
      * 发现不了「这行换了」。值清空之后它不占位置，下一轮只要发现它又被写了字，
      * 就知道是换歌/换行，立刻整行还原重注。
      */
+    /**
+     * 注音比底字宽时的"让位"垫片。
+     *
+     * 原生 ruby 的盒子只按**底字**定宽，注音比底字宽会往两边溢出去 —— 相邻两个词的
+     * 注音就贴在一起（真机：`1(ワン) 2(トゥー) 3(スリー)`、`人(ラングラー)`）。
+     *
+     * 不能给 ruby 改 `display:inline-block`（Chromium 91 会把注音排到字外 / 下面去），
+     * 所以在 ruby 后面塞一个空的行内块，宽度按"注音宽 - 底字宽"的一半算 ——
+     * 正好补上注音溢出的那一侧，词与词之间就恢复了间距。
+     *
+     * 只对**普通歌词行**（flat=false）加；逐字歌词的注音本来就不占宽度，
+     * 加了反而会破坏 RNP 的逐字排版。
+     */
+    function spacingFor(base, gloss, nextIsSpace) {
+      if (!base || !gloss) return null;
+      var baseLen = String(base).length;
+      var annLen = String(gloss).length;
+      // 汉字按 1em、注音按 60% 字号估算
+      var over = annLen * 0.6 - baseLen;
+      if (over <= 0.2) return null;
+      // 后面本来就有空格的话，只补一半（空格自己已经让出一截）
+      var w = nextIsSpace ? over * 0.5 : over;
+      if (w > 2.5) w = 2.5;
+      var sp = doc.createElement("span");
+      sp.className = "wk-gap";
+      sp.setAttribute("aria-hidden", "true");
+      sp.style.display = "inline-block";
+      sp.style.width = w.toFixed(2) + "em";
+      sp.style.pointerEvents = "none";
+      return sp;
+    }
+
     function buildWrapEl(segs, cls, keep, flat) {
       var wrap = doc.createElement("span");
       wrap.className = cls;
@@ -2732,6 +2764,16 @@ function buildRuby(base, gloss, provisional, source, flat) {
         else child = doc.createTextNode(seg.text);
         child.__wkOwned = true;
         wrap.appendChild(child);
+        // 注音宽过底字时补一点空白，免得和隔壁词的注音贴在一起
+        if (seg.rt && !flat) {
+          var nextSeg = segs[i + 1];
+          var nextIsSpace = !!(nextSeg && !nextSeg.rt && /^[\s\u3000]/.test(String(nextSeg.text || "")));
+          var gap = spacingFor(seg.text, seg.rt, nextIsSpace);
+          if (gap) {
+            gap.__wkOwned = true;
+            wrap.appendChild(gap);
+          }
+        }
       }
       for (var k = 0; k < keep.length; k++) wrap.appendChild(keep[k].node);
       return wrap;
@@ -3979,21 +4021,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
        * 逐字歌词里每个字是独立 <span>，ruby 也不许换行，否则会被挤成两截。
        */
       "  white-space: nowrap;",
-      "}",
-      /*
-       * 注音比底字宽很多时（`人` 上顶个 ラングラー），浏览器原生的 ruby 盒子**只按底字
-       * 定宽**，注音往两边溢出去 —— 于是相邻两个词的注音挤在一起，看着比同一个词里的
-       * 注音还紧（真机：`1(ワン) 2(トゥー) 3(スリー)` 那种）。
-       *
-       * 把真 ruby 改成 inline-block：盒子宽度按内容（底字 / 注音里宽的那个）算，
-       * 注音宽就把盒子撑宽，词与词之间自然留出间距。
-       *
-       * 只作用于**真 `<ruby>` 元素**：逐字歌词的词格里是平铺结构（`span.wk-ruby` +
-       * 绝对定位的注音，不占宽度），选择器写 `ruby.wk-ruby` 就不会碰到它。
-       */
-      "ruby.wk-ruby {",
-      "  display: inline-block;",
-      "  text-align: center;",
       "}",
       "rt.wk-rt, .wk-rt {",
       // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
