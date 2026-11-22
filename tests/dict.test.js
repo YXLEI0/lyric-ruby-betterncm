@@ -67,6 +67,29 @@ test("生成词表和词典同步：忘了跑 build:dict 会在这里露馅", ()
   );
 });
 
+test("优先级：同一个词在沉淀表与大模型表里读音不同时，词典取沉淀表", () => {
+  /*
+   * 两份表都只做"这个词还没有读音才写"，所以合并顺序就是优先级：沉淀
+   * （真机听歌的上下文，同词两句一致才收）高于大模型（按词频一次生成）。
+   * 这条只能用小场景验证 —— 真实的两份表里碰巧没有同词异读，顺序写反了
+   * 构建产物一个字节都不变，以前就是这么漏过去的（`promote:learned` 里
+   * `updated` 的那批永远进不了词典）。
+   */
+  const { mergeLearnedAndLlm } = require("../tools/build-dict.js");
+  const words = {};
+  const stats = mergeLearnedAndLlm(
+    words,
+    [{ en: "shoo", kana: "シュー" }], // 沉淀表（手改过的读音）
+    { shoo: "ショオ", gimme: "ギミー" }, // 大模型表
+    {}
+  );
+  assert.strictEqual(words.shoo, "シュー", "同一个词两边都有时，沉淀表的读音要赢");
+  assert.strictEqual(words.gimme, "ギミー", "只在大模型表里有的词照收");
+  assert.strictEqual(stats.learnedAdded, 1);
+  assert.strictEqual(stats.llmSkipped, 1, "大模型表里那个词应当被沉淀表挡下");
+  assert.strictEqual(stats.llmAdded, 1);
+});
+
 test("英语复数按英语读音走：-s 不许丢（rules ルールズ / games ゲームズ / lists リスツ）", () => {
   /*
    * 那份"片假名外来语 -> 英文原词"的表里，复数和单数常指向同一个写法，
@@ -196,6 +219,10 @@ test("整首专属读音表（core/songs.js）：键值格式、切分与手工�
   assert.ok(emperror, "the EmpErroR 应当在表里（官方 ジエンペラー）");
   assert.strictEqual(emperror.words.the, "ジ", "这首里 the 是 ジ（默认层会给 ザ）");
   assert.strictEqual(emperror.words.emperror, "エンペラー");
+  // marker 是"歌名读不到时靠歌词认出来"的兜底。手工表里这条写重复过，后一条的
+  // `marker: null` 曾把它盖掉，生成物里就变成 null 了（构建和旧测试都不响）。
+  assert.ok(emperror.marker instanceof RegExp, "the EmpErroR 的 marker 丢了（手工表里重复的条目又把它盖掉了？）");
+  assert.ok(emperror.marker.test("the EmpErroR"), "marker 应该在歌词里命中 EmpErroR");
   const potato = songs.list.find((e) => e.title && e.title.test("potatoになっていく"));
   assert.ok(potato, "potatoになっていく 应当在表里（西文 + 假名混排也能切）");
   assert.strictEqual(potato.words.potato, "ポテト");
@@ -207,4 +234,29 @@ test("整首专属读音表（core/songs.js）：键值格式、切分与手工�
    */
   const wrong = songs.list.find((e) => e.title && e.title.test("夢現妄想世界"));
   assert.strictEqual(wrong, undefined, "夢現妄想世界 不该进整首专属读音表");
+});
+
+test("手工表里同一个 title 重复时保留非空字段（marker 不许被后一条的 null 抹掉）", () => {
+  /*
+   * `the EmpErroR` 在 tools/song-readings-hand.js 里写过两遍，后一条带 `marker: null`。
+   * 生成器以前只做 findIndex -> splice -> push，后者静默覆盖前者，生成物里的 marker
+   * 就变成 null 了 —— 构建、测试都不响，直到有人去查"歌名读不到时怎么认这首歌"。
+   * 这里直接验生成器的合并逻辑：同一个 title 的第二条只补空字段，不覆盖已有的值。
+   */
+  const { mergeHand } = require("../tools/build-song-readings.js");
+  const auto = [
+    { title: "the EmpErroR", marker: null, words: { the: "ザ", emperror: "エンパラー" } },
+    { title: "some other song", marker: null, words: { other: "アザー" } },
+  ];
+  const hand = [
+    { title: "the EmpErroR", marker: "EmpErroR", words: { the: "ジ", emperror: "エンペラー" } },
+    { title: "the EmpErroR", marker: null, words: { emperror: "エンペラー" } }, // 重复的那条
+  ];
+  const out = mergeHand(auto, hand);
+  assert.strictEqual(out.length, 2, "同 title 的自动条目让路，重复的手工条目要并成一条");
+  const hit = out.find((e) => e.title === "the EmpErroR");
+  assert.ok(hit, "手工条目要在结果里");
+  assert.strictEqual(hit.marker, "EmpErroR", "后一条的 marker: null 不许把已有的 marker 抹掉");
+  assert.deepStrictEqual(hit.words, { the: "ジ", emperror: "エンペラー" }, "手工条目整条覆盖自动条目");
+  assert.ok(out.some((e) => e.title === "some other song"), "别的自动条目不受影响");
 });

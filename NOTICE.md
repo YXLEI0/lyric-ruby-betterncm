@@ -2,7 +2,7 @@
 
 本插件由 YXLEI0 维护：https://github.com/YXLEI0/lyric-ruby-betterncm
 
-分发的文件是本仓库 `src/` 下的代码、生成的读音词典（`src/core/dict.js` / `core/hanzi.js`）、一张预览图，
+分发的文件是本仓库 `src/` 下的代码、生成的读音词典（`src/core/dict.js` / `core/hanzi.js` / `core/kanji-readings.js`）、一张预览图，
 以及 `vendor/` 下用于日语振假名的第三方组件（见下面第 0 节）。
 
 ## 0. 振假名的第三方组件 `vendor/`
@@ -17,9 +17,7 @@
 
 振假名完全离线，运行时不请求任何第三方服务。
 
-另外两处来自 [JapaneseFonts](https://github.com/MuttonString/Furigana)（作者 Mutton_String）：
-- `src/core/jp-kanji.js` 里的 544 对「简体 / 繁中特有写法 → 日标汉字」对应表（取自它的 `HANZI` / `KANJI` 两条常量）；
-  这是标准的一对一映射，本插件只用来给振假名取读音，不改显示。
+另外一处来自 [JapaneseFonts](https://github.com/MuttonString/Furigana)（作者 Mutton_String）：
 - 面板里「日文字体」的默认字体栈（`'Yu Gothic UI', 'Yu Gothic', '游ゴシック', 'Meiryo UI', 'Meiryo', 'MS Gothic', 'MS Mincho', 'Microsoft YaHei'`）。
 
 ## 1. 离线读音词典 `src/core/dict.js`
@@ -39,11 +37,23 @@
 - 英文音译规则：兜底, 永远给得出结果, 但会标记为「没把握」;
 - 在线校正：Google 翻译 (`translate.google.cn` 一类接口, en→ja), 只接受纯片假名的返回值。这是一个未公开文档的接口, 可能随时失效、限流或改变行为; 失效时插件自动退回上面三层本地结果, 功能不受影响。使用者需要自行判断在所在地与自身用途下这样做是否合适。
 
-## 2. 开发期依赖
+## 2. 汉字读音表（生成物）
+
+- `src/core/kanji-readings.js`：常用漢字 2136 字的音读 / 训读（单字被切开时列候选读音用）
+  - 生成脚本：`tools/build-kanji-readings.js`（不联网，只把 vendored 的 JSON 编译成 JS）
+  - 数据源：[davidluzgouveia/kanji-data](https://github.com/davidluzgouveia/kanji-data)（MIT License），
+    原始数据在 `tools/vendor/kanji/kanji-jouyou.json`，许可全文见 `tools/vendor/kanji/LICENSE-kanji-data.txt`
+- `src/core/hanzi.js`：汉字 → 片假名读音（一个字一个音节）
+  - 生成脚本：`tools/build-hanzi.js`（`npm run build:hanzi`），拼音到片假名的拼读规则在 `tools/mandarin-kana.js`
+  - 数据源：[pinyin-pro](https://github.com/zh-lx/pinyin-pro)（MIT License）的单字无声调拼音；
+    它是 `devDependencies` 里的构建期依赖，不会被放进 `.plugin` 包
+
+## 3. 开发期依赖
 
 `jsdom` (MIT) 仅用于单元测试 (`devDependencies`), 不会被打进 `.plugin` 包。
+`pinyin-pro` (MIT) 只在生成 `src/core/hanzi.js` 时用（`npm run build:hanzi`，见第 2 节），同样不进包。
 
-## 3. 参考实现
+## 4. 参考实现
 
 - [Leleawa/jp-furigana](https://github.com/Leleawa/jp-furigana)：同生态的「日语歌词振假名」插件。本插件参考了它的 BetterNCM 生命周期写法、设置面板的 `data-k` 绑定结构、`MutationObserver` 记录清理方式, 以及判断内核是否支持 ruby 排版的实测探针。未复制其代码, 但思路来自该项目的公开实现。几个注音插件同时开着时互不打架, 靠的是 `tools/patch-jp-furigana.js` 给它打的共存补丁 (见 README「和另外两个插件共存」)。
 - [MuttonString/Furigana](https://github.com/MuttonString/Furigana) (插件名 JapaneseFonts)：只做「给日文歌换日文字体」。它用整行 innerHTML 里有没有假名判断一首歌是不是日文歌, 会把本插件注出来的片假名当成日文歌的证据, 所以也需要一处共存补丁 (`tools/patch-japanese-fonts.js`, 让它剔掉别家注音再看假名)。未复制其代码。

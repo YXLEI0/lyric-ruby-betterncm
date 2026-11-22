@@ -74,8 +74,13 @@ function vendorEntries() {
   const out = [];
   const base = path.join(ROOT, "vendor");
   if (!fs.existsSync(base)) return out;
+  /*
+   * 每个目录的 readdir 结果都排序：readdir 的顺序跟文件系统走（NTFS 按名字、
+   * ext4 是哈希序），不排的话同一份源码在不同机器上打出的包条目顺序不同 ——
+   * 这和"同一份源码打同一份字节"的承诺冲突（时间戳那部分见 buildEpoch）。
+   */
   const walk = (dir, rel) => {
-    for (const name of fs.readdirSync(dir)) {
+    for (const name of fs.readdirSync(dir).sort()) {
       const full = path.join(dir, name);
       const relName = rel ? rel + "/" + name : name;
       if (fs.statSync(full).isDirectory()) walk(full, relName);

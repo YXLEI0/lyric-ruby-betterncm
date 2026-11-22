@@ -106,9 +106,15 @@
       clearTimeout(flushTimer);
       flushTimer = setTimeout(function () {
         flushTimer = null;
-        dirty = false;
+        /*
+         * 没有 localStorage 就没东西可写，当成写成功处理（老行为）：
+         * 脏标记留着只会让每一批都再排一次写盘，永远排不完。
+         */
+        if (typeof localStorage === "undefined") {
+          dirty = false;
+          return;
+        }
         try {
-          if (typeof localStorage === "undefined") return;
           var now = Date.now();
           var entries = [];
           mem.forEach(function (gloss, word) {
@@ -118,7 +124,19 @@
           var obj = {};
           for (var i = 0; i < entries.length; i++) obj[entries[i][0]] = entries[i][1];
           localStorage.setItem(CACHE_KEY, JSON.stringify(obj));
+          /*
+           * 只有真的写进去了才清脏标记。老代码在 setItem 之前就清，
+           * 而 setItem 会因配额/隐私模式抛错 —— 那之后 catch 里只打日志，
+           * 这一批改动就再也不会写回去了（重启即丢）。
+           */
+          dirty = false;
         } catch (e) {
+          /*
+           * 留着脏标记，等下一次 flushCache。这里刻意不重排定时器：
+           * 写不进去（配额满了）多半不是等一会儿就能好的，自己一直重试
+           * 只会变成"每次失败再排一次"的自激循环 —— 和原来"排一次就不排"一致。
+           */
+          dirty = true;
           log("缓存写入失败（配额？）：", e && e.message);
         }
       }, force ? 0 : 2000);

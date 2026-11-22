@@ -1,7 +1,8 @@
 /*
  * 生成 src/core/songs.js（整首专属读音表）：
  *   1. tools/vendor/sekai/musics.json 里歌名的官方读音，按词切开（自动）；
- *   2. tools/song-readings-hand.js 里的手工条目，同一条歌名两边都有时以手工为准。
+ *   2. tools/song-readings-hand.js 里的手工条目，同一条歌名两边都有时以手工为准
+ *      （手工表内部同 title 重复时保留非空字段，不静默覆盖，见 mergeHand）。
  *
  * 官方读音是整首歌名的（`Beat Eater` -> びーといーたー），要标到词上就得切开：
  * 把歌名切成"西文词"和"其它"（假名 / 汉字 / 数字 / 符号当通配段，吃多少假名都行，
@@ -159,6 +160,43 @@ function titleSegments(title, read) {
   return segs;
 }
 
+/**
+ * 把手工条目并进自动条目：同一条歌名以手工为准（自动切分的那条整条去掉）。
+ *
+ * 手工表内部同一个 title 出现两次时**不静默覆盖**：后一条只补前一条没写的字段
+ * （`null` / `undefined` 跳过），`words` 按词合并。真出过一次：`the EmpErroR`
+ * 在表里写了两遍，后一条的 `marker: null` 把前一条的 `marker: "EmpErroR"` 盖掉，
+ * 于是"歌名读不到时靠歌词认出来"的兜底就没了 —— 生成物里只是 marker 变成 null，
+ * 构建和测试都不会响，所以要在这里挡住（tests/dict.test.js 有用例盯着）。
+ *
+ * @param {Array} entries 自动切分出来的条目
+ * @param {Array} hand    tools/song-readings-hand.js 的手工条目
+ * @returns {Array} 合并后的新数组（不改入参）
+ */
+function mergeHand(entries, hand) {
+  const byTitle = new Map();
+  const order = [];
+  for (const h of hand) {
+    const key = String((h && h.title) || "");
+    const prev = byTitle.get(key);
+    if (!prev) {
+      byTitle.set(key, Object.assign({}, h));
+      order.push(key);
+      continue;
+    }
+    for (const k of Object.keys(h)) {
+      const v = h[k];
+      if (v === null || v === undefined) continue; // 空字段不覆盖已有的值（marker 就是这么丢的）
+      if (k === "words" && prev.words) prev.words = Object.assign({}, prev.words, v);
+      else prev[k] = v;
+    }
+  }
+  // 顺序按手工表的书写顺序；自动条目里同 title 的让路
+  const out = entries.filter((e) => !byTitle.has(String((e && e.title) || "")));
+  for (const key of order) out.push(byTitle.get(key));
+  return out;
+}
+
 function generate() {
   const rows = JSON.parse(fs.readFileSync(VENDOR, "utf8"));
   const read = makeReader();
@@ -222,14 +260,9 @@ function generate() {
     report.details.push([title, words.map((w, i) => w.word + "=" + chunks[segs.indexOf(w)]).join(" ")]);
   }
 
-  // 手工条目优先（同一条歌名以手工为准）
+  // 手工条目优先（同一条歌名以手工为准；手工表内部同 title 重复时保留非空字段，见 mergeHand）
   const hand = fs.existsSync(HAND) ? require(HAND) : [];
-  for (const h of hand) {
-    const i = entries.findIndex((e) => String(e.title) === String(h.title));
-    if (i >= 0) entries.splice(i, 1);
-    entries.push(h);
-  }
-  return { entries, report };
+  return { entries: mergeHand(entries, hand), report };
 }
 
 function esc(re) {
@@ -295,4 +328,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { generate, content, splitSegments, kanaDist, hiraToKata, titleSegments };
+module.exports = { generate, content, splitSegments, kanaDist, hiraToKata, titleSegments, mergeHand };

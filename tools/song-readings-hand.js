@@ -11,6 +11,9 @@
  * 而我们自己的规则/罗马音层必然读错 —— 也就是"只有这一首里这么读"的那种。
  * 一般英文词（`dream` / `love`）该进的是离线词典，不是这张表。
  *
+ * 同一个 title 只写一条：重复时生成器会保留非空字段（mergeHand），不会静默覆盖，
+ * 但重复本身说明有人加条目时没搜过 —— 修掉它。
+ *
  * 手工条目的前提：读音要有官方来源（`tools/vendor/sekai/musics.json` 那份主数据，
  * 或别的能查到的官方读法），我们只是把"整串读音"按词切开。自己按词义猜的不进表 ——
  * 规则：`夢現妄想世界`（夢限大みゅーたいぷ，不在那份主数据里）不要放进这一档。
@@ -49,12 +52,6 @@ module.exports = [
     title: "Leia - Remind",
     marker: null,
     words: { leia: "レイア", remind: "リマインド" },
-  },
-  {
-    // the EmpErroR -> じえんぺらー（标题里的 `the` 就是 ジ，不是 ザ）
-    title: "the EmpErroR",
-    marker: null,
-    words: { the: "ジ", emperror: "エンペラー" },
   },
   {
     // DAYBREAK FRONTLINE -> でいぶれいくふろんとらいん

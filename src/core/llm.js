@@ -451,7 +451,15 @@
               why: typeof rec.why === "string" ? rec.why : "",
               at: typeof rec.at === "number" ? rec.at : rec.t,
             };
-          } else if (typeof rec.k === "string" && RE_KATAKANA.test(rec.k)) out[key] = { k: rec.k };
+          } else if (
+            typeof rec.k === "string" &&
+            // 带 ja 标记的（日语汉字）答案可能是平假名，按放宽的 RE_JA_KANA 判；
+            // 老记录没有标记 —— 那时候只收片假名，保持原来的判据即可
+            (rec.ja === true ? RE_JA_KANA.test(rec.k) : RE_KATAKANA.test(rec.k))
+          ) {
+            // 标记要跟着读回来：否则下次落盘它会被写丢，之后这份缓存就再也读不回来了
+            out[key] = rec.ja === true ? { k: rec.k, ja: true } : { k: rec.k };
+          }
         }
         return out;
       } catch (e) {
@@ -484,13 +492,16 @@
         var now = Date.now();
         var entries = [];
         mem.forEach(function (rec, word) {
-          // miss 连"模型原话 / 拒绝原因"一起存：重启之后 WK.llm.rejects() 还能看出原因
-          entries.push([
-            word,
-            rec.miss === true
-              ? { miss: true, t: now, said: rec.said || "", why: rec.why || "" }
-              : { k: rec.k, t: now },
-          ]);
+          /*
+           * miss 连"模型原话 / 拒绝原因"一起存：重启之后 WK.llm.rejects() 还能看出原因。
+           * 命中的条目按原样存（带 ja 标记）：日语汉字的平假名答案没有这个标记
+           * 就过不了 loadCache 的片假名判据，重启即丢。
+           */
+          var entry;
+          if (rec.miss === true) entry = { miss: true, t: now, said: rec.said || "", why: rec.why || "" };
+          else if (rec.ja === true) entry = { k: rec.k, t: now, ja: true };
+          else entry = { k: rec.k, t: now };
+          entries.push([word, entry]);
         });
         if (entries.length > CACHE_MAX) entries = entries.slice(entries.length - CACHE_MAX);
         var obj = {};
@@ -807,8 +818,13 @@
          * 「哪个词 / 模型原话 / 为什么被拒」。
          */
         var why = null;
+        /*
+         * 日语汉字的答案允许平假名（あした），其它条目只收片假名 ——
+         * 这个 kind 后面落盘时还要用（见下面 mem.set 的 ja 标记）。
+         */
+        var kind = item.kind || (item.extra && item.extra.kind) || "";
         if (!said) why = "模型没给";
-        else if ((item.kind || (item.extra && item.extra.kind)) === "ja" ? !RE_JA_KANA.test(said) : !RE_KATAKANA.test(said)) why = "不是假名";
+        else if (kind === "ja" ? !RE_JA_KANA.test(said) : !RE_KATAKANA.test(said)) why = "不是假名";
         else if (said.length > 14) why = "太长了（>14）";
         /*
          * 多音字那一档只收"候选里的那个"：候选是构建期算出来的，模型自己造的读音
@@ -818,7 +834,12 @@
         // 第三个参数是这个词所在的整句（队列条目里叫 context，提示词里叫 line）
         else if (validate && !validate(item.word, said, item.context || item.line)) why = "没通过首音校验";
         if (!why) {
-          mem.set(item.key, { k: said });
+          /*
+           * ja 条目要带标记落盘：它的答案可能是平假名（あした），
+           * 而 loadCache 没有标记时只认片假名 —— 不标的话重启后这些答案全丢，
+           * 同一个词又会重新花钱问一遍。
+           */
+          mem.set(item.key, kind === "ja" ? { k: said, ja: true } : { k: said });
           wanted.delete(item.key); // 有结论了，不用再补问
           byWord[item.word] = said; // 外层索引：给 peek()/控制台用
           stats.hits++;

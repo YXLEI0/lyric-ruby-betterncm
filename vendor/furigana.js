@@ -810,6 +810,8 @@
 			const midNumber = i > 0 && RE_NUMBER.test(tokens[i - 1].surface_form) && RE_NUMBER.test(tokens[i].surface_form);
 			for (let n = Math.min(MAX, tokens.length - i); n >= 2 && !midNumber; n--) {
 				const slice = tokens.slice(i, i + n);
+				// 词头是接尾語（〜風 的 風）时没资格当覆盖表的词头：它的读音属于前一个词
+				if (slice[0].pos_detail_1 === '接尾') continue;
 				const joined = slice.map((t) => t.surface_form).join('');
 				if (OVERRIDES[joined]) {
 					out.push({ surface_form: joined, reading: toKatakana(OVERRIDES[joined]) });
@@ -906,7 +908,16 @@
 				continue;
 			}
 
-			let reading = OVERRIDES[surface] || token.reading;
+			/*
+			 * 接尾語（〜風 / 〜的 这种）不能走单字覆盖表。
+			 *
+			 * IPADIC 把「俺風」切成 俺 + 風[名詞/接尾/フウ] —— 词典给的读音本来就是对的，
+			 * 可覆盖表里 `風: 'かぜ'` 会无条件接管，于是 俺風 = おれかぜ、昭和風 = しょうわかぜ
+			 * 全错。覆盖表是按"词"写的（風 = かぜ），接尾語读的是"灌到前一个词里"的那一读
+			 * （ふう），两者不是一回事。
+			 */
+			const isAffix = token.pos_detail_1 === '接尾';
+			let reading = (isAffix ? null : OVERRIDES[surface]) || token.reading;
 			if (!reading || reading === '*') {
 				// 词典里没有读音（生僻字、外文夹杂等），原样输出
 				push(surface);

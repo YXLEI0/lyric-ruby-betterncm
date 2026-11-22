@@ -847,6 +847,13 @@
     for (var bq = 0; bq < out.length; bq++) {
       var bt = out[bq];
       if (!bt || bt.hide || bt.blank || !bt.kana) continue;
+      /*
+       * 用户就地改过的读音不许动（spans 在前面已经并进 out 了，kind: "user"）。
+       * 少了这一条，「達」被改成 だち 之后又被这条规则写回 たち —— 屏幕上就是
+       * "改了没反应"，而且每轮都会再改一次（真机用户报的就是这个）。
+       * spans 压过其他条目的规矩见上面 709 行那一段，这里是同一件事的第二处出口。
+       */
+      if (bt.kind === "user") continue;
       var bareRule = BARE_READINGS[bt.text];
       if (!bareRule) continue;
       if (bareRule.notBeforeKanji && /[\u4E00-\u9FFF\u3400-\u4DBF\u3005]/.test(s.charAt(bt.end))) continue;

@@ -258,6 +258,67 @@
     }
   }
 
+  /*
+   * 注音节点的判据集合。
+   *
+   * 这里必须认识另外两个插件的注音，不能只认自己的 `<rt class="wk-rt">`：
+   *   - wk-rt  本插件（拉丁词 -> 片假名读音）
+   *   - kt-rt  另一个片假名注音插件（片假名 -> 英文）
+   *   - fg-rt  jp-furigana（汉字 -> 振假名）
+   * 少认一个的后果是实打实的：visibleText() 会把别人的注音算成"底字"，
+   * 于是底字一直在变、我们每轮都判定"馊了"并重注 —— 就是那种一直闪。
+   *
+   * 放在**模块作用域**（而不是 createAnnotator 里）：下面导出的 visibleTextOf()
+   * 在闭包外面，也要用它。它原来是 createAnnotator 内的局部变量，于是那个导出
+   * 的 API 一调用就 ReferenceError: ANNOTATION_CLASS is not defined（有测试守着）。
+   */
+  var ANNOTATION_CLASS = /(^|\s)(wk-rt|kt-rt|fg-rt|wk-ov-label|kt-ov-label)(\s|$)/;
+
+  /*
+   * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）把每个字后面跟的那个**空格**
+   * 也写进了文本 —— 那是排版用的（字与字之间本来就有 CSS 间距），不是歌词。
+   *
+   * 不认这一条的话，一行会变成 `燃 え 上 が る 体 温 が`：kuromoji 把每个字当成
+   * 独立的词，于是 体 = からだ、温 = ゆたか、上 = うえ —— 真机现象就是
+   * 「开了逐字以后整行读音全错、注音还往右边挤」（用户报的那个）。
+   * 只去"紧贴着汉字 / 假名"的那一头：英文词后面的空格是词边界，去了会把
+   * `Hello` `world` 粘成一个词。
+   *
+   * 放在模块作用域是因为它是**两个模块共用的同一把键**：main.js 的行文本（就地改读音
+   * 按它存、判语种、量行宽）和注音层必须一字不差，差一个空格整行就对不上。
+   * 以前两边各抄一份、只靠注释提醒别改歪 —— 现在只有这一份，main.js 直接调
+   * WKAnnotate.karaokeTextOf（有测试守着两边一致）。
+   */
+  var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
+  var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
+  var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
+
+  function karaokeTextOf(node) {
+    var t = node && node.nodeValue ? node.nodeValue : "";
+    if (!t || !/[\s\u3000]/.test(t)) return t;
+    var wordClass = null;
+    for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
+      var cn = typeof p.className === "string" ? p.className : "";
+      if (RE_KARAOKE_WORD.test(cn)) {
+        wordClass = cn;
+        break;
+      }
+    }
+    if (wordClass === null) return t;
+    var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
+    if (!core) return "";
+    /*
+     * RNP 给"一个字一格"的词格带 is-cjk：那一格后面的空格是排版用的，一律去掉。
+     * 光看字的种类不够 —— 括号（`（シメ）`）、符号（`〆`）不是汉字/假名，按老判据
+     * 空格会留在行文本里，括号读音的正则就匹配不上（真机现象：`〆（シメ）` 没合并）。
+     */
+    var cjkWord = RE_KARAOKE_CJK.test(wordClass);
+    var out = t;
+    if (cjkWord || RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
+    if (cjkWord || RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
+    return out;
+  }
+
   function createAnnotator(options) {
     options = options || {};
     var doc = options.document || (typeof document !== "undefined" ? document : null);
@@ -749,44 +810,9 @@
      * 再把词的首字对回具体的节点。
      */
     /*
-     * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）把每个字后面跟的那个**空格**
-     * 也写进了文本 —— 那是排版用的（字与字之间本来就有 CSS 间距），不是歌词。
-     *
-     * 不认这一条的话，一行会变成 `燃 え 上 が る 体 温 が`：kuromoji 把每个字当成
-     * 独立的词，于是 体 = からだ、温 = ゆたか、上 = うえ —— 真机现象就是
-     * 「开了逐字以后整行读音全错、注音还往右边挤」（用户报的那个）。
-     * 只去"紧贴着汉字 / 假名"的那一头：英文词后面的空格是词边界，去了会把
-     * `Hello` `world` 粘成一个词。
+     * 逐字歌词里"这一格算不算歌词"的口径只有一份：模块作用域的 karaokeTextOf()
+     * （main.js 的行文本也要用同一把键，见那边的说明）。
      */
-    var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
-    var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
-    var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
-
-    function karaokeTextOf(node) {
-      var t = node && node.nodeValue ? node.nodeValue : "";
-      if (!t || !/[\s\u3000]/.test(t)) return t;
-      var wordClass = null;
-      for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
-        var cn = typeof p.className === "string" ? p.className : "";
-        if (RE_KARAOKE_WORD.test(cn)) {
-          wordClass = cn;
-          break;
-        }
-      }
-      if (wordClass === null) return t;
-      var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
-      if (!core) return "";
-      /*
-       * RNP 给"一个字一格"的词格带 is-cjk：那一格后面的空格是排版用的，一律去掉。
-       * 光看字的种类不够 —— 括号（`（シメ）`）、符号（`〆`）不是汉字/假名，按老判据
-       * 空格会留在行文本里，括号读音的正则就匹配不上（真机现象：`〆（シメ）` 没合并）。
-       */
-      var cjkWord = RE_KARAOKE_CJK.test(wordClass);
-      var out = t;
-      if (cjkWord || RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
-      if (cjkWord || RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
-      return out;
-    }
 
     /** 一个区域里"原文"那部分：跳过注音本身、以及 RNP 的音译 / 翻译层 */
     function originalTextOf(el) {
@@ -887,9 +913,17 @@
           if (skipped) continue;
           if (p && p.nodeType === 1) {
             if (p.tagName === "RT" || p.tagName === "RP") continue;
-            var cn = typeof p.className === "string" ? p.className : "";
-            // 只跳过注音（wk-rt）；wk-hide 是原文里的括号读音，要算进位置
-        if (/(^|\s)wk-rt(\s|$)/.test(cn)) continue;
+            /*
+             * 跳过的是"注音"这一层，判据必须和 originalTextOf 一模一样
+             * （isAnnotationNode 认 wk-rt / kt-rt / fg-rt）。
+             *
+             * 以前这里只认自家的 wk-rt：别人家注音的文字不在行原文里（originalTextOf
+             * 已经把它排除了），可这里仍然把游标往前推 —— 于是那一句里后面每个字的
+             * __wkOffset 都整体错位，表现是"跟 jp-furigana / 另一个注音插件一起开时，
+             * 读音贴到隔壁字上、用户就地改的读音存下去却对不上"。
+             * wk-hide（原文里的括号读音）不是注音节点，照旧算进位置。
+             */
+            if (isAnnotationNode(p)) continue;
           }
           // 和 originalTextOf 同一套规矩：区域直接的空白文本不占位置
           if (p === region && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
@@ -902,10 +936,20 @@
            */
           if (piece) {
             var found = lineText.indexOf(piece, at);
-            if (found >= 0) at = found;
-            node.__wkOffset = at;
-            node.__wkLineText = lineText;
-            at += piece.length;
+            if (found >= 0) {
+              at = found;
+              node.__wkOffset = at;
+              node.__wkLineText = lineText;
+              at += piece.length;
+            } else {
+              /*
+               * 这段文字不在这行的原文里（别人家的注音层，或 originalTextOf 排除掉的
+               * 那一层）：位置停在当前游标，**不许**按长度往前推 —— 推了之后这一句里
+               * 后面每个字都会整体错位一格。
+               */
+              node.__wkOffset = at;
+              node.__wkLineText = lineText;
+            }
           } else {
             node.__wkOffset = at;
             node.__wkLineText = lineText;
@@ -1665,8 +1709,16 @@
         var twin = kids[i];
         if (!twin || twin === host) continue;
         if (!RE_FILLER_CLASS.test(typeof twin.className === "string" ? twin.className : "")) continue;
-        // 内容对不上说明 React 已经重渲染过，先不动它（下一轮会重新注）
-        if ((twin.textContent || "") !== plain) continue;
+        /*
+         * 内容对不上说明 React 已经重渲染过，先不动它（下一轮会重新注）。
+         *
+         * 比的是**可见原文**（visibleText 排掉各家注音），不能用 textContent：
+         * 我们往替身里抄过一遍之后，textContent 里就多了注音的假名，跟 plain 永远
+         * 不相等 —— 于是每次都"对不上就跳过"，替身里那份**上一次渲染**的注音一直
+         * 留着，叠在新句子上面（真机现象就是亮起来的那一层还是上一句的字）。
+         * 整行改写那条对应的 mirrorToFillers 用的也是这个口径，两边必须一致。
+         */
+        if (visibleText(twin) !== plain) continue;
         var built = [];
         for (var k = 0; k < pieces.length; k++) {
           var piece = pieces[k];
@@ -1749,10 +1801,14 @@ function buildRuby(base, gloss, provisional, source, flat) {
        * （真机：`人(ラングラー)` 挤成一片）。改成 inline-block 会让 Chromium 91
        * 把注音排到字下面（试过两版都这样），所以**只加一点点右外边距**：
        * 不动 ruby 排版、注音照旧在内核给的上方位置，只是把后面的字推开一点。
+       *
+       * 估算用的是**当前设置的注音字号**（rtScale，applyStyles 写进来），
+       * 不再写死 0.6：把「注音字号」拉到 120% 时真实宽度是 60% 的两倍，
+       * 写死的话 over 判不到 0.3，"注音贴在一起"就会回来。
        */
       var baseLen = String(base).length;
       var annLen = String(gloss).length;
-      var over = annLen * 0.6 - baseLen;
+      var over = annLen * (rtScale > 0 ? rtScale : 0.6) - baseLen;
       if (over > 0.3) {
         // 真机反馈：0.5em 还是把底字撑散，只要"别贴死"就够了 —— 封顶 0.1em
         var pad = Math.min(over * 0.25, 0.1);
@@ -2131,16 +2187,8 @@ function buildRuby(base, gloss, provisional, source, flat) {
     }
 
     /*
-     * 注音节点的判据集合。
-     *
-     * 这里必须认识另外两个插件的注音，不能只认自己的 `<rt class="wk-rt">`：
-     *   - wk-rt  本插件（拉丁词 -> 片假名读音）
-     *   - kt-rt  另一个片假名注音插件（片假名 -> 英文）
-     *   - fg-rt  jp-furigana（汉字 -> 振假名）
-     * 少认一个的后果是实打实的：visibleText() 会把别人的注音算成"底字"，
-     * 于是底字一直在变、我们每轮都判定"馊了"并重注 —— 就是那种一直闪。
+     * 注音节点的判据集合见模块作用域的 ANNOTATION_CLASS（导出的 visibleTextOf 也要用）。
      */
-    var ANNOTATION_CLASS = /(^|\s)(wk-rt|kt-rt|fg-rt|wk-ov-label|kt-ov-label)(\s|$)/;
 
     function isAnnotationNode(el) {
       if (!el || el.nodeType !== 1) return false;
@@ -2738,43 +2786,6 @@ function buildRuby(base, gloss, provisional, source, flat) {
      * 发现不了「这行换了」。值清空之后它不占位置，下一轮只要发现它又被写了字，
      * 就知道是换歌/换行，立刻整行还原重注。
      */
-    /**
-     * 注音比底字宽时的"让位"垫片。
-     *
-     * 原生 ruby 的盒子只按**底字**定宽，注音比底字宽会往两边溢出去 —— 相邻两个词的
-     * 注音就贴在一起（真机：`1(ワン) 2(トゥー) 3(スリー)`、`人(ラングラー)`）。
-     *
-     * 不能给 ruby 改 `display:inline-block`（Chromium 91 会把注音排到字外 / 下面去），
-     * 所以在 ruby 后面塞一个空的行内块，宽度按"注音宽 - 底字宽"的一半算 ——
-     * 正好补上注音溢出的那一侧，词与词之间就恢复了间距。
-     *
-     * 只对**普通歌词行**（flat=false）加；逐字歌词的注音本来就不占宽度，
-     * 加了反而会破坏 RNP 的逐字排版。
-     */
-    function spacingFor(base, gloss, nextIsSpace) {
-      if (!base || !gloss) return null;
-      var baseLen = String(base).length;
-      var annLen = String(gloss).length;
-      // 汉字按 1em、注音按 60% 字号估算
-      var over = annLen * 0.6 - baseLen;
-      if (over <= 0.2) return null;
-      /*
-       * 只补一点点：整行按注音溢出量补齐的话，底字之间会被撑得很散。
-       * 取溢出量的一半、后面本来有空格再减半，且封顶 0.8em ——
-       * 目标是"别贴在一起"，不是把两个词推开一整截。
-       */
-      var w = nextIsSpace ? over * 0.25 : over * 0.5;
-      if (w > 0.8) w = 0.8;
-      if (w < 0.1) w = 0.1;
-      var sp = doc.createElement("span");
-      sp.className = "wk-gap";
-      sp.setAttribute("aria-hidden", "true");
-      sp.style.display = "inline-block";
-      sp.style.width = w.toFixed(2) + "em";
-      sp.style.pointerEvents = "none";
-      return sp;
-    }
-
     function buildWrapEl(segs, cls, keep, flat) {
       var wrap = doc.createElement("span");
       wrap.className = cls;
@@ -3336,6 +3347,25 @@ function buildRuby(base, gloss, provisional, source, flat) {
      *   skipped  接管了但这一轮故意不注（文本在动 / 认输期）
      * @returns {number} 0=没接管（交给老路径）；1=接管且没变；2=接管并重建了；3=接管但跳过
      */
+    /**
+     * 这一行要「过一会儿再看一遍」时记一笔（多个来源取最短的那个）。
+     *
+     * ctx.retry 用 -1 当"还没定"：0 在 Math.min 里会把"要重试"吃掉。
+     *
+     * 以前这两处记的是 noteRetry() —— 它是 pass() 的内部闭包，wrapOneLine 根本
+     * 够不着（而且这里早就被改成了另一个变量名）。调用它的效果是抛 ReferenceError：
+     * 异常被 pass 的 catch 吞成 took=0，
+     *   ① 这一行明明「该跳过」，却因为 took=0 又被推回 rest 交给逐节点那条路，
+     *      两道闸门（文本在动 / 认输期）等于没拦住；
+     *   ② retry 永远是 -1，pass 末尾"过一会儿自己再扫一遍"那一手从此不生效 ——
+     *      换歌后只要页面不再变动，这一行就一直空着。
+     * 所以它必须是这个作用域里的真函数（有测试守着）。
+     */
+    function noteCtxRetry(ctx, ms) {
+      if (!ctx || !(ms > 0)) return;
+      if (ctx.retry < 0 || ms < ctx.retry) ctx.retry = ms;
+    }
+
     function wrapOneLine(region, ctx) {
       var stat = ctx.stat;
       stat.took = false;
@@ -4016,9 +4046,16 @@ function buildRuby(base, gloss, provisional, source, flat) {
 
   // ---------------------------------------------------------------- 样式
 
+  /*
+   * 注音字号相对底字的比例（0.55 = 55%）。applyStyles 会跟着设置改写它 ——
+   * buildRuby 估算"注音有没有比底字宽"要用真实字号，不能用写死的 0.6。
+   */
+  var rtScale = 0.55;
+
   function styles(opts) {
     opts = opts || {};
-    var size = opts.rtSize == null ? 60 : opts.rtSize;
+    // 默认值和 main.js 的 DEFAULTS.rtSize 必须是同一个数（55），否则哪边少传一次就变样
+    var size = opts.rtSize == null ? 55 : opts.rtSize;
     var opacity = (opts.rtOpacity == null ? 80 : opts.rtOpacity) / 100;
     var colorBySource = !!opts.colorBySource;
     return [
@@ -4036,7 +4073,7 @@ function buildRuby(base, gloss, provisional, source, flat) {
       "  white-space: nowrap;",
       "}",
       "rt.wk-rt, .wk-rt {",
-      // 逐字词格里再跟 --wk-rt-fit 取小的（注音不超出底字宽度，见 buildRuby）
+      // 字号/不透明度跟着设置走；注音宽时怎么让位见 buildRuby 的 marginRight 那一节
       "  font-size: " + size + "%;",
       "  opacity: " + opacity + ";",
       "  font-weight: normal;",
@@ -4141,9 +4178,30 @@ function buildRuby(base, gloss, provisional, source, flat) {
     return el;
   }
 
+  /** 把一个配置数字夹到 [min, max]；不是有限数就用默认值 */
+  function clampNum(v, def, min, max) {
+    var n = typeof v === "number" ? v : parseFloat(v);
+    if (!isFinite(n)) n = def;
+    if (n < min) n = min;
+    if (n > max) n = max;
+    return n;
+  }
+
   function applyStyles(doc, opts) {
     if (!doc || !doc.head) return;
-    styleEl(doc, "lyric-ruby-style").textContent = styles(opts);
+    /*
+     * 字号 / 不透明度来自 localStorage 里的配置，可能被手改成 0、负数或者字符串。
+     * 它们最后是直接拼进 <style> 的（`font-size: 0%` 的注音等于隐形，没人会报错），
+     * 所以在这里夹一次，别指望上游每处都传对。
+     */
+    var size = clampNum(opts && opts.rtSize, 55, 30, 120);
+    var alpha = clampNum(opts && opts.rtOpacity, 80, 10, 100);
+    rtScale = size / 100;
+    styleEl(doc, "lyric-ruby-style").textContent = styles({
+      rtSize: size,
+      rtOpacity: alpha,
+      colorBySource: !!(opts && opts.colorBySource),
+    });
   }
 
   function removeStyles(doc) {
@@ -4183,6 +4241,11 @@ function buildRuby(base, gloss, provisional, source, flat) {
     /** 署名判据：给测试直接验正则（运行期只走 isCreditText） */
     isCreditText: isCreditText,
     creditMatch: creditMatch,
+    /**
+     * 逐字歌词里"这一格算不算歌词"：main.js 的行文本要用同一份实现
+     * （就地改读音按它存键，差一个空格整行就对不上）。
+     */
+    karaokeTextOf: karaokeTextOf,
     /** 元素可见原文（不含注音）：上层判语种 / 匹配整首读音时用 */
     visibleTextOf: visibleTextOf,
   };

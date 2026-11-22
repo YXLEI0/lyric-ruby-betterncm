@@ -2052,7 +2052,13 @@
        * （`sieh` 就是这么一直黄着的）。记下来之后，这一层一可用就会补问。
        */
       if (id === "llm" && !layerAvailable(id)) {
-        if (state.llm.want) {
+        /*
+         * 先看 state.llm 在不在：llmAvailable() 的第一句就是 `if (!state.llm) return false`，
+         * 所以"这一层不可用"完全可能是"模块压根没注入"（manifest 顺序被改 / 加载失败）。
+         * 那时这里直接解引用就是 TypeError，被两处 lookup 的 try/catch 吞成
+         * "这个词完全没有读音"，排障时完全看不出是模块没加载。
+         */
+        if (state.llm && state.llm.want) {
           try {
             state.llm.want(word, line);
           } catch (e) {
@@ -4883,8 +4889,32 @@
     return Promise.resolve([]);
   }
 
+  /*
+   * 换歌的代际号：每次"目标这首歌变了"就 +1。
+   *
+   * 异步回调（搜歌 / 读本地 JSON / 补抓）回来时靠它判断"还作不作数"。
+   * 为什么不在回调里重新算一遍歌名再比：我们自己的注音会改播放栏的文字
+   * （`泡沫の夢` 注上音之后 textContent 里就多了假名），重算出来的键跟发请求时
+   * 不一样 —— 正常结果会被误判成"旧歌的"，表现是"开了外部网站却永远只读词典"。
+   */
+  var externalGen = 0;
+
+  /**
+   * 这条异步回调还算不算数（gen 是发请求那一刻取的）。
+   *
+   * 只有"还没人接手"时才允许把 loading 归零：新歌已经开跑的话，清掉
+   * 会把 loadExternalSong 开头的早退打开，同一首会发起两次请求。
+   */
+  function externalStale(gen, key) {
+    if (gen === externalGen) return false;
+    if (externalState.key === key) externalState.loading = false;
+    return true;
+  }
+
   function loadExternalSong(key, id, title, artists) {
     if (externalState.loading || typeof WKExternal === "undefined") return;
+    // 这次请求属于哪一代（换歌就作废，见 externalStale）
+    var gen = externalGen;
     // store 只给了曲目 id：先查详情拿歌名 / 歌手
     if (!title && id) {
       externalState.loading = true;
@@ -4893,10 +4923,12 @@
       refreshExternalUI();
       fetchTrackInfo(id).then(
         function (meta) {
+          if (externalStale(gen, key)) return;
           externalState.loading = false;
           loadExternalSong(key, id, meta.title, meta.artists);
         },
         function (err) {
+          if (externalStale(gen, key)) return;
           externalState.loading = false;
           externalState.status = "歌曲信息获取失败：" + String((err && err.message) || err);
           refreshExternalUI();
@@ -4927,19 +4959,26 @@
     }
     job.then(
       function (rec) {
+        if (externalStale(gen, key)) return;
         externalState.loading = false;
         if (manual) rec.manualSource = { provider: "utaten", url: manual };
         if (id) {
-          writeSongFile(id, rec).then(function (ok) {
-            if (!ok) {
+          // 写盘本身没问题（那是这首歌自己的缓存），但状态行只属于仍然在放的那首
+          writeSongFile(id, rec).then(
+            function (ok) {
+              if (ok || externalStale(gen, key)) return;
               externalState.status = "已获取（JSON 缓存写入失败，下次会重新查）";
               refreshExternalUI();
+            },
+            function () {
+              /* 写盘失败不影响这一轮：下次换歌会重新查 */
             }
-          });
+          );
         }
         applyExternalRecord(rec, key, manual ? "已用指定的歌词页" : "已获取网站读音");
       },
       function (err) {
+        if (externalStale(gen, key)) return;
         externalState.loading = false;
         externalState.status = "获取失败：" + String((err && err.message) || err);
         refreshExternalUI();
@@ -4968,6 +5007,7 @@
     if (externalState.key !== key) {
       externalState.index = null;
       songScopeAt = 0; // 整首专属读音要按新歌重算，别等那 1.5 秒
+      externalGen++; // 旧歌还在飞的回调从这一刻起一律作废
     }
     if (!songLooksJapanese()) {
       externalState.key = key;
@@ -4991,26 +5031,38 @@
       externalState.loading = true;
       externalState.status = "正在读取本地歌词…";
       refreshExternalUI();
-      readSongFile(id.id).then(function (fileRec) {
-        externalState.loading = false;
-        if (fileRec && applyExternalRecord(fileRec, key, "本地歌词")) {
-          /*
-           * 老解析器写的缓存（没有 parser:2）里片假名读音是缺的 —— 先用着，
-           * 后台按歌名 / 歌手重抓一次，成功后 writeSongFile 会把它改写掉。
-           */
-          if (fileRec.parser !== 2) {
-            setTimeout(function () {
-              try {
-                loadExternalSong(key, id.id, id.title, id.artists || []);
-              } catch (eStale) {
-                /* 重抓失败就算了，下次换歌再试 */
-              }
-            }, 2000);
+      var gen = externalGen;
+      readSongFile(id.id).then(
+        function (fileRec) {
+          if (externalStale(gen, key)) return;
+          externalState.loading = false;
+          if (fileRec && applyExternalRecord(fileRec, key, "本地歌词")) {
+            /*
+             * 老解析器写的缓存（没有 parser:2）里片假名读音是缺的 —— 先用着，
+             * 后台按歌名 / 歌手重抓一次，成功后 writeSongFile 会把它改写掉。
+             * 补抓那一刻再判一次"还是不是这首歌"：2 秒足够换一首。
+             */
+            if (fileRec.parser !== 2) {
+              setTimeout(function () {
+                try {
+                  if (externalStale(gen, key)) return;
+                  loadExternalSong(key, id.id, id.title, id.artists || []);
+                } catch (eStale) {
+                  /* 重抓失败就算了，下次换歌再试 */
+                }
+              }, 2000);
+            }
+            return;
           }
-          return;
+          loadExternalSong(key, id.id, id.title, id.artists || []);
+        },
+        function (err) {
+          if (externalStale(gen, key)) return;
+          externalState.loading = false;
+          externalState.status = "读取本地歌词失败：" + String((err && err.message) || err);
+          refreshExternalUI();
         }
-        loadExternalSong(key, id.id, id.title, id.artists || []);
-      });
+      );
       return;
     }
     loadExternalSong(key, id.id, id.title, id.artists || []);
@@ -6029,6 +6081,30 @@
     return "";
   }
 
+  /**
+   * 最近一轮扫描的结论（导出诊断用，字段和 annotator.pass 的返回值对齐）。
+   *
+   * 用户开不了控制台，诊断文件是唯一通道 —— "扫到 60 行、标上 0 行、跳过原因：
+   * 文本在动 3 次/1s" 这种话以前只写在 console 里，导出来什么都看不到。
+   */
+  function passSummary() {
+    var r = state.lastResult || {};
+    return {
+      scanned: r.scanned || 0,
+      changed: r.changed || 0,
+      restored: r.restored || 0,
+      skipped: r.skipped || 0,
+      unstable: r.unstable || 0,
+      retryInMs: r.retryInMs || 0,
+      skips: (r.skips || []).slice(0, 12),
+      errors: (r.errors || []).slice(0, 6),
+      ms: state.lastPassMs || 0,
+      at: state.lastPassAt || 0,
+      // 词典读进来了没有 —— "整页一个字都没注"最常见的两三个原因之一
+      dict: typeof WKFurigana !== "undefined" && WKFurigana.status ? WKFurigana.status() : null,
+    };
+  }
+
   /** 收集一份排障快照（面板「导出诊断」和 WK.diag() 共用） */
   function collectDiag() {
     var info = {};
@@ -6104,13 +6180,26 @@
       at: new Date().toISOString(),
       plugin: pluginVersion(),
       song: { id: (info && info.id) || "", title: (info && info.title) || "", artist: (info && info.artist) || "" },
+      /*
+       * 这几项以前没带，恰好是"导出来看不出为什么"的主要原因：
+       * 误关了「非日语歌也注音」、范围被设成自定义、层序被拖乱，全都只能从这几个键看出来。
+       */
       config: {
+        enabled: config.enabled !== false,
         furigana: config.furigana,
         kana: config.furiganaKana,
+        scope: config.scope,
+        annotateAll: !!config.annotateAll,
+        annotateNonJapanese: config.annotateNonJapanese !== false,
+        online: config.online !== false,
         external: config.externalUtaten,
         annotateLatin: config.annotateLatin,
+        layerOrder: (config.layerOrder || []).slice(),
         wrapLines: config.wrapLines,
       },
+      // 这一轮扫描的现场（扫到几行 / 标上几行 / 跳过原因 / 有没有抛异常）
+      pass: passSummary(),
+      error: state.error || "",
       tokens: lineDiag.slice(),
       /*
        * 学到的"括号里是唱歌人的名字"（这类括号不当读音，原样留着）。
@@ -6367,18 +6456,6 @@
   }
 
   /** 区域里"原文"那部分（跳过音译 / 翻译层和注音本身） */
-  /**
-   * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）里那个**尾随空格**不算歌词 ——
-   * 那是排版用的，kuromoji 会把 `燃 え 上 が る` 当成一堆独立的词，
-   * 于是 体 = からだ、温 = ゆたか（真机现象：开逐字以后整行读音全错）。
-   * 只去贴着汉字 / 假名的那一头，英文词之间的空格是词边界，必须留着。
-   *
-   * 这份判据必须和 core/annotate.js 的 karaokeTextOf 完全一致：两边的行文本
-   * 是同一把键（就地改读音按它存），差一个空格就整行对不上。
-   */
-  var RE_CJK_EDGE = /[\u3005\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF]/;
-  var RE_KARAOKE_WORD = /(^|\s)rnp-karaoke-word(\s|$)/;
-  var RE_KARAOKE_CJK = /(^|\s)is-cjk(\s|$)/;
   /*
    * RNP slide 动画的替身（`span.rnp-karaoke-word-filler`）：内容与本体一字不差，
    * 绝对定位叠在本体上。它**不是歌词** —— 算进行文本的话整行每个字都会出现两遍
@@ -6388,29 +6465,19 @@
   var RE_FILLER_TWIN = /(^|\s)rnp-karaoke-word-filler(\s|$)/;
   /** 注音层整行改写的那个 wrap（`span.wk-line`） */
   var RE_WRAP_LINE = /(^|\s)wk-line(\s|$)/;
+  /**
+   * 逐字歌词（RNP 的 `div.rnp-karaoke-word > span`）里那个**尾随空格**不算歌词。
+   *
+   * 口径只有一份：core/annotate.js 的 karaokeTextOf（注音层用它算行原文，
+   * 这里用它算"就地改读音存的键"，两边差一个空格就整行对不上）。
+   * 以前这里是抄的一份，注释要求"必须一字不差"—— 现在直接调过去，改不动歪。
+   */
   function karaokeTextOf(node) {
-    var t = node && node.nodeValue ? node.nodeValue : "";
-    if (!t || !/[\s\u3000]/.test(t)) return t;
-    var wordClass = null;
-    for (var p = node.parentNode, d = 0; p && p.nodeType === 1 && d < 5; p = p.parentNode, d++) {
-      var cn = typeof p.className === "string" ? p.className : "";
-      if (RE_KARAOKE_WORD.test(cn)) {
-        wordClass = cn;
-        break;
-      }
+    if (typeof WKAnnotate !== "undefined" && WKAnnotate.karaokeTextOf) {
+      return WKAnnotate.karaokeTextOf(node);
     }
-    if (wordClass === null) return t;
-    var core = t.replace(/^[\s\u3000]+/, "").replace(/[\s\u3000]+$/, "");
-    if (!core) return "";
-    /*
-     * 和 core/annotate.js 的 karaokeTextOf 必须一字不差：两边的行文本是同一把键
-     * （就地改读音按它存），差一个空格整行就对不上。
-     */
-    var cjkWord = RE_KARAOKE_CJK.test(wordClass);
-    var out = t;
-    if (cjkWord || RE_CJK_EDGE.test(core.charAt(0))) out = out.replace(/^[\s\u3000]+/, "");
-    if (cjkWord || RE_CJK_EDGE.test(core.charAt(core.length - 1))) out = out.replace(/[\s\u3000]+$/, "");
-    return out;
+    // 注音层没注入时（插件整体降级）只做最保守的事：原文照搬
+    return node && node.nodeValue ? node.nodeValue : "";
   }
 
   function originalText(region) {
@@ -7008,8 +7075,12 @@
      */
     var now = Date.now();
     var want = config.jpnFont === true && songLooksJapanese();
+    /*
+     * 一条就够：`changed === 0 && want === jpFontApplied && 8 秒内`。
+     * （以前下面还有一条 1000ms 的"节流"，条件被这一条完全包含，永远走不到 ——
+     *  注释里写的 1 秒节流其实并不存在，删掉免得后人对着一行死代码猜。）
+     */
     if (!force && changed === 0 && want === jpFontApplied && now - jpFontAt < 8000) return;
-    if (!force && jpFontApplied === want && !changed && now - jpFontAt < 1000) return;
     jpFontAt = now;
     jpFontApplied = want;
     if (want) applyJapaneseFontInline(fontStack(config.jpnFontFamily), regions);
@@ -7386,6 +7457,8 @@
 
 
     function fmt(key) {
+      // 只有字号 / 不透明度是百分数；行高是倍数（1.6），加上 % 会显示成 "1.6%"
+      if (key === "lineHeight") return String(config[key]);
       return config[key] + "%";
     }
 
@@ -8169,11 +8242,18 @@
 
   function notifyConfigUI() {
     try {
-      if (typeof plugin !== "undefined" && plugin.onConfig && !state.configRoot) {
-        state.configRoot = buildConfigUI();
-      }
+      /*
+       * 这里**不重建面板**。
+       *
+       * 原来写的是"没有 configRoot 就 buildConfigUI() 一个" —— 但 buildConfigUI 返回的是
+       * 游离节点（isConnected === false），紧接着又被置回 null，于是每收到一批
+       * 模型 / 免费接口的结果就白建一整个面板（140 行 innerHTML + 全量 querySelector
+       * + refreshAll + 一个 1 秒定时器），播放时持续发生。
+       * 面板由 plugin.onConfig 建（那里会把 root 记进 state.configRoot），这里只负责
+       * "面板还挂着的话刷一下状态文字"。
+       */
       if (state.configRoot && state.configRoot.isConnected === false) {
-        // 面板被关掉过，下次 onConfig 会重建
+        // 面板被关掉过：下次 onConfig 会重建
         state.configRoot = null;
       }
       renderHealth();
@@ -8227,7 +8307,7 @@
     try {
       var f = typeof WKFurigana !== "undefined" && WKFurigana.status ? WKFurigana.status() : null;
       var r = state.lastResult || null;
-      var payload = JSON.stringify({
+      var rec = {
         at: now,
         dict: f
           ? { ready: f.ready, loading: f.loading, error: f.error, path: f.path || "", tried: f.tried || [] }
@@ -8248,18 +8328,40 @@
           lines: externalState.index ? externalState.index.count : 0,
           status: externalState.status || "",
         },
-      });
+      };
       var prev = "";
       try {
         prev = localStorage.getItem(STATUS_KEY) || "";
       } catch (ePrev) {
         prev = "";
       }
-      if (prev && prev.indexOf('"ms":' + (state.lastPassMs || 0)) >= 0) return;
-      localStorage.setItem(
-        STATUS_KEY,
-        payload
-      );
+      /*
+       * 内容没变就不写。以前比的是 `prev.indexOf('"ms":' + ms)` —— 前缀匹配，
+       * `"ms":3` 会命中 `"ms":30`，于是 ms 落在同一位数区间时状态**根本不更新**
+       * （排障时看的就是这份文件）。改成解析后逐字段比。
+       */
+      if (prev) {
+        try {
+          var old = JSON.parse(prev);
+          if (
+            old &&
+            old.ms === rec.ms &&
+            (!old.dict) === (!rec.dict) &&
+            (!old.pass) === (!rec.pass) &&
+            (!old.ext) === (!rec.ext) &&
+            (!rec.dict || (old.dict.ready === rec.dict.ready &&
+              old.dict.loading === rec.dict.loading &&
+              old.dict.error === rec.dict.error)) &&
+            (!rec.pass || (old.pass.scanned === rec.pass.scanned && old.pass.changed === rec.pass.changed)) &&
+            (!rec.ext || (old.ext.lines === rec.ext.lines && old.ext.status === rec.ext.status))
+          ) {
+            return;
+          }
+        } catch (eOld) {
+          /* 旧文件坏了：照写 */
+        }
+      }
+      localStorage.setItem(STATUS_KEY, JSON.stringify(rec));
     } catch (e) {
       /* localStorage 满了 / 不可用都不影响注音 */
     }
@@ -8277,7 +8379,13 @@
   }
 
   plugin.onConfig(function () {
-    return buildConfigUI();
+    /*
+     * 面板节点要留住（notifyConfigUI 靠它判断"面板还挂着没有"）。
+     * 以前这里直接 `return buildConfigUI()`，root 没人拿、面板一关就成了游离节点，
+     * 于是 notifyConfigUI 每次都以为"还没有面板"。
+     */
+    state.configRoot = buildConfigUI();
+    return state.configRoot;
   });
 
   plugin.onLoad(function () {

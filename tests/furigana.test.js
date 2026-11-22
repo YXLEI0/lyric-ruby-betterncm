@@ -474,6 +474,18 @@ test("单字 + 固定语法：良 よ / 皆 みな（皆一緒 かいいっし�
   assert.deepStrictEqual(pairs("故郷"), [["故郷", "こきょう"]], "整词 こ 不动");
 
   /*
+   * 用户就地改的读音压过单字固定读法。
+   *
+   * 回归：spans（kind: "user"）先进了 out，可 BARE_READINGS 那一轮不看来源，
+   * 把它们又改回去了 —— 用户把 達 改成 だち，屏幕上过一轮又变回 たち，就是
+   * 「改了没反应」。这条规则和上面"整词不动"是两回事，不能一起吞掉。
+   */
+  const userPairs = (s, spans) => Array.from(W.WKFurigana.tokens(s, { spans }) || [], (t) => [t.text, t.kana]);
+  assert.deepStrictEqual(userPairs("達、", [[0, "達", "だち"]]), [["達", "だち"]], "用户改的 だち 不许被 たち 盖回去");
+  assert.deepStrictEqual(userPairs("皆", [[0, "皆", "みんな"]]), [["皆", "みんな"]], "用户改的 みんな 不许被 みな 盖回去");
+  assert.deepStrictEqual(userPairs("良", [[0, "良", "よい"]]), [["良", "よい"]], "用户改的 よい 不许被 よ 盖回去");
+
+  /*
    * 候选：同一个写法在 IPADIC 里的**所有**读法（不是 tokenizer 选中的那一条）。
    * 灯 七个、弄る 两个；行く 的候选只取词干（い / ゆ），按钮上显示整个词的读音。
    */

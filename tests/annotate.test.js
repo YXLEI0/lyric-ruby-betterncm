@@ -241,6 +241,71 @@ test("跳过要自己安排重试：pass() 报出 retryInMs，别等页面再动
   );
 });
 
+test("整行路径跳过时要自己安排重试，而且不许抛异常（noteCtxRetry 以前根本不存在）", () => {
+  /*
+   * 回归：wrapOneLine 在「文本在动 / 认输期」两处 return 之前调了一个从未定义过的
+   * 函数，异常被 pass 的 catch 吞成 took = 0，于是
+   *   ① 这一行又被推回逐节点那条路（跳过闸门等于没拦住）；
+   *   ② retry 永远拿不到，pass() 不会安排下一轮；
+   *   ③ 每轮多打一条「整行改写失败：noteCtxRetry is not defined」，排障时误导方向。
+   * 所以这里同时盯三件事：有 retry、没有假的失败日志、这一轮确实没注音。
+   */
+  const logs = [];
+  const ctx = newCtx(`<!doctype html><html><body>
+<ul class="lyric"><li class="line"><p>きらめく light と clover</p></li></ul>
+</body></html>`);
+  const ann = makeAnnotator(ctx, {
+    annotator: { motionWindowMs: 200 },
+    log: (m) => logs.push(String(m)),
+  });
+  const p = ctx.document.querySelector("p");
+  const setText = (t) => {
+    while (p.firstChild) p.removeChild(p.firstChild);
+    p.appendChild(ctx.document.createTextNode(t));
+  };
+  ann.pass();
+  assert.ok(p.querySelector("span.wk-line"), "整行路径要真的接管这一行，否则这条测试什么都没测");
+
+  let last = null;
+  for (const t of ["新しい歌の light", "そして clover", "遠くの dream"]) {
+    setText(t);
+    last = ann.pass();
+  }
+  assert.ok(last.unstable > 0, "窗口内变太快确实被跳过了：" + JSON.stringify(last.skips));
+  assert.ok(last.retryInMs > 0, "要给出「多久后重试」：" + last.retryInMs);
+  assert.deepStrictEqual(
+    logs.filter((m) => m.indexOf("整行改写失败") >= 0),
+    [],
+    "跳过是正常路径，不该报「整行改写失败」"
+  );
+  assert.strictEqual(p.querySelectorAll(".wk-ruby").length, 0, "跳过的那一轮不注音：" + p.innerHTML);
+});
+
+test("导出的辅助函数能直接用：visibleTextOf / karaokeTextOf", () => {
+  /*
+   * 回归：visibleTextOf 用了 createAnnotator 里的局部常量，导出之后一调用就
+   * ReferenceError；karaokeTextOf 则和 main.js 各抄了一份（差一个空格整行就对不上）。
+   * 两个都在模块作用域，导出的就是正在用的那一份。
+   */
+  const ctx = newCtx(`<!doctype html><html><body>
+<ul class="lyric">
+  <li class="line"><p>あ<ruby>い<rt class="kt-rt">イ</rt></ruby>う きらめく</p></li>
+  <li class="line"><div class="rnp-karaoke-word is-cjk"><span>燃 </span></div></li>
+  <li class="line"><div class="rnp-karaoke-word"><span>light </span></div></li>
+</ul>
+</body></html>`);
+  const paras = ctx.document.querySelectorAll("p");
+  assert.strictEqual(
+    ctx.WKAnnotate.visibleTextOf(ctx.document, paras[0]),
+    "あいう きらめく",
+    "别人的注音（kt-rt）要排掉"
+  );
+  const cells = ctx.document.querySelectorAll(".rnp-karaoke-word > span");
+  assert.strictEqual(ctx.WKAnnotate.karaokeTextOf(cells[0].firstChild), "燃", "日文格子的尾随空格不算歌词");
+  assert.strictEqual(ctx.WKAnnotate.karaokeTextOf(cells[1].firstChild), "light ", "英文格子的空格是词边界，要留着");
+  assert.strictEqual(ctx.WKAnnotate.karaokeTextOf(null), "", "空节点是空串");
+});
+
 test("单字母：a / I 要标，其它单字母不标", () => {
   // 案例：`Tell me a story` 里的 a 空着。a 和 I 是真正的英文单词，要标；
   // x 这种首字母缩写/排版噪声仍然跳过。

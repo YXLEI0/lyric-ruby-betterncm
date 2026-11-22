@@ -55,7 +55,12 @@ function main() {
     console.error("没有 " + IN_DIR + "（借词表目录），跳过");
     process.exit(0);
   }
-  const files = fs.readdirSync(IN_DIR).filter((f) => f.endsWith(".txt"));
+  /*
+   * 先排序再编译：readdir 的顺序跟文件系统走（NTFS 按名字、ext4 是哈希序），
+   * 不排的话 core/loan.js 里各张表的先后、以及头部那行 "fr 88 条, de …" 的计数
+   * 都会随机器变 —— 同一份 txt 生成两个字节不同的文件。
+   */
+  const files = fs.readdirSync(IN_DIR).filter((f) => f.endsWith(".txt")).sort();
   const tables = {};
   const counts = [];
   for (const f of files) {
@@ -112,9 +117,19 @@ function main() {
   lines.push("  return {");
   lines.push("    tables: RAW,");
   lines.push("    count: COUNT,");
-  lines.push("    /** 查一张表；没有这张表返回 null（调用方自己决定怎么退化） */");
+  /*
+   * 查表只认自己的键（和 core/reading.js 等处的查表口径一致）：`get("__proto__")` /
+   * `get("constructor")` 必须返回 null，不能把 Object.prototype 当成一张借词表递出去。
+   * 这一处以前只手工改过生成物、没回填模板，于是重跑 build:loan 就把它改回去了 ——
+   * 模板和产物必须同步（check 的 [4.5] 只比数据，比不出这种退化）。
+   */
+  lines.push("    /**");
+  lines.push("     * 查一张表；没有这张表返回 null（调用方自己决定怎么退化）。");
+  lines.push("     * 只认自己的键：`get(\"__proto__\")` / `get(\"constructor\")` 要返回 null，");
+  lines.push("     * 不能把 Object.prototype 当成一张借词表递出去。");
+  lines.push("     */");
   lines.push("    get: function (lang) {");
-  lines.push("      return RAW[lang] || null;");
+  lines.push("      return Object.prototype.hasOwnProperty.call(RAW, lang) ? RAW[lang] : null;");
   lines.push("    },");
   lines.push("  };");
   lines.push("});");

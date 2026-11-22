@@ -71,8 +71,26 @@ function main() {
     );
   }
 
-  // 振假名的底座必须在包里（词典缺失时插件会静默地不注音，很难看出来）
-  for (const rel of ["vendor/kuromoji.js", "vendor/furigana.js", "vendor/dict/base.dat.gz", "core/furigana.js"]) {
+  /*
+   * 振假名的底座必须在包里（词典缺失时插件会静默地不注音，很难看出来）。
+   *
+   * 词典不只 base.dat.gz：vendor/dict 下是一整套 IPADIC 文件（cc / tid / unk…），
+   * 少任何一个，kuromoji 加载词典就会失败，而插件同样是"不注音但不报错"。
+   * 以前这里只硬编码查了 base.dat.gz，缺另外 11 个照样打印"与当前源码一致" ——
+   * 所以按目录里**实际存在**的 .dat.gz 清单逐个核对，同时保留下面四条关键路径。
+   */
+  const REQUIRED = ["vendor/kuromoji.js", "vendor/furigana.js", "vendor/dict/base.dat.gz", "core/furigana.js"];
+  const dictDir = path.join(ROOT, "vendor", "dict");
+  const dictFiles = fs.existsSync(dictDir)
+    ? fs.readdirSync(dictDir).filter((f) => f.endsWith(".dat.gz")).sort()
+    : [];
+  if (!dictFiles.length) check(false, "仓库的 vendor/dict 下没有词典文件（装机的包不该缺）");
+  const wantInPkg = REQUIRED.slice();
+  for (const f of dictFiles) {
+    const rel = "vendor/dict/" + f;
+    if (wantInPkg.indexOf(rel) < 0) wantInPkg.push(rel);
+  }
+  for (const rel of wantInPkg) {
     check(
       entries.some((e) => e.name === rel),
       rel + " 在包里"

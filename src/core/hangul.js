@@ -95,6 +95,37 @@
     0, 1, 1, 1, 4, 4, 4, 2, 5, 1, 4, 5, 5, 5, 3, 5, 4, 3, 3, 2, 2, 4, 2, 2, 1, 2, 3, 2,
   ];
 
+  /*
+   * 下面两个判据必须分开看：老代码用一个 endsVoiced() 拿 FINAL_KIND 的 4/3/7 混判，
+   * 于是 ㄹ（FINAL_KIND 是 5）被判成"不响"（알바 读成 アルパ），
+   * ㅂ（3）被判成"响"（집값 读成 チプガプ），而 7 这个类别根本不存在。
+   * 浊化看的是"前一拍响不响"，鼻音化看的是"终声是不是塞音"，两件事硬塞进一个
+   * kind 判断必然对不上注释。
+   */
+
+  /**
+   * 能触发后字浊化的终声（下标同 FINAL 表）：无终声 / ㄴㅁㅇㄹ / 含响音的复合终声。
+   * 按 FINAL 逐个核过：4 ㄴ、5 ㄵ(读ㄴ)、6 ㄶ(读ㄴ)、8 ㄹ、10 ㄻ(读ㅁ)、
+   * 11 ㄼ、12 ㄽ、13 ㄾ、15 ㅀ（都读ㄹ）、16 ㅁ、21 ㅇ 算响音；
+   * 以塞音收尾的 ㄳ(3)、ㄺ(9)、ㄿ(14)、ㅄ(18) 和 ㄱㄷㅂㅅ… 一律不浊化。
+   */
+  var VOICING_FINAL = [
+    true, false, false, false, true, true, true, false, true, false, true, true, true, true, false, true,
+    true, false, false, false, false, true, false, false, false, false, false, false,
+  ];
+
+  /** 这一拍的终声会不会让后字的清音浊化（元音 / 响音收尾） */
+  function triggersVoicing(fin) {
+    return !!VOICING_FINAL[fin];
+  }
+
+  /** 这一拍的终声是不是会鼻音化的塞音 ㄱ/ㄷ/ㅂ 系（含 ㄳ/ㄺ/ㄿ/ㅄ 这类复合终声） */
+  function isStopFinal(fin) {
+    if (!fin) return false;
+    var kind = FINAL_KIND[fin];
+    return kind === 1 || kind === 2 || kind === 3;
+  }
+
   function isHangul(ch) {
     var c = ch.charCodeAt(0);
     return c >= S_BASE && c <= S_LAST;
@@ -131,11 +162,10 @@
       }
     }
     var fin = FINAL[p.fin];
-    if (opts && opts.nasalize && fin) {
+    if (opts && opts.nasalize && isStopFinal(p.fin)) {
+      // kind 1（ㄱ系）/ 2（ㄷ系）都并入 ン，3（ㅂ系）并入 ム
       var kind = FINAL_KIND[p.fin];
-      if (kind === 1) fin = "ン";
-      else if (kind === 2) fin = "ン";
-      else if (kind === 3) fin = "ム";
+      fin = kind === 3 ? "ム" : "ン";
     }
     return kana + fin;
   }
@@ -143,13 +173,6 @@
   /** 一个谚文音节 -> 片假名（不看上下文；单字/查表用） */
   function syllable(ch) {
     return syllableEx(ch, null);
-  }
-
-  /** 这一拍的终声是不是"响的"（元音 / ㄴㅁㅇㄹ 或会被鼻音化的 ㄱㄷㅂ） */
-  function endsVoiced(fin) {
-    if (!fin) return true;
-    var kind = FINAL_KIND[fin];
-    return kind === 4 || kind === 3 || kind === 7; // 4 = ㄴㅁㅇ, 3 = ㅂ(会变 ム), 7 不存在
   }
 
   /** 一串谚文（一个词）-> 片假名：词内做鼻音化和浊化 */
@@ -183,7 +206,7 @@
         var np = parts(next);
         nextNasal = !!np && (np.ini === 2 || np.ini === 6);
       }
-      var voiced = prevFin !== -1 && endsVoiced(prevFin);
+      var voiced = prevFin !== -1 && triggersVoicing(prevFin);
       out.push({ ch: ch, kana: syllableEx(ch, { voiced: voiced, nasalize: nextNasal }) });
       prevFin = p.fin;
     }

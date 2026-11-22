@@ -44,6 +44,30 @@
     return Date.now();
   }
 
+  /*
+   * 词表是普通对象，键是词 —— 而词可能正好叫 `constructor` / `toString` /
+   * `hasOwnProperty`。直接下标读会摸到 Object.prototype：`words["constructor"]`
+   * 拿到的是内置的构造函数（真值），于是 has("constructor") 返回 true、
+   * get("constructor") 还会把 `rec.at = ...` 挂到全局 Object 上去。
+   * 所以读一律先过 own()，只认对象自己的键。
+   */
+  function own(o, k) {
+    return Object.prototype.hasOwnProperty.call(o, k);
+  }
+
+  /*
+   * 写侧的同一条守卫：键是 "__proto__" 时 `o[k] = v` 改的是原型链
+   * （等于把整张表换一个原型），得定义成它自己的属性 —— 那样它就只是
+   * 词表里的一个词条，和 `constructor` / `toString` 一样能被 own() 认出来。
+   */
+  function put(o, k, v) {
+    if (k === "__proto__") {
+      Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+      return;
+    }
+    o[k] = v;
+  }
+
   /** 行标识：整句原文折成一个小哈希，只用来判"是不是同一句"，不存原文 */
   function lineHash(line) {
     var s = String(line == null ? "" : line).replace(/\s+/g, " ").trim();
@@ -106,23 +130,23 @@
       var list = obj.words;
       if (list && typeof list === "object") {
         for (i in list) {
-          if (!Object.prototype.hasOwnProperty.call(list, i)) continue;
+          if (!own(list, i)) continue;
           var rec = list[i];
           var kana = rec && typeof rec === "object" ? rec.k : rec;
           var at = rec && typeof rec === "object" && typeof rec.at === "number" ? rec.at : 0;
           if (typeof kana !== "string" || !isKana(kana)) continue;
-          words[i] = { k: kana, at: at };
+          put(words, i, { k: kana, at: at });
         }
       }
       var pend = obj.seen;
       if (pend && typeof pend === "object") {
         for (i in pend) {
-          if (!Object.prototype.hasOwnProperty.call(pend, i)) continue;
+          if (!own(pend, i)) continue;
           var s = pend[i];
           if (!s || typeof s !== "object") continue;
           if (typeof s.k !== "string" || !isKana(s.k)) continue;
-          if (words[i]) continue; // 已经收了的不用再攒
-          seen[i] = { k: s.k, n: s.n === 2 ? 2 : 1, l: typeof s.l === "string" ? s.l : "", at: typeof s.at === "number" ? s.at : 0 };
+          if (own(words, i)) continue; // 已经收了的不用再攒
+          put(seen, i, { k: s.k, n: s.n === 2 ? 2 : 1, l: typeof s.l === "string" ? s.l : "", at: typeof s.at === "number" ? s.at : 0 });
         }
       }
       trim();
@@ -149,14 +173,14 @@
       }
       var dropped = 0;
       for (var k in words) {
-        if (!Object.prototype.hasOwnProperty.call(words, k)) continue;
+        if (!own(words, k)) continue;
         if (k.length === 1) {
           delete words[k];
           dropped++;
         }
       }
       for (var s in seen) {
-        if (!Object.prototype.hasOwnProperty.call(seen, s)) continue;
+        if (!own(seen, s)) continue;
         if (s.length === 1) delete seen[s];
       }
       if (dropped) save();
@@ -192,13 +216,13 @@
 
     function countWords() {
       var n = 0;
-      for (var k in words) if (Object.prototype.hasOwnProperty.call(words, k)) n++;
+      for (var k in words) if (own(words, k)) n++;
       return n;
     }
 
     function countSeen() {
       var n = 0;
-      for (var k in seen) if (Object.prototype.hasOwnProperty.call(seen, k)) n++;
+      for (var k in seen) if (own(seen, k)) n++;
       return n;
     }
 
@@ -213,7 +237,7 @@
       var over = countWords() - maxWords;
       if (over > 0) {
         var keys = [];
-        for (var k in words) if (Object.prototype.hasOwnProperty.call(words, k)) keys.push(k);
+        for (var k in words) if (own(words, k)) keys.push(k);
         keys.sort(function (a, b) {
           return (words[a].at || 0) - (words[b].at || 0);
         });
@@ -227,7 +251,7 @@
       if (countSeen() <= MAX_SEEN) return;
       var overSeen = countSeen() - MAX_SEEN;
       var skeys = [];
-      for (var k2 in seen) if (Object.prototype.hasOwnProperty.call(seen, k2)) skeys.push(k2);
+      for (var k2 in seen) if (own(seen, k2)) skeys.push(k2);
       skeys.sort(function (a, b) {
         return (seen[a].at || 0) - (seen[b].at || 0);
       });
@@ -237,10 +261,10 @@
     /** 已经学会的读音（没有就 null）。用上了就记一笔"本次省下的请求" */
     function get(word) {
       var w = normalize(word);
-      if (!w) return null;
+      if (!w || !own(words, w)) return null;
       var rec = words[w];
       if (!rec) return null;
-      usedSession[w] = true;
+      put(usedSession, w, true);
       /*
        * 刷新"最近用过"（淘汰时按它丢最久没用过的）。
        * 只改内存、不安排落盘：这个词每轮扫描都会被读一次，
@@ -252,13 +276,13 @@
 
     function has(word) {
       var w = normalize(word);
-      return !!(w && words[w]);
+      return !!(w && own(words, w) && words[w]);
     }
 
     /** 只看一眼，不记"本次用上了"（排障用；get() 会记） */
     function peek(word) {
       var w = normalize(word);
-      if (!w || !words[w]) return null;
+      if (!w || !own(words, w) || !words[w]) return null;
       return words[w].k;
     }
 
@@ -276,7 +300,7 @@
       if (!w || !isKana(kana)) return "skip";
       if (typeof localKana === "string" && localKana === kana) {
         // 本地层本来就对：没什么可学的，顺手把待定记录清掉
-        if (seen[w]) {
+        if (own(seen, w)) {
           delete seen[w];
           schedule();
         }
@@ -284,7 +308,7 @@
       }
 
       var l = lineHash(line);
-      var rec = words[w];
+      var rec = own(words, w) ? words[w] : null;
       if (rec) {
         if (rec.k === kana) {
           rec.at = nowMs();
@@ -301,23 +325,23 @@
         return "drop";
       }
 
-      var s = seen[w];
+      var s = own(seen, w) ? seen[w] : null;
       if (!s) {
-        seen[w] = { k: kana, n: 1, l: l, at: nowMs() };
+        put(seen, w, { k: kana, n: 1, l: l, at: nowMs() });
         trimSeen();
         schedule();
         return "pending";
       }
       if (s.k !== kana) {
         // 两句给了不同读音：靠语境，别学
-        seen[w] = { k: kana, n: 1, l: l, at: nowMs() };
+        put(seen, w, { k: kana, n: 1, l: l, at: nowMs() });
         trimSeen();
         schedule();
         return "pending";
       }
       if (l && s.l !== l) {
         // 第二句也是同一个读音 —— 收下
-        words[w] = { k: kana, at: nowMs() };
+        put(words, w, { k: kana, at: nowMs() });
         delete seen[w];
         trim();
         save(); // 收词是关键时候，立刻落盘（防抖省不掉这一下）
@@ -331,7 +355,7 @@
     function forget(word) {
       var w = normalize(word);
       if (!w) return false;
-      var had = !!words[w] || !!seen[w];
+      var had = (own(words, w) && !!words[w]) || (own(seen, w) && !!seen[w]);
       delete words[w];
       delete seen[w];
       if (had) save();
@@ -350,7 +374,7 @@
     function list() {
       var out = [];
       for (var k in words) {
-        if (!Object.prototype.hasOwnProperty.call(words, k)) continue;
+        if (!own(words, k)) continue;
         out.push({ word: k, kana: words[k].k, at: words[k].at || 0 });
       }
       out.sort(function (a, b) {
@@ -361,7 +385,7 @@
 
     function stats() {
       var used = 0;
-      for (var k in usedSession) if (Object.prototype.hasOwnProperty.call(usedSession, k)) used++;
+      for (var k in usedSession) if (own(usedSession, k)) used++;
       return {
         count: countWords(),
         pending: countSeen(),

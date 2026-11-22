@@ -770,6 +770,56 @@ test("clearCache 之后会重新问", async () => {
   assert.strictEqual(calls.length, 2);
 });
 
+test("日语汉字的平假名答案要落盘、重启后能读回（不然同一个词会重新花钱问）", async () => {
+  /*
+   * kind=ja 的答案允许平假名（あした），可 loadCache 原来只认片假名 ——
+   * 于是这类答案写进 localStorage 以后，重启就被整批丢掉，
+   * 同一个词每首歌都要再问一次模型。
+   */
+  const ctx = loadCore();
+  const first = makeClient(ctx, { reply: () => ({ "1": "あした" }) });
+  first.client.lookup("明日", "明日も君と", null, { kind: "ja" });
+  await first.client.flush();
+  assert.strictEqual(first.client.lookup("明日", "明日も君と", null, { kind: "ja" }), "あした", "平假名答案要收下");
+  first.client.saveCache(); // 正常是 2s 防抖落盘，这里手动触发
+
+  const saved = JSON.parse(ctx.window.localStorage.getItem("lyric-ruby.llm.v1"));
+  const key = Object.keys(saved)[0];
+  assert.strictEqual(saved[key].ja, true, "ja 条目落盘时要带标记：" + JSON.stringify(saved));
+  assert.strictEqual(saved[key].k, "あした");
+
+  // 新客户端读同一份 localStorage（同一个窗口 = 模拟重启后读缓存）
+  const second = makeClient(ctx, { reply: () => ({ "1": "绝不该再问" }) });
+  assert.strictEqual(
+    second.client.lookup("明日", "明日も君と", null, { kind: "ja" }),
+    "あした",
+    "重启后要能从缓存读回平假名答案"
+  );
+  await second.client.flush();
+  assert.strictEqual(second.calls.length, 0, "缓存命中不该再发请求");
+});
+
+test("老缓存没有 ja 标记：照旧只认片假名（向后兼容）", () => {
+  // 标记是这次新加的，老记录里没有 —— 那时只收片假名，判据不能放宽到平假名，
+  // 否则会把以前被判掉的东西（汉字/平假名混进来的脏记录）当成读音用。
+  const ctx = loadCore();
+  const now = Date.now();
+  ctx.window.localStorage.setItem(
+    "lyric-ruby.llm.v1",
+    JSON.stringify({
+      "hello\u0000hello": { k: "ハロー", t: now },
+      "明日\u0000明日も君と": { k: "あした", t: now },
+    })
+  );
+  const c = makeClient(ctx, { reply: () => ({}) });
+  assert.strictEqual(c.client.lookup("hello", "hello"), "ハロー", "老记录里的片假名要照旧读回");
+  assert.strictEqual(
+    c.client.lookup("明日", "明日も君と", null, { kind: "ja" }),
+    null,
+    "没有 ja 标记的平假名老记录照旧不认"
+  );
+});
+
 // ============================================================ test()
 
 test("自检：填好 key 时返回 ok 与示例读音", async () => {
