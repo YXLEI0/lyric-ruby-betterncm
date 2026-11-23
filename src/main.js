@@ -2538,14 +2538,24 @@
   var NUMBER_EN = ["ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン"];
 
   /**
-   * 数字的候选读音：整串读法 + 逐个数字分开读（日语 / 英文片假名）。
+   * 数字的候选读音：整串读法（平假名 / 片假名）+ 逐个数字分开读（日语 / 英文片假名）。
    *
-   *   `105` -> ひゃくご / いちれいご / ワンゼロファイブ
-   *   `12`  -> じゅうに / いちに / ワンツー
+   *   `105` -> ひゃくご / ヒャクゴ / いちぜろご / ワンゼロファイブ
+   *   `12`  -> じゅうに / ジュウニ / いちに / ワンツー
    *
    * 歌词里同一串数字经常两种唱法都有（`24` にじゅうよん / ツーフォー），
-   * 逐个读还得能选英文，所以三个都列出来。
+   * 逐个读还得能选英文，所以都列出来。
+   *
+   * 整串的**片假名**那一条是用户点名要的：多位数除了逐位读（ワンゼロファイブ），
+   * 整个数字也有片假名写法（ヒャクゴ）—— 面板设成平假名时只有 ひゃくご，
+   * 想按片假名唱就选不到。
    */
+  function kataOf(t) {
+    return String(t == null ? "" : t).replace(/[\u3041-\u3096]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) + 0x60);
+    });
+  }
+
   function numberVariants(word) {
     var s = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
       return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
@@ -2561,6 +2571,25 @@
     if (whole) {
       var w = hiraOnly(whole);
       out.push({ kana: w, label: w });
+      // 多位数的整串片假名（一位数的 さん / サン 已经在单字表里，别在这里再堆一条）
+      if (s.length >= 2) {
+        var kata = kataOf(w);
+        if (kata !== w) out.push({ kana: kata, label: kata });
+      }
+    }
+    /*
+     * 英语数词：`10` テン、`105` ワンハンドレッドファイブ。
+     *
+     * 用户点名要的：数字按英文念时，既不是日语整串（ジュウ / ヒャクゴ），
+     * 也不是逐位念（ワンゼロ）—— 得单独一条。
+     */
+    try {
+      if (typeof WKNumbers !== "undefined" && WKNumbers.englishKana) {
+        var enWord = WKNumbers.englishKana(s);
+        if (enWord) out.push({ kana: enWord, label: enWord });
+      }
+    } catch (eEn) {
+      /* 没有数字模块就只留日语那几条 */
     }
     if (s.length >= 2) {
       var jp = "";
@@ -3644,12 +3673,30 @@
   }
 
   function installInlineEditor() {
+    /** 这个节点是不是落在音译 / 翻译 / 占位那一层里（那几层不是原文） */
+    function inSkippedLayer(el) {
+      for (var up = el; up && up !== document.body; up = up.parentNode) {
+        if (up.nodeType !== 1) continue;
+        if (fontSkipped(up)) return true;
+      }
+      return false;
+    }
+
     /** 这个节点是不是我们自己的注音 / 留空壳（往上找到 body 为止） */
     function editableFrom(target, ev) {
       var t = target;
       while (t && t !== document.body) {
         var cn = t && typeof t.className === "string" ? t.className : "";
-        if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) return t;
+        if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) {
+          /*
+           * 音译 / 翻译层里的注音**不许双击改**。
+           *
+           * 那两层不是原文（RNP 的 `-romaji` / `-translated`，还有别家插件的 trans 层），
+           * 按位置存进行文本也对不上原来那一行 —— 真机上点了会弹出一堆候选，
+           * 选完什么都不变。宁可不接，把双击还给宿主（跳到这句）。
+           */
+          return inSkippedLayer(t) ? null : t;
+        }
         t = t.parentNode;
       }
       // 没有注音的地方：符号 / 西文 / 数字双击也能注（读音由用户自己填）
@@ -3735,6 +3782,8 @@
     function symbolTarget(ev) {
       var spot = clickTextSpot(ev);
       if (!spot || !spot.node || spot.node.nodeType !== 3) return null;
+      // 音译 / 翻译层里不给入口（给了也存不对）
+      if (inSkippedLayer(spot.node)) return null;
       var lineEl = lyricRegionOf(spot.node);
       if (!lineEl) return null;
       /*

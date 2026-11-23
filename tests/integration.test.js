@@ -7768,6 +7768,38 @@ test("RNP 歌词页：双击注音只开编辑器，不把「跳到这句」传�
   assert.ok(doc.querySelector("[data-wk-edit]"), "编辑器要打开");
 });
 
+test("双击音译 / 翻译层里的注音不开编辑器（那两层不是原文）", async () => {
+  /*
+   * RNP 一行有三层：-original（原文）/ -romaji（音译）/ -translated（中文翻译）。
+   * 后两层不是歌词 —— 在里面改读音，按位置存进行文本也对不上原来那一行
+   * （真机：点了弹一堆候选，选完什么都不变）。所以这两层的注音一律不当编辑目标，
+   * 双击还给宿主（跳到这句）。
+   */
+  const HTML =
+    "<!doctype html><html><head></head><body>" +
+    '<div class="rnp-lyrics"><div class="rnp-lyrics-line">' +
+    '<div class="rnp-lyrics-line-original">泥水の夜</div>' +
+    '<div class="rnp-lyrics-line-romaji">do ro mi zu no yo ru</div>' +
+    '<div class="rnp-lyrics-line-translated">泥水的夜</div>' +
+    "</div></div>" +
+    '<ul class="lyric"><li class="line"><p>泥水の夜</p></li></ul></body></html>';
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ 泥水: "ドロミズ", 夜: "ヨル" }));
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  // 手工往翻译层塞一个"我们形态"的注音：真机上那两层被注上时就是这个样子
+  const trans = doc.querySelector(".rnp-lyrics-line-translated");
+  trans.innerHTML = '<ruby class="wk-ruby">夜<span class="wk-rt">ヨル</span></ruby>';
+  const ruby = trans.querySelector(".wk-ruby");
+  let seeks = 0;
+  env.window.addEventListener("dblclick", () => seeks++, true);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(80);
+  assert.strictEqual(doc.querySelector("[data-wk-edit]"), null, "翻译层的注音不许开编辑器");
+  assert.strictEqual(seeks, 1, "双击要还给宿主（跳到这句）");
+});
+
 test("双击没有注音的一段（符号 / 全角字母）：插件不猜，用户自己填读音", async () => {
   /*
    * 真机（星を探してｂｂ「ふらつっｂｂ」）：那两个全角 `ｂ` 是当降号用的，插件不会自己注
@@ -7880,12 +7912,23 @@ test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假�
   const chips = () => Array.from(env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')).map((b) => b.textContent);
   dbl(byWord('12'));
   await sleep(50);
-  assert.deepStrictEqual(chips(), ['じゅうに', 'いちに', 'ワンツー'], '12 的候选：' + chips().join('/'));
-  dbl(byWord('105'));
+  assert.deepStrictEqual(
+    chips(),
+    ["じゅうに", "ジュウニ", "トゥエルブ", "いちに", "ワンツー"],
+    "12 的候选（整串平假名 / 整串片假名 / 英语数词 / 逐位 / 英文逐位）：" + chips().join("/")
+  );
+  dbl(byWord("105"));
   await sleep(50);
-  assert.deepStrictEqual(chips(), ['ひゃくご', 'いちぜろご', 'ワンゼロファイブ'], '105 的候选：' + chips().join('/'));
-  // 点英文那个，读音要落盘并显示
-  const en = env.document.querySelectorAll('.wk-edit-box .wk-edit-variant')[2];
+  assert.deepStrictEqual(
+    chips(),
+    ["ひゃくご", "ヒャクゴ", "ワンハンドレッドファイブ", "いちぜろご", "ワンゼロファイブ"],
+    "105 的候选（整个数字的英语数词 ワンハンドレッドファイブ 也要有）：" + chips().join("/")
+  );
+  // 点英文逐位那个，读音要落盘并显示
+  const en = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter(
+    (b) => b.textContent === "ワンゼロファイブ"
+  )[0];
+  assert.ok(en, "候选里要有 ワンゼロファイブ：" + chips().join("/"));
   en.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(byWord('105').querySelector('.wk-rt').textContent, 'ワンゼロファイブ', p.innerHTML);

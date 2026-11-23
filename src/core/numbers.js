@@ -85,8 +85,67 @@
     return out || "ゼロ";
   }
 
+  /**
+   * 英语数词的片假名读法：10 -> テン、12 -> トゥエルブ、105 -> ワンハンドレッドファイブ。
+   *
+   * 为什么单独一条：歌词里的数字常按英文念（`24` トゥエンティフォー、`10` テン），
+   * 日语那套（ジュウ / ヒャクゴ）和"逐个数字念"（ワンゼロファイブ）都覆盖不到它。
+   * 按英语数词拼（and 不念，日语里通常也不补 アンド）；超过 999999 不猜。
+   *
+   * @param {string|number} value 阿拉伯数字（全角也认）
+   * @returns {string|null} 片假名读音；认不出来返回 null
+   */
+  var EN_ONE = [
+    "ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン",
+    "テン", "イレブン", "トゥエルブ", "サーティーン", "フォーティーン", "フィフティーン",
+    "シックスティーン", "セブンティーン", "エイティーン", "ナインティーン",
+  ];
+  var EN_TEN = ["", "", "トゥエンティ", "サーティー", "フォーティー", "フィフティー", "シックスティー", "セブンティー", "エイティー", "ナインティー"];
+
+  /** 十位后面接个位时，长音符去掉（トゥエンティー + ワン → トゥエンティワン） */
+  function dropLong(s) {
+    return s.charAt(s.length - 1) === "ー" ? s.slice(0, -1) : s;
+  }
+
+  function enUnder100(n) {
+    if (n < 20) return EN_ONE[n];
+    var t = Math.floor(n / 10);
+    var o = n % 10;
+    return o ? dropLong(EN_TEN[t]) + EN_ONE[o] : EN_TEN[t];
+  }
+
+  function enUnder1000(n) {
+    var h = Math.floor(n / 100);
+    var rest = n % 100;
+    var out = "";
+    if (h) out += (h === 1 ? "ワン" : EN_ONE[h]) + "ハンドレッド";
+    if (rest) out += enUnder100(rest);
+    return out;
+  }
+
+  function englishKana(value) {
+    var d = String(value == null ? "" : value).replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+    d = d.replace(/[^0-9]/g, "");
+    if (!d) return null;
+    d = d.replace(/^0+/, "");
+    if (!d) return "ゼロ";
+    if (d.length > 6) return null; // 超过 999999：不猜
+    var n = Number(d);
+    if (!isFinite(n)) return null;
+    var th = Math.floor(n / 1000);
+    var rest = n % 1000;
+    var out = "";
+    if (th) out += (th === 1 ? "ワン" : enUnder1000(th)) + "サウザンド";
+    if (rest) out += enUnder1000(rest);
+    return out || "ゼロ";
+  }
+
   return {
     reading: reading,
+    /** 英语数词的片假名（10 テン / 105 ワンハンドレッドファイブ） */
+    englishKana: englishKana,
     /** 一行里的数字段（调试 / 面板用） */
     scan: function (text) {
       var s = String(text == null ? "" : text);
