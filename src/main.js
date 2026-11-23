@@ -2283,34 +2283,43 @@
   }
 
   /**
-   * 一个注音在**整行**里的起点（就地编辑按位置存，靠它定位）。
+   * 行内某个文本位置在"整行原文"里的下标（就地编辑按位置存，全靠它定位）。
    *
-   * 走一遍行内文本节点：`<rt>` / `<rp>` 是注音不是原文，跳过；走到这个 ruby 的
-   * 底字节点时累计的长度就是起点。
+   * 走一遍行内文本节点：`<rt>` / `<rp>` 是注音不是原文，跳过；音译 / 翻译层、
+   * 逐字层替身、逐字格尾随的排版空格都不算 —— 口径必须和 regionText / karaokeTextOf
+   * 一致，否则存下去的修正对不上注音时用的那把键。
+   *
+   * @param {Node} node       文本节点
+   * @param {number} inNode   这个节点内的第几个字（默认 0）
+   * @param {Element} lineEl  行（注音区域）
+   * @returns {number} 行内下标；这个节点根本不在行里时返回 -1
    */
-  function rubyOffset(rubyEl, lineEl) {
-    if (!rubyEl || !lineEl) return -1;
-    var base = rubyEl.firstChild;
+  function offsetInLine(node, inNode, lineEl) {
+    if (!node || !lineEl) return -1;
     var total = 0;
+    var from = inNode == null ? 0 : inNode;
     var walker = document.createTreeWalker(lineEl, 4, null, false); // 4 = SHOW_TEXT
-    var node;
-    while ((node = walker.nextNode())) {
-      var p = node.parentNode;
+    var cur;
+    while ((cur = walker.nextNode())) {
+      var p = cur.parentNode;
       if (p && p.nodeType === 1) {
         if (p.tagName === "RT" || p.tagName === "RP") continue;
         var cn = typeof p.className === "string" ? p.className : "";
         /*
          * 只跳过注音（wk-rt）。**wk-hide 要算进位置**：那是作词者写的括号读音
-         * `謎(なぞ)る`，它本来就属于行文本（见 originalText / markNodeOffsets）——
-         * 以前这里把它当"不是原文"跳过，于是括号后面的注音起点全部少了括号那几格，
-         * 切词 / 合并 / 留空都写到了前几个字上（真机现象：`オトで謎(なぞ)る星空の軌跡`
-         * 里切 軌跡，结果 る=き、星=せき，整行错位）。
+         * `謎(なぞ)る`，它本来就属于行文本（见 originalText / markNodeOffsets）。
          */
         if (/(^|\s)wk-rt(\s|$)/.test(cn)) continue;
       }
-      if (node === base) return total;
+      var piece = karaokeTextOf(cur);
+      if (cur === node) {
+        var off = from;
+        if (!(off > 0)) off = 0;
+        if (off > piece.length) off = piece.length;
+        return total + off;
+      }
       // 区域自己的缩进 / 换行不算位置（和 regionText 同一套规矩）
-      if (node.parentNode === lineEl && !String(node.nodeValue || "").replace(/\s+/g, "")) continue;
+      if (cur.parentNode === lineEl && !String(cur.nodeValue || "").replace(/\s+/g, "")) continue;
       /*
        * 只数"原文"那层的字：音译 / 翻译层（fontSkipped）和注音（rt）都不算，
        * 否则 RNP 里算出来的起点会多出几十个字符，存的修正对不上任何一行。
@@ -2327,10 +2336,21 @@
         }
       }
       if (skippedLayer) continue;
-      // 和 originalText 同一套口径：逐字层字后面那个排版空格不算进位置
-      total += karaokeTextOf(node).length;
+      total += piece.length;
     }
     return -1;
+  }
+
+  /**
+   * 一个注音在**整行**里的起点（就地编辑按位置存，靠它定位）。
+   *
+   * 底字是 ruby 的第一个子节点（文本节点），起点就是它前面那些字加起来。
+   */
+  function rubyOffset(rubyEl, lineEl) {
+    if (!rubyEl || !lineEl) return -1;
+    var base = rubyEl.firstChild;
+    if (!base || base.nodeType !== 3) return -1;
+    return offsetInLine(base, 0, lineEl);
   }
 
   /** 一个 ruby 的底字 + 读音 */
@@ -2581,6 +2601,49 @@
     return kanaByConfig(k) + "(" + kanaByConfig(tail) + ")";
   }
 
+  /*
+   * 数字 + 人 / 日 的**熟字训**：读法和每个字都对不上（1人 ひとり、3日 みっか、20日 はつか）。
+   *
+   * 这些词不进逐字表：摊开只会给出「いち + にん」「さん + にち」这种不存在的组合 ——
+   * 候选直接给整词的固定读法（和 JP_READING_VARIANTS 里汉数字那几条同一个口径）。
+   * 全角数字查表前会折成半角，所以表里只写一份。
+   *
+   * 3人 / 105人 / 3月 这类**规则**组合不在这里：它们照旧摊开让用户自己拼
+   * （さん + にん、ひゃくご + にん、さん + がつ）。
+   */
+  var JUKUJIKUN_NUMBERS = (function () {
+    var table = {};
+    var KANJI = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+    function add(form, list) {
+      table[foldDigits(form)] = list;
+    }
+    add("1人", ["ひとり", "いちにん"]);
+    add("一人", ["ひとり", "いちにん"]);
+    add("2人", ["ふたり", "ににん"]);
+    add("二人", ["ふたり", "ににん"]);
+    var DAYS = ["", "ついたち", "ふつか", "みっか", "よっか", "いつか", "むいか", "なのか", "ようか", "ここのか", "とおか"];
+    for (var d = 1; d <= 10; d++) {
+      // 一日 两读都成立（いちにち / ついたち），别的日只有熟字训那一个
+      var list = d === 1 ? ["いちにち", DAYS[d]] : [DAYS[d]];
+      add(String(d) + "日", list);
+      add(KANJI[d] + "日", list);
+    }
+    add("14日", ["じゅうよっか"]);
+    add("十四日", ["じゅうよっか"]);
+    add("20日", ["はつか"]);
+    add("二十日", ["はつか"]);
+    add("24日", ["にじゅうよっか"]);
+    add("二十四日", ["にじゅうよっか"]);
+    return table;
+  })();
+
+  /** 这个词是不是"数字 + 人/日"的熟字训（是就返回它的固定读法，否则 null） */
+  function jukuJikunNumbers(word) {
+    var w = foldDigits(word);
+    if (!w) return null;
+    return Object.prototype.hasOwnProperty.call(JUKUJIKUN_NUMBERS, w) ? JUKUJIKUN_NUMBERS[w] : null;
+  }
+
   /**
    * 这个底字的候选读音：手写表优先（完整的常用读法），表里没有就现查 IPADIC
    * （`灯` アカリ / ヒ / トウ / トモシ…、`弄る` いじくる / いじる），按底字切成
@@ -2599,7 +2662,7 @@
     var norm = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
       return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
     });
-    var list = JP_READING_VARIANTS[word] || JP_READING_VARIANTS[norm];
+    var list = jukuJikunNumbers(word) || JP_READING_VARIANTS[word] || JP_READING_VARIANTS[norm];
     var out = [];
     var i;
     /*
@@ -2727,70 +2790,11 @@
       }
       return items;
     }
-    /**
-     * 两个以上汉字组成的词：按**每个字的音读 / 训读组合**再生一批候选。
-     *
-     * 为什么需要：分词（IPADIC）只给这个词"最常见的那个读法"，手写表也只列几首歌里
-     * 常见的写法，于是 `一時` 只有 いちじ 一个按钮 —— 想换成 ひととき / いっとき
-     * （真机：用户报「给一時增加更多候选」）根本没有地方点。
-     *
-     * 组合会很多，所以每个字只取前两个音读 + 前两个训读，总数封顶 12 条；
-     * 另外补上**促音便**的组合（いち + とき → いっとき、いち + かい → いっかい）：
-     * 前一个字以 つ / ち / く / き 收尾、后一个字以清音开头时，日语里就这么变。
+    /*
+     * 以前这里还有「按每个字的音读 / 训读拼出一批整词候选」那套（`一時` 在 いちじ /
+     * ひととき / いっとき 之外再堆十几条组合）。已经删掉：整词层面只列**真的存在**的读法，
+     * 想自己拼就用逐字表 —— 两套入口叠在一起，按钮一屏都是噪音。
      */
-    function withPerCharReadings(word, items) {
-      if (typeof WKKanjiReadings === "undefined" || !WKKanjiReadings.table) return items;
-      var chars = String(word == null ? "" : word).split("");
-      if (chars.length < 2 || chars.length > 4) return items;
-      var c;
-      for (c = 0; c < chars.length; c++) if (!/^[\u4E00-\u9FFF]$/.test(chars[c])) return items;
-      var VOICELESS = /^[かきくけこさしすせそたちつてとはひふへほ]/;
-      var pools = [];
-      for (c = 0; c < chars.length; c++) {
-        var on = WKKanjiReadings.onOf(chars[c]).slice(0, 2);
-        var kun = WKKanjiReadings.kunOf(chars[c]).slice(0, 2);
-        var pool = on.concat(kun);
-        // 有一处查不到就别拼了：拼出来的读音一定缺点什么，反而误导
-        if (!pool.length) return items;
-        pools.push(pool);
-      }
-      function have(kana) {
-        var h = hiraOnly(kana);
-        for (var q = 0; q < items.length; q++) if (hiraOnly(items[q].kana) === h) return true;
-        return false;
-      }
-      var combos = [[]];
-      for (c = 0; c < pools.length; c++) {
-        var next = [];
-        for (var a = 0; a < combos.length; a++) {
-          for (var b = 0; b < pools[c].length; b++) next.push(combos[a].concat([pools[c][b]]));
-        }
-        combos = next;
-        if (combos.length > 16) break;
-      }
-      var extra = [];
-      for (var k = 0; k < combos.length; k++) {
-        var parts = combos[k];
-        extra.push(parts.join(""));
-        /*
-         * 促音便：前一个字收 つ/ち/く/き、后一个字清音开头 → いっ + とき。
-         * 必须按"这一段自己的读音"换（不能用每个字的第一个读音去拼尾巴，
-         * 那样会拼出 いっひとじ 这种根本不存在的读法）。
-         */
-        for (var pc = 0; pc < parts.length - 1; pc++) {
-          var sok = sokuonForm(parts[pc]);
-          if (!sok || !VOICELESS.test(parts[pc + 1].charAt(0))) continue;
-          var v2 = parts.slice();
-          v2[pc] = sok;
-          extra.push(v2.join(""));
-        }
-      }
-      for (var e = 0; e < extra.length && items.length < 12; e++) {
-        if (!extra[e] || have(extra[e])) continue;
-        items.push({ kana: extra[e], label: extra[e] });
-      }
-      return items;
-    }
 
     function expandVariants(word, items) {
       var base = dedupe(withOnbin(word, withKanjiReadings(word, items)));
@@ -2857,6 +2861,26 @@
       return base;
     }
 
+    /*
+     * 一位数字 + つ（`1つ` ひとつ / `3つ` みっつ）：底字只到数字（`1つ` 的 ruby 是 `1`，
+     * つ 留在外面），所以候选里必须有**训读 + 送假名**，否则拼出来是 いちつ / みつ。
+     * 这条要排在手写表前面：表里 1 只有 いち/ひと/ワン、3 只有 さん/み/スリー（み 少了 っ）。
+     * 标签带括号写送假名（`ひと(つ)`），一眼看得出点了会读成什么。
+     */
+    if (/^[1-9]$/.test(norm) && /^[\s\u3000]*つ/.test(after)) {
+      var kunTsu = KUN_TSU[Number(norm) - 1];
+      var withTsu = [{ kana: kunTsu, label: kunTsu + "つ" }];
+      // 表里其余的读法照旧留着（有人就唱 いちつ）
+      if (list && list.length) {
+        for (var lt = 0; lt < list.length; lt++) {
+          var lv = list[lt];
+          if (typeof lv === "string") withTsu.push({ kana: lv, label: lv });
+          else if (lv && lv.kana && keep(lv)) withTsu.push({ kana: lv.kana, label: lv.label || lv.kana });
+        }
+      }
+      return dedupe(withTsu);
+    }
+
     if (list && list.length) {
       for (i = 0; i < list.length; i++) {
         var v = list[i];
@@ -2901,7 +2925,7 @@
     // 多位数（12 / 105）：整串读法 + 逐个数字读（日语 / 英文片假名）
     if (/^[0-9]+$/.test(norm)) {
       var nums = numberVariants(norm);
-      if (nums.length) return dedupe(nums);
+      if (nums && nums.length) return dedupe(nums);
     }
     if (typeof WKFurigana === "undefined" || !WKFurigana.variants) {
       return expandVariants(word, out);
@@ -2956,13 +2980,7 @@
     return mine[idx] || el;
   }
 
-  /** 两个以上纯汉字的词：编辑器里给它摊开"每个字能读什么" */
-  function isAllKanjiWord(word) {
-    var w = String(word == null ? "" : word);
-    if (w.length < 2 || w.length > 6) return false;
-    // 汉字 + 假名的混排词也要能展开（掻き / 奏で 这种，假名那几行固定不动）
-    return /^[\u4E00-\u9FFF\u3041-\u3096\u30FC]+$/.test(w) && /[\u4E00-\u9FFF]/.test(w);
-  }
+  /* 「能不能摊开成逐字表」见下面的 isComposableWord（汉字词 + 数字混排都算） */
 
   /** 一个汉字能读成什么：音读 / 训读 + 促音便（いち → いっ） */
   function charReadingChoices(ch) {
@@ -3055,27 +3073,128 @@
   }
 
   /**
-   * 逐字读音表：每个字一行按钮，点什么就是什么，组合权交给用户。
+   * 能不能摊开成"一段一段自己拼"的逐字表。
+   *
+   * 以前只认**纯汉字词**（`一時` / `掻き`），于是 `3日` / `12月` / `105人` 这种
+   * "数字 + 汉字"的词在编辑器里只有整词候选（而且通常一个都没有），用户想拼
+   * `さん` + `にち` 也拼不出来 —— 双击只有一个空输入框。
+   *
+   * 现在数字段也算一段：连续的全角 / 半角数字是一段（`105` 一段，不是三行），
+   * 它的候选里既有整串读法（ひゃくご），也有逐位读法（いちぜろご），
+   * 还有**数字本身**的片假名（ワンゼロファイブ）—— 用户想怎么拼就怎么拼。
+   *
+   * 纯数字不走这张表：整词候选已经给了那两三种读法，再摊一遍只是噪音。
+   */
+  function isComposableWord(word) {
+    var w = String(word == null ? "" : word);
+    if (w.length < 2 || w.length > 8) return false;
+    // 熟字训（1人 ひとり、3日 みっか…）不摊开：摊开只会给出「いち + にん」这种组合
+    if (jukuJikunNumbers(w)) return false;
+    // 至少得有一个汉字或假名（纯数字交给整词候选）
+    if (!/[\u4E00-\u9FFF\u3041-\u3096\u30A1-\u30FA\u30FC]/.test(w)) return false;
+    // 只由 汉字 / 假名 / 长音符 / 全半角数字 组成
+    return /^[\u4E00-\u9FFF\u3041-\u3096\u30A1-\u30FA\u30FC0-9\uFF10-\uFF19]+$/.test(w);
+  }
+
+  /** 全角数字折半角（`１０５` 和 `105` 是同一串） */
+  function foldDigits(s) {
+    return String(s == null ? "" : s).replace(/[\uFF10-\uFF19]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+  }
+
+  /*
+   * 训读数字 + 送假名 つ：ひとつ / ふたつ / みっつ / よっつ / いつつ / むっつ /
+   * ななつ / やっつ / ここのつ。`つ` 那一行是固定的，数字这一段给"ひと"就拼成 ひとつ。
+   */
+  var KUN_TSU = ["ひと", "ふた", "みっ", "よっ", "いつ", "むっ", "なな", "やっ", "ここの"];
+
+  /**
+   * 一段连续数字的候选读音：
+   *   训读 + つ（`1つ` → ひと。下一段是 つ 时才有，排最前面）、
+   *   整串读法（`105` ひゃくご）、逐位平假名（いちぜろご）、
+   *   逐位片假名（ワンゼロファイブ —— "数字本身"的读法）。
+   * 单个数字再补一个片假名（`3` スリー）。
+   */
+  function digitChoices(text, nextIsTsu) {
+    var norm = foldDigits(text);
+    var out = [];
+    function add(k) {
+      var s = String(k == null ? "" : k);
+      if (!s || out.indexOf(s) >= 0) return;
+      out.push(s);
+    }
+    if (nextIsTsu && /^[1-9]$/.test(norm)) {
+      // 「1つ」拼出来就是 ひとつ：训读排第一，别的读法照旧留着（有人就唱 いちつ）
+      add(KUN_TSU[Number(norm) - 1]);
+    }
+    var items = [];
+    try {
+      items = numberVariants(norm) || [];
+    } catch (eNum) {
+      items = [];
+    }
+    for (var i = 0; i < items.length; i++) add(items[i].kana);
+    if (/^[0-9]$/.test(norm)) {
+      var d = norm.charCodeAt(0) - 48;
+      if (d >= 0 && d <= 9) add(NUMBER_EN[d]);
+    }
+    return out;
+  }
+
+  /**
+   * 把词切成"能各自选读音的段"：连续数字一段、汉字一个字一段、假名固定。
+   * `105日` → [105][日]；`一日` → [一][日]；`3ヶ月` → [3][ヶ][月]。
+   */
+  function wordSegments(word) {
+    var s = String(word == null ? "" : word);
+    var out = [];
+    var i = 0;
+    while (i < s.length) {
+      var ch = s.charAt(i);
+      if (/[0-9\uFF10-\uFF19]/.test(ch)) {
+        var j = i + 1;
+        while (j < s.length && /[0-9\uFF10-\uFF19]/.test(s.charAt(j))) j++;
+        out.push({ text: s.slice(i, j), kind: "digit" });
+        i = j;
+        continue;
+      }
+      out.push({ text: ch, kind: /[\u4E00-\u9FFF]/.test(ch) ? "kanji" : "fixed" });
+      i++;
+    }
+    return out;
+  }
+
+  /**
+   * 逐字读音表：每一段一行按钮，点什么就是什么，组合权交给用户。
    * 点按钮只改输入框（不直接存），回车才存。
    */
   function buildCharRows(word, box, current, onChange) {
-    var chars = String(word || "").split("");
+    var segs = wordSegments(word);
     var rows = [];
     var i;
-    for (i = 0; i < chars.length; i++) {
+    for (i = 0; i < segs.length; i++) {
+      var seg = segs[i];
       /*
        * 假名那几行是"固定的读法"（掻き 的 き、奏で 的 で），只显示、不需要选。
        */
-      if (!/[\u4E00-\u9FFF]/.test(chars[i])) {
-        rows.push({ ch: chars[i], choices: [hiraOnly(chars[i])], pick: hiraOnly(chars[i]), fixed: true });
+      if (seg.kind === "fixed") {
+        rows.push({ ch: seg.text, choices: [hiraOnly(seg.text)], pick: hiraOnly(seg.text), fixed: true });
         continue;
       }
-      var choices = charReadingChoices(chars[i]);
+      if (seg.kind === "digit") {
+        // 下一段是 `つ` 时补训读（ひと / ふた…），拼出来才是 ひとつ
+        var nextIsTsu = !!(segs[i + 1] && segs[i + 1].kind === "fixed" && segs[i + 1].text === "つ");
+        var nums = digitChoices(seg.text, nextIsTsu);
+        rows.push({ ch: seg.text, choices: nums, pick: null, free: !nums.length });
+        continue;
+      }
+      var choices = charReadingChoices(seg.text);
       /*
        * 词典里一个读音都查不到的字（表外字 / 人名用字）也给一行：留个输入框自己填。
        * 以前这里是 `return null`，整张表都不出 —— 于是 `掻痒` 这种词里的字根本改不了。
        */
-      rows.push({ ch: chars[i], choices: choices, pick: null, free: !choices.length });
+      rows.push({ ch: seg.text, choices: choices, pick: null, free: !choices.length });
     }
     var anyFree = rows.some ? rows.some(function (r) { return r.free; }) : false;
     for (i = 0; i < rows.length; i++) if (rows[i].free) anyFree = true;
@@ -3201,16 +3320,44 @@
     return host;
   }
 
-  function openEditor(rubyEl) {
-    rubyEl = canonicalRuby(rubyEl);
-    if (!rubyEl || !rubyEl.parentNode) return;
-    var parts = rubyParts(rubyEl);
-    var word = parts.word;
-    var current = parts.kana;
-    if (!word) return;
-    var lineEl = lineElementOf(rubyEl);
-    var lineText = lineTextOf(lineEl);
-    var startAt = rubyOffset(rubyEl, lineEl);
+  /**
+   * 打开就地读音编辑器。
+   *
+   * 两种入口：
+   *   - 双击已有的注音（rubyEl）→ 改这一处的读音；
+   *   - 双击一段没有注音的文字（seed）→ 给它一个读音（符号 / 西文 / 数字，
+   *     见 installInlineEditor 的 symbolTarget）。seed 里已经算好了底字、起点和行文本。
+   */
+  function openEditor(rubyEl, seed) {
+    // 一个参数时可能是"自己注音"的描述对象（没有 nodeType，带 word/at/lineEl）
+    if (!seed && rubyEl && rubyEl.nodeType !== 1 && rubyEl.word) {
+      seed = rubyEl;
+      rubyEl = null;
+    }
+    var seedMode = !!(seed && seed.word);
+    var parts = null;
+    var word = "";
+    var current = "";
+    var lineEl = null;
+    var lineText = "";
+    var startAt = -1;
+    if (seedMode) {
+      word = String(seed.word);
+      current = String(seed.kana || "");
+      lineEl = seed.lineEl;
+      lineText = seed.lineText;
+      startAt = seed.at;
+    } else {
+      rubyEl = canonicalRuby(rubyEl);
+      if (!rubyEl || !rubyEl.parentNode) return;
+      parts = rubyParts(rubyEl);
+      word = parts.word;
+      current = parts.kana;
+      if (!word) return;
+      lineEl = lineElementOf(rubyEl);
+      lineText = lineTextOf(lineEl);
+      startAt = rubyOffset(rubyEl, lineEl);
+    }
 
     /*
      * 要存的"底字 + 起点"。默认就是这一个 ruby；点了「合并」之后变成两个相邻注音
@@ -3218,7 +3365,8 @@
      */
     var span = { at: startAt, word: word };
     // 这个底字有没有多个读法（明日 / 行 / 抱 / 解 / 灯 / 弄…），有就在下面放一排候选按钮
-    var variantReadings = editorVariants(word, lineText, startAt);
+    // （自己注音那一路没有词典读音可列，直接跳过）
+    var variantReadings = seedMode ? null : editorVariants(word, lineText, startAt);
     var variantChips = null;
     var variantButtons = [];
     if (variantReadings && variantReadings.length < 2) variantReadings = null;
@@ -3243,8 +3391,14 @@
     box.type = "text";
     box.className = "wk-edit";
     box.value = current;
-    box.placeholder = "回车保存｜清空=恢复默认｜- = 留空｜斜杠=切词（いち/ど/わら/）";
-    box.title = "回车保存；清空=恢复词典读音；- = 这一处不注音；斜杠按字切词（例 いち/ど/わら/，空段=并入前一个字）";
+    if (seedMode) {
+      // 自己注音：先说清楚注的是哪一段（符号看起来都差不多，免得填错地方）
+      box.placeholder = "给「" + word + "」填读音：回车保存｜- = 留空";
+      box.title = "双击这一段（符号 / 西文）后给它填读音；回车保存，- 表示这一段不注音";
+    } else {
+      box.placeholder = "回车保存｜清空=恢复默认｜- = 留空｜斜杠=切词（いち/ど/わら/）";
+      box.title = "回车保存；清空=恢复词典读音；- = 这一处不注音；斜杠按字切词（例 いち/ど/わら/，空段=并入前一个字）";
+    }
     box.style.fontSize = "14px";
     box.style.padding = "2px 6px";
     box.style.width = Math.max(80, (current.length + 4) * 14) + "px";
@@ -3282,9 +3436,10 @@
       });
       return b;
     }
-    wrap.appendChild(makeMergeBtn(-1, "←"));
+    // 合并按钮只在"改已有注音"时有意义：自己注的那一段旁边可能压根没有注音
+    if (!seedMode) wrap.appendChild(makeMergeBtn(-1, "←"));
     wrap.appendChild(box);
-    wrap.appendChild(makeMergeBtn(1, "→"));
+    if (!seedMode) wrap.appendChild(makeMergeBtn(1, "→"));
 
 
     var resetBtn = document.createElement("button");
@@ -3369,7 +3524,12 @@
      * 存下去就等于把半截读音钉死了。回车才存（和手输同一条路）。
      */
     var charRows = null;
-    if (isAllKanjiWord(word)) {
+    /*
+     * 逐字表：汉字词、汉字 + 假名、以及**数字 + 汉字**（`3日` / `12月` / `105人`）都摊开。
+     * 数字那一段的候选里有整串读法、逐位读法、和数字本身的片假名（ワンゼロファイブ）——
+     * 用户想拼 `さん` + `にち`，或者 `スリー` + `デー`，都行。
+     */
+    if (isComposableWord(word)) {
       charRows = buildCharRows(word, box, current, function (val) {
         box.value = kanaByConfig(val);
       });
@@ -3377,9 +3537,13 @@
     }
 
     try {
-      var r = rubyEl.getBoundingClientRect();
-      wrap.style.left = Math.max(4, r.left) + "px";
-      wrap.style.top = Math.max(4, r.top - (variantChips ? 60 : 34)) + "px";
+      /*
+       * 位置：改注音那一路用 ruby 的盒子；自己注音那一路用双击位置的字符盒子
+       * （没有盒子时退回左上角，别把编辑器放到屏幕外）。
+       */
+      var r = seedMode ? seed.rect : rubyEl.getBoundingClientRect();
+      wrap.style.left = Math.max(4, (r && r.left) || 0) + "px";
+      wrap.style.top = Math.max(4, ((r && r.top) || 0) - (variantChips ? 60 : 34)) + "px";
     } catch (e2) {
       wrap.style.left = "20px";
       wrap.style.top = "20px";
@@ -3438,7 +3602,7 @@
             return;
           }
         }
-        fixSrc = "enter";
+        fixSrc = seedMode ? "symbol" : "enter";
         if (v === "-" || v === "\u2212" || v === "\uFF0D") {
           saveInlineFix(lineText, span.at, span.word, "");
         } else if (!v) {
@@ -3481,14 +3645,144 @@
 
   function installInlineEditor() {
     /** 这个节点是不是我们自己的注音 / 留空壳（往上找到 body 为止） */
-    function editableFrom(target) {
+    function editableFrom(target, ev) {
       var t = target;
       while (t && t !== document.body) {
         var cn = t && typeof t.className === "string" ? t.className : "";
         if (/(^|\s)(wk-ruby|wk-blank)(\s|$)/.test(cn)) return t;
         t = t.parentNode;
       }
+      // 没有注音的地方：符号 / 西文 / 数字双击也能注（读音由用户自己填）
+      return symbolTarget(ev);
+    }
+
+    /** 双击落在哪段文字上：优先用浏览器给的选区，其次按坐标取 caret */
+    function clickTextSpot(ev) {
+      try {
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (sel && sel.rangeCount) {
+          var r = sel.getRangeAt(0);
+          var sc = r.startContainer;
+          if (sc && sc.nodeType === 3) return { node: sc, offset: r.startOffset };
+        }
+      } catch (eSel) {
+        /* 没有选区 */
+      }
+      try {
+        if (ev && typeof document.caretRangeFromPoint === "function" && typeof ev.clientX === "number") {
+          var cr = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+          if (cr && cr.startContainer && cr.startContainer.nodeType === 3) {
+            return { node: cr.startContainer, offset: cr.startOffset };
+          }
+        }
+      } catch (eCaret) {
+        /* 内核不支持 / 坐标是 0 */
+      }
+      // 最后：点到元素上就取它里面第一段非空文本
+      var el = ev && ev.target;
+      if (el && el.nodeType === 1 && el.querySelector) {
+        var box = el.querySelector(".wk-line") || el;
+        var walker = document.createTreeWalker(box, 4, null, false); // 4 = SHOW_TEXT
+        var node;
+        while ((node = walker.nextNode())) {
+          if (String(node.nodeValue || "").replace(/\s+/g, "")) return { node: node, offset: 0 };
+        }
+      }
       return null;
+    }
+
+    /**
+     * 「自己注音」的目标：双击一段**没有注音**的文字（符号 / 西文 / 数字），
+     * 把这一段交给编辑器，用户填什么就显示什么。
+     *
+     * 为什么只放这三类：
+     *   - 假名本来就会读，不需要注；
+     *   - 汉字归词典 / 候选按钮管，而且宿主把双击汉字当"跳到这句"，抢了会让人点不动；
+     *   - 符号（`♭` `※` `→`）和插件刻意没注的西文（`ｂｂ` 这种当降号用的全角字母）
+     *     恰好是"插件不会自己注、但用户想给它一个读音"的那一类 —— 这是唯一的入口。
+     *
+     * 存的是**按位置**的就地读音（和双击注音改读音同一套存储），只对这一段生效。
+     */
+    /**
+     * 这个文本节点落在注音层认的哪一行里。
+     *
+     * 不能只找 `data-wk-region`：那个标记是"这一行真的注上过音"之后才打的，
+     * 而"自己注音"的入口恰恰是第一处 —— `ふらつっｂｂ` 这种一行一个字都没注上的行，
+     * 根本不带标记。所以直接问注音层：这一轮它把哪些元素当成歌词行。
+     * 这样翻译层 / 音译层 / 占位行（注音层本来就不碰）也一并排除了 ——
+     * 给了读音也不会显示，不如不给这个入口。
+     */
+    function lyricRegionOf(node) {
+      var regions = null;
+      try {
+        regions = state.annotator && state.annotator.findRegions ? state.annotator.findRegions("lyrics") : null;
+      } catch (eRegions) {
+        regions = null;
+      }
+      if (regions && regions.length) {
+        for (var i = 0; i < regions.length; i++) {
+          var r = regions[i];
+          if (r === node || (r.contains && r.contains(node))) return r;
+        }
+        return null;
+      }
+      // 注音层没起来（理论上不会）：退回它标过的区域
+      var t = lineElementOf(node);
+      if (t && t !== node && t.getAttribute && t.getAttribute("data-wk-region") === "1") return t;
+      return null;
+    }
+
+    function symbolTarget(ev) {
+      var spot = clickTextSpot(ev);
+      if (!spot || !spot.node || spot.node.nodeType !== 3) return null;
+      var lineEl = lyricRegionOf(spot.node);
+      if (!lineEl) return null;
+      /*
+       * 整首都不注音的时候（关掉了「非日语歌也注音」而这首不是日语歌），
+       * 注音层每一轮都会 restoreAll —— 存了也不会显示，别给一个"存了没反应"的入口。
+       */
+      if (config.annotateNonJapanese === false && !songLooksJapanese()) return null;
+      var text = spot.node.nodeValue || "";
+      if (!text) return null;
+      var at = spot.offset;
+      if (!(at >= 0) || at >= text.length) at = 0;
+      var kind = charKindOf(text.charAt(at));
+      if (kind !== "latin" && kind !== "digit" && kind !== "symbol") return null;
+      var from = at;
+      var to = at + 1;
+      while (from > 0 && charKindOf(text.charAt(from - 1)) === kind) from--;
+      while (to < text.length && charKindOf(text.charAt(to)) === kind) to++;
+      var word = text.slice(from, to);
+      if (!word) return null;
+      var lineText = lineTextOf(lineEl);
+      if (!lineText) return null;
+      /*
+       * 署名 / 占位行整行会被注音层跳过 —— 在这里开编辑器只会得到"存了却什么都不显示"，
+       * 所以不给入口（那几行本来就该原样留着）。
+       */
+      try {
+        if (typeof WKAnnotate !== "undefined" && WKAnnotate.isCreditText && WKAnnotate.isCreditText(lineText)) {
+          return null;
+        }
+      } catch (eCredit) {
+        /* 判不出来就当不是署名 */
+      }
+      var atLine = offsetInLine(spot.node, from, lineEl);
+      if (!(atLine >= 0)) {
+        // 兜底：在行文本里就近找这一段（位置差一点也比没有强）
+        atLine = lineText.indexOf(word);
+        if (atLine < 0) return null;
+      }
+      var rect = null;
+      try {
+        var range = document.createRange();
+        range.setStart(spot.node, from);
+        range.setEnd(spot.node, to);
+        rect = range.getBoundingClientRect();
+      } catch (eRect) {
+        rect = null;
+      }
+      return { word: word, at: atLine, kana: "", lineEl: lineEl, lineText: lineText, rect: rect };
     }
     /*
      * 双击注音要能改读音，可 RNP / 网易云的歌词页**单击或双击整行就是"跳到这句"**。
@@ -3498,8 +3792,14 @@
      */
     try {
       var guard = function (ev) {
-        var t = editableFrom(ev.target);
+        var t = editableFrom(ev.target, ev);
         if (!t) return;
+        /*
+         * 单击只拦"落在注音上"的。符号那一段本来就没有注音，单击照旧放行
+         * （宿主拿它跳句）；只有双击落在符号 / 西文上才是"给这一段注音"。
+         */
+        var isRuby = !!(t && t.nodeType === 1);
+        if (ev.type !== "dblclick" && !isRuby) return;
         ev.stopPropagation();
         /*
          * 同一个节点（window 捕获）上还有多少监听器都要挡住 —— 宿主常把
@@ -3517,7 +3817,7 @@
       document.addEventListener(
         "dblclick",
         function (ev) {
-          var t = editableFrom(ev.target);
+          var t = editableFrom(ev.target, ev);
           if (!t) return;
           ev.preventDefault();
           ev.stopPropagation();
@@ -3529,6 +3829,50 @@
   }
 
   // ------------------------------------------------------------ 扫描调度
+
+  /*
+   * 字符分类：只有同一类连着的字符才算"这一段"。
+   * 只服务于「双击自己注音」这个入口（见 installInlineEditor 的 symbolTarget），
+   * 不参与注音本身的任何判断 —— 插件不会因为这张表多注一个字出来。
+   */
+  function charKindOf(ch) {
+    if (!ch) return "";
+    var c = ch.charCodeAt(0);
+    if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d || c === 0xa0 || c === 0x3000) return "space";
+    // 平假名 / 片假名 / 长音符 / ゝゞ
+    if (
+      (c >= 0x3041 && c <= 0x3096) ||
+      (c >= 0x30a1 && c <= 0x30fa) ||
+      c === 0x30fc ||
+      c === 0xff70 ||
+      c === 0x309d ||
+      c === 0x309e
+    ) {
+      return "kana";
+    }
+    // 汉字 / 々 〆 〇 / 兼容区
+    if (
+      (c >= 0x3400 && c <= 0x4dbf) ||
+      (c >= 0x4e00 && c <= 0x9fff) ||
+      (c >= 0xf900 && c <= 0xfaff) ||
+      c === 0x3005 ||
+      c === 0x3006 ||
+      c === 0x3007
+    ) {
+      return "han";
+    }
+    if ((c >= 0x30 && c <= 0x39) || (c >= 0xff10 && c <= 0xff19)) return "digit";
+    // 半角 / 全角拉丁字母（`ｂｂ` 这种全角写法也算字母，和读音层折半角的口径一致）
+    if (
+      (c >= 0x41 && c <= 0x5a) ||
+      (c >= 0x61 && c <= 0x7a) ||
+      (c >= 0xff21 && c <= 0xff3a) ||
+      (c >= 0xff41 && c <= 0xff5a)
+    ) {
+      return "latin";
+    }
+    return "symbol";
+  }
 
   var RE_KANA_ANY = /[\u3041-\u3096\u30A1-\u30FA]/;
 

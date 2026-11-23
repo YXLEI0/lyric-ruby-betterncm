@@ -7768,6 +7768,103 @@ test("RNP 歌词页：双击注音只开编辑器，不把「跳到这句」传�
   assert.ok(doc.querySelector("[data-wk-edit]"), "编辑器要打开");
 });
 
+test("双击没有注音的一段（符号 / 全角字母）：插件不猜，用户自己填读音", async () => {
+  /*
+   * 真机（星を探してｂｂ「ふらつっｂｂ」）：那两个全角 `ｂ` 是当降号用的，插件不会自己注
+   * （也不该猜 —— 是 ビー 还是 フラット 只有用户知道）。以前这一段没有任何入口：
+   * 编辑器只挂在**已有注音**上，双击它就是宿主的"跳到这句"。
+   *
+   * 现在：双击符号 / 西文 / 数字那一段 → 打开同一个编辑器 → 填什么显示什么，
+   * 存成按位置的就地读音（和双击注音改读音同一套存储）。假名 / 汉字不抢双击。
+   */
+  const HTML =
+    '<!doctype html><html><head></head><body><div class="m-lyric"><ul class="lyric">' +
+    '<li class="line"><p>ふらつっｂｂ</p></li>' +
+    '<li class="line"><p>ららら♭</p></li>' +
+    '<li class="line"><p>ふらつく</p></li>' +
+    "</ul></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({}));
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  const ps = doc.querySelectorAll("ul.lyric li p");
+  assert.strictEqual(ps[0].querySelectorAll(".wk-ruby").length, 0, "ｂｂ 不该被插件自己注音：" + ps[0].innerHTML);
+  assert.strictEqual(ps[1].querySelectorAll(".wk-ruby").length, 0, "♭ 同理：" + ps[1].innerHTML);
+
+  /** 把选区放到某一段上（模拟浏览器双击已经选中那一段），再派发 dblclick */
+  const dblAt = (p, word) => {
+    const walker = doc.createTreeWalker(p, 4, null, false);
+    let node = null;
+    let at = -1;
+    while (walker.nextNode()) {
+      const t = walker.currentNode.nodeValue || "";
+      const i = t.indexOf(word);
+      if (i >= 0) {
+        node = walker.currentNode;
+        at = i;
+        break;
+      }
+    }
+    assert.ok(node, "找不到「" + word + "」的文本节点：" + p.innerHTML);
+    const range = doc.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + word.length);
+    const sel = env.window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    node.parentNode.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    return node;
+  };
+  const boxInput = () => {
+    const box = doc.querySelector("[data-wk-edit]");
+    return box ? box.querySelector("input") : null;
+  };
+  const typeEnter = (input, value) => {
+    input.value = value;
+    input.dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  };
+  // 宿主（RNP / 网易云）在 window 捕获阶段监听「跳到这句」
+  let seeks = 0;
+  env.window.addEventListener("dblclick", () => seeks++, true);
+
+  // ① 全角字母当降号用：双击打开编辑器，填完就注上
+  dblAt(ps[0], "ｂｂ");
+  await sleep(60);
+  let input = boxInput();
+  assert.ok(input, "双击符号要打开编辑器");
+  assert.ok(input.placeholder.indexOf("ｂｂ") >= 0, "占位提示要说清注的是哪一段：" + input.placeholder);
+  assert.strictEqual(seeks, 0, "双击符号也别把「跳到这句」传给宿主");
+  typeEnter(input, "フラット");
+  await sleep(500);
+  let ruby = ps[0].querySelector(".wk-ruby");
+  assert.ok(ruby, "填完读音要注上：" + ps[0].innerHTML);
+  assert.strictEqual(ruby.childNodes[0].nodeValue, "ｂｂ", "底字就是双击的那一段");
+  assert.strictEqual(ruby.querySelector(".wk-rt").textContent, "フラット");
+  const saved = JSON.parse(env.window.localStorage.getItem("lyric-ruby.config") || "{}").furiganaLineSpans;
+  assert.deepStrictEqual(saved["ふらつっｂｂ"], [[4, "ｂｂ", "フラット"]], "按位置存下来：" + JSON.stringify(saved));
+
+  // ② 真正的音乐符号 ♭ 一样能注
+  dblAt(ps[1], "♭");
+  await sleep(60);
+  input = boxInput();
+  assert.ok(input, "双击 ♭ 也要打开编辑器");
+  typeEnter(input, "フラット");
+  await sleep(500);
+  ruby = ps[1].querySelector(".wk-ruby");
+  assert.ok(ruby, "♭ 注上了：" + ps[1].innerHTML);
+  assert.deepStrictEqual(
+    [ruby.childNodes[0].nodeValue, ruby.querySelector(".wk-rt").textContent],
+    ["♭", "フラット"]
+  );
+
+  // ③ 假名不抢双击：宿主的「跳到这句」照旧
+  dblAt(ps[2], "ふらつく");
+  await sleep(60);
+  assert.strictEqual(boxInput(), null, "双击假名不该开编辑器：" + ps[2].innerHTML);
+  assert.strictEqual(seeks, 1, "双击假名照旧传给宿主（跳到这句）");
+});
+
 test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假名", async () => {
   /*
    * 同一串数字歌词里两种唱法都有：`12` じゅうに / いちに / ワンツー。
@@ -7792,6 +7889,123 @@ test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假�
   en.dispatchEvent(new env.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   await sleep(400);
   assert.strictEqual(byWord('105').querySelector('.wk-rt').textContent, 'ワンゼロファイブ', p.innerHTML);
+});
+
+test("逐字表：数字 + 汉字的词也能一段一段拼（3月 → さん + がつ；105 有数字本身的片假名）", async () => {
+  /*
+   * 以前逐字表只认**纯汉字词**，`3月` / `105人` 这种只有整词候选（通常一个都没有），
+   * 想拼 さん + がつ 也拼不出来 —— 双击只有一个空输入框。
+   * 现在数字段独立成一行：整串读法（ひゃくご）、逐位读法（いちぜろご）、
+   * 以及**数字本身**的片假名（ワンゼロファイブ）都列出来，全角数字按半角同一套算。
+   * （3日 / 1人 那种熟字训不摊开，见下一条测试。）
+   */
+  const HTML =
+    '<!doctype html><html><head></head><body><div id="root"><div class="m-lyric"><ul class="lyric">' +
+    '<li class="line"><p>3月と105人と1つと3つ</p></li>' +
+    "</ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ "3月": "サンガツ", と: "ト", "105人": "ヒャクゴニン", "1つ": "ヒトツ", "3つ": "ミッツ" })
+  );
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  const p = doc.querySelector("ul.lyric li p");
+  const byWord = (w) => Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const charBtns = () => Array.from(doc.querySelectorAll("[data-wk-chars] .wk-edit-char"));
+  const clickBtn = (b) => b.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  const boxInput = () => doc.querySelector("[data-wk-edit] input");
+
+  // ① 3月：数字段 + 汉字段各一行，拼出 さんがつ
+  assert.ok(byWord("3月"), "3月 要是一个 ruby：" + p.innerHTML);
+  dbl(byWord("3月"));
+  await sleep(60);
+  let labels = charBtns().map((b) => b.textContent);
+  assert.ok(labels.indexOf("さん") >= 0, "数字段要有整串读法 さん：" + labels.join("/"));
+  assert.ok(labels.indexOf("スリー") >= 0, "数字段还要有数字本身 スリー：" + labels.join("/"));
+  assert.ok(labels.indexOf("がつ") >= 0, "月 要有 がつ：" + labels.join("/"));
+  clickBtn(charBtns().filter((b) => b.textContent === "さん")[0]);
+  clickBtn(charBtns().filter((b) => b.textContent === "がつ")[0]);
+  assert.strictEqual(boxInput().value, "さんがつ", "两段拼起来：" + boxInput().value);
+  boxInput().dispatchEvent(new env.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await sleep(500);
+  assert.strictEqual(byWord("3月").querySelector(".wk-rt").textContent, "さんがつ", "拼好的读音要上屏：" + p.innerHTML);
+
+  // ② 105人：多位数字三种读法都在
+  dbl(byWord("105人"));
+  await sleep(60);
+  labels = charBtns().map((b) => b.textContent);
+  ["ひゃくご", "いちぜろご", "ワンゼロファイブ"].forEach((k) => {
+    assert.ok(labels.indexOf(k) >= 0, "105 的候选里要有 " + k + "：" + labels.join("/"));
+  });
+  assert.ok(labels.indexOf("にん") >= 0, "人 要有 にん：" + labels.join("/"));
+
+  // ③ 1つ / 3つ：底字只到数字（つ 留在外面），候选里要有带送假名的训读
+  const chips = () => Array.from(doc.querySelectorAll("[data-wk-edit] .wk-edit-variant")).map((b) => b.textContent);
+  const clickChip = (label) => {
+    const b = Array.from(doc.querySelectorAll("[data-wk-edit] .wk-edit-variant")).filter((x) => x.textContent === label)[0];
+    assert.ok(b, "没有候选 " + label + "：" + chips().join("/"));
+    b.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  };
+  dbl(byWord("1"));
+  await sleep(60);
+  assert.ok(chips().indexOf("ひと(つ)") >= 0, "1つ 要有 ひと(つ)：" + chips().join("/"));
+  clickChip("ひと(つ)");
+  await sleep(500);
+  assert.strictEqual(byWord("1").querySelector(".wk-rt").textContent, "ひと", "1 读 ひと，连着 つ 就是 ひとつ：" + p.innerHTML);
+
+  dbl(byWord("3"));
+  await sleep(60);
+  assert.ok(chips().indexOf("みっ(つ)") >= 0, "3つ 要有 みっ(つ)（不是 み）：" + chips().join("/"));
+  clickChip("みっ(つ)");
+  await sleep(500);
+  assert.strictEqual(byWord("3").querySelector(".wk-rt").textContent, "みっ", "3 读 みっ，连着 つ 就是 みっつ：" + p.innerHTML);
+});
+
+test("熟字训：1人 / １人 / 一人、2人 / 二人、3日 不摊逐字表，候选给整词固定读法", async () => {
+  /*
+   * 数字 + 人 / 日 的读法和每个字都对不上（1人 ひとり、3日 みっか、20日 はつか）。
+   * 摊开逐字表只会给出「いち + にん」「さん + にち」这种不存在的组合，
+   * 所以这些词强制当熟字训：没有逐字表，候选直接是整词的固定读法。
+   * 半角 / 全角 / 汉字数字三种写法按同一个词处理。
+   */
+  const HTML =
+    '<!doctype html><html><head></head><body><div id="root"><div class="m-lyric"><ul class="lyric">' +
+    '<li class="line"><p>1人と１人と一人と二人と3日</p></li>' +
+    "</ul></div></div></body></html>";
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ "1人": "ヒトリ", "１人": "ヒトリ", 一人: "ヒトリ", と: "ト", 二人: "フタリ", "3日": "ミッカ" })
+  );
+  await env.runLoad();
+  await sleep(400);
+  const doc = env.document;
+  const p = doc.querySelector("ul.lyric li p");
+  const byWord = (w) => Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === w)[0];
+  const dbl = (el) => el.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  const chipLabels = () => Array.from(doc.querySelectorAll("[data-wk-edit] .wk-edit-variant")).map((b) => b.textContent);
+  const charBtns = () => Array.from(doc.querySelectorAll("[data-wk-chars] .wk-edit-char"));
+  const openOn = async (w) => {
+    dbl(byWord(w));
+    await sleep(60);
+    return byWord(w);
+  };
+
+  assert.ok(byWord("１人"), "１人 也要有 ruby：" + p.innerHTML);
+  for (const w of ["1人", "１人", "一人"]) {
+    await openOn(w);
+    assert.deepStrictEqual(chipLabels(), ["ひとり", "いちにん"], w + " 的候选是整词固定读法：" + chipLabels().join("/"));
+    assert.strictEqual(charBtns().length, 0, w + " 不许摊逐字表（会拼出 いち+にん）：" + charBtns().map((b) => b.textContent).join("/"));
+  }
+
+  await openOn("二人");
+  assert.deepStrictEqual(chipLabels(), ["ふたり", "ににん"], "二人 的候选：" + chipLabels().join("/"));
+  assert.strictEqual(charBtns().length, 0, "二人 不许摊逐字表");
+
+  await openOn("3日");
+  assert.strictEqual(charBtns().length, 0, "3日 是熟字训，不摊逐字表：" + charBtns().map((b) => b.textContent).join("/"));
+  assert.strictEqual(doc.querySelector("[data-wk-edit] input").value, "みっか", "输入框里是熟字训读音");
 });
 
 test("单字候选：补上常用漢字表里的所有音读 / 训读（标「音」「训」）", async () => {
