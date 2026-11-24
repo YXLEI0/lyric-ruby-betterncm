@@ -7398,6 +7398,68 @@ test("词里的字也要有词头读法（掻き回す 的 掻 能给 か）", a
   );
 });
 
+test("死（死ぬ）的候选要给连用形 しに（死にたい 改成 しに）", async () => {
+  /*
+   * 真机：`死にたい` 的 死 双击只有 し 系的读法，改不出来 しに。
+   * 原因是 WORD_TAILS 里没有 ぬ —— 死 探测到的是文语的 **死す**（しす），
+   * 连用形成了 しし。这里按真词典的行为给分词器（死に 的辞书形是 死ぬ）。
+   */
+  const HTML = `<!doctype html><html><head></head><body>
+<div id="root"><div class="m-lyric"><ul class="lyric">
+  <li class="line"><p>死にたい</p></li>
+</ul></div></div></body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false } });
+  const table = { 死ぬ: "シヌ", 死に: "シニ", 死: "シ", に: "ニ", たい: "タイ", た: "タ", い: "イ" };
+  env.window.WKFurigana.setTokenizer({
+    tokenize(text) {
+      const out = [];
+      let i = 0;
+      while (i < text.length) {
+        let hit = null;
+        for (const surface of Object.keys(table)) {
+          if (text.startsWith(surface, i)) { hit = surface; break; }
+        }
+        if (hit) {
+          out.push({
+            surface_form: hit,
+            basic_form: hit === "死に" ? "死ぬ" : hit,
+            reading: table[hit],
+            pronunciation: table[hit],
+          });
+          i += hit.length;
+        } else {
+          const ch = text.charAt(i);
+          out.push({ surface_form: ch, reading: ch, pronunciation: ch });
+          i += 1;
+        }
+      }
+      return out;
+    },
+  });
+  await env.runLoad();
+  await sleep(600);
+  const p = env.document.querySelector("ul.lyric li p");
+  const ruby = Array.from(p.querySelectorAll(".wk-ruby")).filter((r) => (r.childNodes[0].nodeValue || "") === "死")[0];
+  assert.ok(ruby, "死 要注上音：" + p.innerHTML);
+  ruby.dispatchEvent(new env.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  await sleep(80);
+  const chips = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).map((b) => b.textContent);
+  assert.ok(chips.indexOf("しに") >= 0, "候选里要有连用形 しに：" + JSON.stringify(chips));
+  assert.ok(chips.indexOf("し(ぬ)") >= 0, "候选里要有辞书形 し(ぬ)：" + JSON.stringify(chips));
+  assert.ok(chips.indexOf("しし") < 0 && chips.indexOf("し(す)") < 0, "不许给文语的 死す：" + JSON.stringify(chips));
+
+  const chip = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter(
+    (b) => b.textContent === "しに"
+  )[0];
+  chip.dispatchEvent(new env.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await sleep(400);
+  assert.strictEqual(
+    p.querySelector(".wk-ruby .wk-rt").textContent,
+    "しに",
+    "点完要读成 しに：" + p.innerHTML
+  );
+});
+
 test("两个以上汉字的词：每个字的读音都摊开，点几下自由组合", async () => {
   /*
    * 用户要求「两个以上汉字的词把每个字的读音都列出来让用户自由组合」：
@@ -7914,15 +7976,15 @@ test("数字候选：多位数给整串读法 / 逐个数字读 / 英文片假�
   await sleep(50);
   assert.deepStrictEqual(
     chips(),
-    ["じゅうに", "ジュウニ", "トゥエルブ", "いちに", "ワンツー"],
-    "12 的候选（整串平假名 / 整串片假名 / 英语数词 / 逐位 / 英文逐位）：" + chips().join("/")
+    ["じゅうに", "トゥエルブ", "いちに", "ワンツー"],
+    "12 的候选（整串平假名 / 英语数词 / 逐位 / 英文逐位）：" + chips().join("/")
   );
   dbl(byWord("105"));
   await sleep(50);
   assert.deepStrictEqual(
     chips(),
-    ["ひゃくご", "ヒャクゴ", "ワンハンドレッドファイブ", "いちぜろご", "ワンゼロファイブ"],
-    "105 的候选（整个数字的英语数词 ワンハンドレッドファイブ 也要有）：" + chips().join("/")
+    ["ひゃくご", "ワンハンドレッドファイブ", "いちぜろご", "ワンゼロファイブ"],
+    "105 的候选（整串片假名那条已经删了，不跟面板写法重复）：" + chips().join("/")
   );
   // 点英文逐位那个，读音要落盘并显示
   const en = Array.from(env.document.querySelectorAll(".wk-edit-box .wk-edit-variant")).filter(
@@ -8476,6 +8538,118 @@ test("逐字歌词：用真的网站缓存（ベノム）时，心の（ここ�
   const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
   const hidden = Array.from(new Set(Array.from(root.querySelectorAll(".wk-hide")).map((h) => h.textContent)));
   assert.deepStrictEqual(hidden, ["（こころん）"], "括号那一段要整段藏起来：" + root.innerHTML);
+});
+
+test("逐字歌词：空引号对「　　」(カラ) 整对注音（底字带着全角空格，文字不乱）", async () => {
+  /*
+   * 真机（バグ）：`バグ「SAD　SAD　突っ伏して「　　」(カラ)」`。
+   * 逐字层的空格也是一格（文本是「全角空格 + 排版空格」），以前 `karaokeTextOf`
+   * 把整格空白当排版空格删掉 —— 行文本变成 `「」`，括号读音的底字跟着缩成两个引号，
+   * 屏幕上注音只盖住左半个（用户报的）。
+   *
+   * 另外 `splitSpaceTokens` 会把"带空格的 token"按空格拆开切读音：作者的括号读音
+   * 被拆成 `「`=カ / `」`=ラ 两条。inline 现在不许拆。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => {
+        const t = c + (i < all.length - 1 ? " " : "");
+        return (
+          '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '">' +
+          "<span>" + t + "</span>" +
+          '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+        );
+      })
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">バグ</a></span>
+  <span class="by"><a href="#">かいりきベア</a></span>
+</div></div>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("バグ「SAD　SAD　突っ伏して「　　」(カラ)」")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: false } });
+  env.window.WKFurigana.setTokenizer(fakeFuriganaTokenizer({ バグ: "バグ", 突: "ツ", 伏: "フ", カラ: "カラ" }));
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const rubies = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  const quote = rubies.filter((p) => p[1] === "カラ");
+  assert.deepStrictEqual(
+    quote,
+    [["「　　」", "カラ"], ["「　　」", "カラ"]],
+    "空引号对要整对当一个底字（带着全角空格），不能拆成 「 / 」 两条：" + JSON.stringify(rubies)
+  );
+  const hidden = Array.from(new Set(Array.from(root.querySelectorAll(".wk-hide")).map((h) => h.textContent)));
+  assert.deepStrictEqual(hidden, ["(カラ)"], "括号要藏起来：" + root.innerHTML);
+  // 行文本里的全角空格不能丢（丢了 `「　　」` 会变成 `「」`、SAD 会粘成 SADSAD）
+  const diag = env.window.WK.diag();
+  const lineText = (diag.tokens[0] || {}).text || "";
+  assert.ok(lineText.indexOf("SAD\u3000SAD") >= 0, "全角空格要留在行文本里：" + lineText);
+  assert.ok(lineText.indexOf("「　　」") >= 0, "空引号对要留在行文本里：" + lineText);
+  const sadBases = Array.from(root.querySelectorAll(".wk-ruby")).filter((r) => /SAD/.test(r.childNodes[0].nodeValue));
+  for (const r of sadBases) {
+    assert.strictEqual(r.childNodes[0].nodeValue, "SAD", "SAD 不能和左边的粘成一个词：" + r.outerHTML);
+  }
+});
+
+test("逐字歌词：括号前面有空格时（人 （ランゲラー））括号照样藏起来", async () => {
+  /*
+   * 真机（ザムザ）：`痛みと怒れる人 （ランゲラー）を喰らったらった`。
+   * 隐藏的那段是「空格 + （ランゲラー）」，`splitSpaceTokens` 按空格拆的时候
+   * 只抄了 text/start/end —— hide 标记丢了，括号就原样留在屏幕上
+   * （用户报「这个ラングラー还是没省略」）。
+   */
+  const karaoke = (line) =>
+    Array.from(line)
+      .map((c, i, all) => {
+        const t = c + (i < all.length - 1 ? " " : "");
+        return (
+          '<div class="rnp-karaoke-word is-cjk' + (i < all.length - 1 ? " end-with-space" : "") + '">' +
+          "<span>" + t + "</span>" +
+          '<span class="rnp-karaoke-word-filler">' + t + "</span></div>"
+        );
+      })
+      .join("");
+  const HTML = `<!doctype html><html><head></head><body>
+<div class="m-playbar"><div class="words">
+  <span class="name"><a href="#">ザムザ</a></span>
+  <span class="by"><a href="#">宵崎奏</a></span>
+</div></div>
+<div class="m-lyric"><div class="rnp-lyrics-line" offset="0"><div class="rnp-lyrics-line-karaoke">${karaoke("痛みと怒れる人 （ランゲラー）を喰らったらった")}</div></div></div>
+</body></html>`;
+  const env = bootPlugin(HTML, { config: { online: false, llmEnabled: false, externalUtaten: false } });
+  env.window.WKFurigana.setTokenizer(
+    fakeFuriganaTokenizer({ 痛: "イタ", 怒: "イカ", 人: "ヒト", 喰: "ク", を: "ヲ", と: "ト", み: "ミ", れ: "レ", る: "ル" })
+  );
+  await env.runLoad();
+  await sleep(700);
+
+  const root = env.document.querySelector(".rnp-lyrics-line-karaoke");
+  const rubies = Array.from(root.querySelectorAll(".wk-ruby")).map((r) => [
+    r.childNodes[0].nodeValue,
+    r.querySelector(".wk-rt").textContent,
+  ]);
+  assert.deepStrictEqual(
+    rubies.filter((p) => p[0] === "怒れる人"),
+    [["怒れる人", "ランゲラー"], ["怒れる人", "ランゲラー"]],
+    "怒れる人 要注成 ランゲラー：" + JSON.stringify(rubies)
+  );
+  const hidden = Array.from(root.querySelectorAll(".wk-hide")).map((h) => h.textContent);
+  /*
+   * 每个格子里是「本体 + 替身」两份，所以每段藏起来的内容都成对出现
+   * （`（（ラランン…`）；相邻重复只留一份。
+   */
+  const dedup = [];
+  for (const t of hidden) if (dedup[dedup.length - 1] !== t) dedup.push(t);
+  assert.strictEqual(dedup.join(""), "（ランゲラー）", "括号那一段整段藏起来：" + root.innerHTML);
+  for (const r of Array.from(root.querySelectorAll(".wk-ruby"))) {
+    assert.ok(!/[（(）)]/.test(r.childNodes[0].nodeValue || ""), "底字不许把括号圈进去：" + r.outerHTML);
+  }
 });
 
 test("逐字歌词：合并成一组的词（带括号读音）双击也能改读音", async () => {

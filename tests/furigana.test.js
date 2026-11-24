@@ -1000,6 +1000,15 @@ test("单字词头读法：掻 かき、切 きり、奏 かなでる 都要能�
   const kanade = pick("奏");
   assert.ok(kanade.indexOf("かな|かなでる") >= 0, "奏 要有辞书形 かな(でる)：" + JSON.stringify(kanade));
   assert.ok(kanade.indexOf("かなで|かなで") >= 0, "奏 要有连用形 かなで：" + JSON.stringify(kanade));
+  /*
+   * 死ぬ 是日语里唯一常用的 ぬ 结尾动词。以前 WORD_TAILS 里没有 ぬ，探到的是
+   * 文语的 **死す**（しす）—— 候选只有 し(す) / しし，`死にたい` 改成 しに 改不出来
+   * （用户报「死 给不出 しに」）。
+   */
+  const shini = pick("死");
+  assert.ok(shini.indexOf("し|しぬ") >= 0, "死 要有辞书形 し(ぬ)：" + JSON.stringify(shini));
+  assert.ok(shini.indexOf("しに|しに") >= 0, "死 要有连用形 しに：" + JSON.stringify(shini));
+  assert.ok(shini.indexOf("し|しす") < 0, "别取到文语的 死す：" + JSON.stringify(shini));
   // 一律平假名
   assert.ok(!/[ァ-ヶー]/.test(JSON.stringify(kas)), "候选不许是片假名：" + JSON.stringify(kas));
 });

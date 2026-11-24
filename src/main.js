@@ -2538,24 +2538,17 @@
   var NUMBER_EN = ["ゼロ", "ワン", "ツー", "スリー", "フォー", "ファイブ", "シックス", "セブン", "エイト", "ナイン"];
 
   /**
-   * 数字的候选读音：整串读法（平假名 / 片假名）+ 逐个数字分开读（日语 / 英文片假名）。
+   * 数字的候选读音：整串读法 + 英文数词 + 逐个数字分开读（日语 / 英文片假名）。
    *
-   *   `105` -> ひゃくご / ヒャクゴ / いちぜろご / ワンゼロファイブ
-   *   `12`  -> じゅうに / ジュウニ / いちに / ワンツー
+   *   `105` -> ひゃくご / ワンハンドレッドファイブ / いちぜろご / ワンゼロファイブ
+   *   `12`  -> じゅうに / トゥエルブ / いちに / ワンツー
    *
    * 歌词里同一串数字经常两种唱法都有（`24` にじゅうよん / ツーフォー），
    * 逐个读还得能选英文，所以都列出来。
    *
-   * 整串的**片假名**那一条是用户点名要的：多位数除了逐位读（ワンゼロファイブ），
-   * 整个数字也有片假名写法（ヒャクゴ）—— 面板设成平假名时只有 ひゃくご，
-   * 想按片假名唱就选不到。
+   * 整串的片假名（ヒャクゴ）不单独列：面板切到片假名时 kanaByConfig 会自动转，
+   * 单独一条只是噪音（用户要求删掉）。
    */
-  function kataOf(t) {
-    return String(t == null ? "" : t).replace(/[\u3041-\u3096]/g, function (c) {
-      return String.fromCharCode(c.charCodeAt(0) + 0x60);
-    });
-  }
-
   function numberVariants(word) {
     var s = String(word == null ? "" : word).replace(/[\uFF10-\uFF19]/g, function (c) {
       return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
@@ -2571,11 +2564,11 @@
     if (whole) {
       var w = hiraOnly(whole);
       out.push({ kana: w, label: w });
-      // 多位数的整串片假名（一位数的 さん / サン 已经在单字表里，别在这里再堆一条）
-      if (s.length >= 2) {
-        var kata = kataOf(w);
-        if (kata !== w) out.push({ kana: kata, label: kata });
-      }
+      /*
+       * 这里以前还给多位数补一条**整串片假名**（イチマンニセンサンビャクヨンジュウゴ）。
+       * 删掉（用户要求）：面板切到片假名时 kanaByConfig 会自动转，叠着两条只是噪音，
+       * 夹在 いちまん… / トゥエルブ… / いちにさん… 中间谁也不点它。
+       */
     }
     /*
      * 英语数词：`10` テン、`105` ワンハンドレッドファイブ。
@@ -5631,26 +5624,16 @@
           if (!sameKana(itk.kana, cands[j].kana)) continue;
           narrowInline.push(itk);
           /*
-           * 让出底字的同时**括号里的读音还得藏起来**。
+           * 让出底字的时候，括号那段还要藏起来 —— 这里**不用**再补一条 hide token：
+           * 括号读音的 hide 是注音层和 inline 一起产出的一条（见 furigana 的
+           * parenReadings），下面那条循环对 hide 是无条件 push 的，就算 inline 让给了
+           * 网站，hide 照样在。
            *
-           * 真机：`怒れる人(ラングラー)` 网站只把 `人` 标成 ラングラー，我们让给它之后，
-           * 自己那条（含括号）被丢掉，括号就整个露在屏幕上（用户报「这个ラングラー没省略」）。
-           * 这里补一条只负责"藏"的 token，范围是当前 token 尾部那段括号。
+           * 以前这里补过一条，范围写成 `line.slice(itk.start, itk.end)` 再找括号 ——
+           * 可 itk.end 就是括号的起点，切出来的那段里永远没有括号，`parenAt` 恒为 -1，
+           * 补了个寂寞（注释里那句「这个ラングラー没省略」的真凶是空格：隐藏段
+           * ` （ランゲラー）` 在 splitSpaceTokens 里丢了 hide 标记，那已经修了）。
            */
-          try {
-            var segTxt = String(line || "").slice(itk.start, itk.end);
-            var parenAt = segTxt.search(/[（(]/);
-            if (parenAt > 0) {
-              out.push({
-                text: segTxt.slice(parenAt),
-                start: itk.start + parenAt,
-                end: itk.end,
-                hide: true,
-              });
-            }
-          } catch (eParen) {
-            /* 藏不了就算了，宁可露出括号也不乱注 */
-          }
           break;
         }
       }
@@ -6166,6 +6149,16 @@
     for (var i = 0; i < list.length; i++) {
       var t = list[i];
       if (!t || !(t.end > t.start)) continue;
+      /*
+       * 作者括号读音（inline）与用户就地改的（user）**不拆**：它们的底字里带空格是
+       * 有意义的 —— `「　　」(カラ)` 的底字就是"空引号对"（见 furigana 的
+       * emptyBracketBefore）。按空格拆开会变成 `「`=カ / `」`=ラ 两条，屏幕上
+       * 注音只盖住左半个（用户报的）。
+       */
+      if (t.kind === "inline" || t.kind === "user") {
+        out.push(t);
+        continue;
+      }
       var seg = s.slice(t.start, t.end);
       if (!/[ \u3000]/.test(seg)) {
         out.push(t);
@@ -6217,6 +6210,13 @@
         if (piece) one.kana = piece;
         if (t.source && one.kana) one.source = t.source;
         if (t.kind) one.kind = t.kind;
+        /*
+         * 标记位要跟着走：以前只抄 text/start/end（外加 kana），带空格的
+         * **藏起来的括号**（`（　シメ）`）被拆完就丢了 hide —— 括号原样露在屏幕上。
+         */
+        if (t.hide) one.hide = true;
+        if (t.blank) one.blank = true;
+        if (t.absorb) one.absorb = true;
         out.push(one);
       }
     }
